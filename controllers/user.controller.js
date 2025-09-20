@@ -4,9 +4,9 @@ const ErrorResponse = require("../utils/errorResponse");
 
 // user registration
 const handleRegister = async (req, res, next) => {
-  const { firstName, lastName, email, password, role } = req.body;
+  const { firstName, lastName, userName, email, password, role } = req.body;
 
-  if (!firstName || !lastName || !email || !password) {
+  if (!firstName || !lastName || !userName || !email || !password) {
     return next(new ErrorResponse("All fields are required", 400));
   }
 
