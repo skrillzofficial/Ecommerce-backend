@@ -100,7 +100,7 @@ const createEvent = async (req, res, next) => {
         });
         
         imageUrl = uploadedImage.secure_url;
-        imagePublicId = uploadedImage.public_id; // Store the public ID for later deletion
+        imagePublicId = uploadedImage.public_id;
       } catch (uploadError) {
         console.error('Error uploading image:', uploadError);
         return res.status(500).json({
@@ -122,7 +122,7 @@ const createEvent = async (req, res, next) => {
       ticketsAvailable: capacity || 0,
       price: Number(price),
       image: imageUrl,
-      imagePublicId: imagePublicId, // Add this field
+      imagePublicId: imagePublicId,
       organizer: req.user._id,
       isActive: true
     });
@@ -262,7 +262,7 @@ const deleteEvent = async (req, res, next) => {
         await cloudinary.uploader.destroy(event.imagePublicId);
       } catch (imageError) {
         console.error('Error deleting image from Cloudinary:', imageError);
-        // Continue with event deletion even if image deletion fails
+
       }
     }
     

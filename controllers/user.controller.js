@@ -42,7 +42,7 @@ const handleRegister = async (req, res, next) => {
     res.status(201).json({
       success: true,
       message: "User registered successfully",
-      token, // Send token in response
+      token,
       user: {
         id: user._id,
         firstName: user.firstName,
@@ -101,7 +101,7 @@ const handleLogin = async (req, res, next) => {
         id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
-        userName: user.userName, // Added username
+        userName: user.userName, 
         email: user.email,
         role: user.role,
       },
@@ -114,9 +114,9 @@ const handleLogin = async (req, res, next) => {
 // Update user details including image and bio
 const HandleUpdateUser = async (req, res, next) => {
   try {
-    const { id } = req.params; // User ID from URL params
+    const { id } = req.params; 
     const { firstName, lastName, userName, email, bio } = req.body;
-    const authenticatedUserId = req.user.userId; // From JWT middleware
+    const authenticatedUserId = req.user.userId; 
 
     // Check if user exists
     const user = await USER.findById(id);
@@ -151,11 +151,9 @@ const HandleUpdateUser = async (req, res, next) => {
     }
 
     // Handle image upload if file is provided
-    let imageUrl = user.image; // Keep existing image if no new one
+    let imageUrl = user.image;
     if (req.file) {
-      // Assuming you're using multer or similar for file uploads
-      imageUrl = req.file.path; // or req.file.location for AWS S3
-      // Optional: Delete old image from storage
+      imageUrl = req.file.path;
     }
 
     // Update user fields
@@ -164,15 +162,15 @@ const HandleUpdateUser = async (req, res, next) => {
     if (lastName) updateData.lastName = lastName;
     if (userName) updateData.userName = userName;
     if (email) updateData.email = email;
-    if (bio !== undefined) updateData.bio = bio; // Allow empty bio
+    if (bio !== undefined) updateData.bio = bio;
     if (req.file) updateData.image = imageUrl;
 
     // Perform the update
     const updatedUser = await USER.findByIdAndUpdate(
       id,
       updateData,
-      { new: true, runValidators: true } // Return updated document and run validators
-    ).select("-password"); // Exclude password from response
+      { new: true, runValidators: true }
+    ).select("-password"); 
 
     res.status(200).json({
       success: true,

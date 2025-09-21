@@ -17,8 +17,7 @@ const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log("Full decoded token:", decoded); // Log the entire token to see its structure
-
+    console.log("Full decoded token:", decoded);
     // Check different possible user ID properties
     const userId = decoded.userId || decoded.id || decoded._id;
     console.log("Extracted user ID:", userId);

@@ -96,7 +96,7 @@ const startServer = async () => {
   }
 };
 
-// Handle graceful shutdown
+// Handle shutdown
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await mongoose.connection.close();
