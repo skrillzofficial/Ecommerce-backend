@@ -59,7 +59,7 @@ const handleRegister = async (req, res, next) => {
 };
 // User login
 const handleLogin = async (req, res, next) => {
-  const { login, password } = req.body; // Changed from 'email' to 'login'
+  const { login, password } = req.body; 
 
   if (!login || !password) {
     return next(

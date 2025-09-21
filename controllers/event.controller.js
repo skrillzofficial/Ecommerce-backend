@@ -53,13 +53,13 @@ const getEventById = async (req, res, next) => {
 // Create a new event (Admin only)
 const createEvent = async (req, res, next) => {
   try {
-    const { title, description, category, dateTime, location, capacity, price } = req.body;
+    const { title, description, category, date, time, location, capacity, price } = req.body;
     
     // Validate required fields
-    if (!title || !category || !dateTime || !location || !price) {
+    if (!title || !category || !date || !time || !location || !price) {
       return res.status(400).json({
         success: false,
-        message: 'Title, category, dateTime, location, and price are required fields'
+        message: 'title, category, date, time, location, and price are required fields'
       });
     }
 
@@ -72,7 +72,7 @@ const createEvent = async (req, res, next) => {
     }
 
     // Validate date is in the future
-    const eventDate = new Date(dateTime);
+    const eventDate = new Date(date);
     if (eventDate <= new Date()) {
       return res.status(400).json({
         success: false,
@@ -115,7 +115,8 @@ const createEvent = async (req, res, next) => {
       title: title.trim(),
       description: description?.trim() || '',
       category,
-      dateTime: eventDate,
+      date: eventDate,
+      time: time.trim(),
       location,
       capacity: capacity || null,
       ticketsAvailable: capacity || 0,

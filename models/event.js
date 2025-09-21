@@ -23,20 +23,25 @@ const eventSchema = new mongoose.Schema({
     enum: ['Business', 'Sports', 'Festivals', 'Food & Drinks', 'Dating', 'Hobbies', 'Other'] 
   },
   location: {
-    address: {
-      type: String,
-      required: [true, 'Address is required']
-    }
+    type: String,
+    required: [true, 'Location is required'],
+    trim: true,
+    maxLength: [200, 'Location cannot exceed 200 characters']
   },
-  dateTime: {
+  date: {
     type: Date,
-    required: [true, 'Event date and time is required'],
+    required: [true, 'Event date is required'],
     validate: {
       validator: function(value) {
         return value > new Date(); 
       },
       message: 'Event date must be in the future'
     }
+  },
+  time: {
+    type: String,
+    required: [true, 'Event time is required'],
+    match: [/^(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)\s?-\s?(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)$/i, 'Time must be in the format HH:MM AM/PM - HH:MM AM/PM']
   },
   image: {
     type: String,

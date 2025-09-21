@@ -6,10 +6,7 @@ const protect = async (req, res, next) => {
   let token;
 
   // 1. Get token from header
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
-  ) {
+  if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
     token = req.headers.authorization.split(" ")[1];
   }
 
@@ -20,19 +17,28 @@ const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log("Decoded token ID:", decoded.userId); // Log the ID being searched
+    console.log("Full decoded token:", decoded); // Log the entire token to see its structure
 
-    const user = await User.findById(decoded.userId).select("-password");
-    console.log("User from database:", {
-      id: user._id,
-      email: user.email,
-      role: user.role, // Should be "admin" Log the user from database
-    });
+    // Check different possible user ID properties
+    const userId = decoded.userId || decoded.id || decoded._id;
+    console.log("Extracted user ID:", userId);
 
+    if (!userId) {
+      return next(new ErrorResponse("Invalid token structure", 401));
+    }
+
+    const user = await User.findById(userId).select("-password");
+    
     if (!user) {
-      console.log(`User ${decoded.userId} not found in database`); // Specific log
+      console.log(`User ${userId} not found in database`);
       return next(new ErrorResponse("User no longer exists", 401));
     }
+
+    console.log("User found:", {
+      id: user._id,
+      email: user.email,
+      role: user.role
+    });
 
     req.user = user;
     next();
@@ -44,23 +50,25 @@ const protect = async (req, res, next) => {
     if (err.name === "JsonWebTokenError") {
       return next(new ErrorResponse("Invalid token", 401));
     }
+    console.error("JWT verification error:", err);
     return next(new ErrorResponse("Not authorized to access this route", 401));
   }
 };
-const authenticate = async (req, res, next) => {
-    try {
-        const token = req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            return next(new ErrorResponse("Access denied. No token provided.", 401));
-        }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded; // { userId, email, role }
-        next();
-    } catch (error) {
-        next(new ErrorResponse("Invalid token", 401));
+const authenticate = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    
+    if (!token) {
+      return next(new ErrorResponse("Access denied. No token provided.", 401));
     }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    next(new ErrorResponse("Invalid token", 401));
+  }
 };
 
 module.exports = { protect, authenticate };
