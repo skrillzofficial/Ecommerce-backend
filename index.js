@@ -23,7 +23,10 @@ cloudinary.config({
 
 // CORS configuration
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "https://eventra-yyo5.vercel.app/",
+  origin: [
+    "https://eventra-yyo5.vercel.app",
+    "http://localhost:5174",
+  ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
