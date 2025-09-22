@@ -39,7 +39,7 @@ const handleRegister = async (req, res, next) => {
         userId: user._id,
         email: user.email,
         role: user.role,
-        onboardingCompleted: user.onboardingCompleted, // Include in token if needed
+        onboardingCompleted: user.onboardingCompleted,
       },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
