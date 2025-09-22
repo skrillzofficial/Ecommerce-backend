@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 4000;
 // Routes and middleware
 const authRouter = require("./routes/userRoute");
 const eventRouter = require("./routes/eventRoute");
+const onboardingRouter = require("./routes/onboardingRoute"); // ADD THIS
 const errorHandler = require("./middleware/errorHandler");
 
 // EXPRESS SERVER
@@ -46,6 +47,7 @@ app.use(
 // ROUTES
 app.use("/api/v1/", authRouter);
 app.use("/api/v1/", eventRouter);
+app.use("/api/v1/", onboardingRouter);
 
 // Test routes
 app.get("/", (req, res) => {

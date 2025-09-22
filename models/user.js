@@ -17,6 +17,55 @@ const userSchema = new mongoose.Schema({
     required: [true, "Please enter a username"],
     trim: true,
   },
+  onboardingCompleted: {
+    type: Boolean,
+    default: false,
+  },
+  preferences: {
+    eventTypes: [
+      {
+        type: String,
+        enum: [
+          "Concerts",
+          "Conferences",
+          "Workshops",
+          "Sports",
+          "Networking",
+          "Parties",
+          "Cultural",
+          "Food & Drink",
+        ],
+      },
+    ],
+    interests: [
+      {
+        type: String,
+        enum: [
+          "Technology",
+          "Music",
+          "Art",
+          "Business",
+          "Health",
+          "Education",
+          "Travel",
+          "Food",
+        ],
+      },
+    ],
+    budgetRange: {
+      min: { type: Number, min: 0 },
+      max: { type: Number, min: 0 },
+    },
+    locationPreference: {
+      type: String,
+      enum: ["City Center", "Suburbs", "Online", "Anywhere", ""],
+    },
+    groupSize: {
+      type: Number,
+      min: 1,
+      max: 50,
+    },
+  },
   email: {
     type: String,
     required: [true, "Please enter your email"],

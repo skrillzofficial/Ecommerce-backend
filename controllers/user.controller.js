@@ -31,10 +31,16 @@ const handleRegister = async (req, res, next) => {
       password,
       role: role || "user",
       isVerified: true,
+      onboardingCompleted: false, // Explicitly set to false for new users
     });
 
     const token = jwt.sign(
-      { userId: user._id, email: user.email, role: user.role },
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        onboardingCompleted: user.onboardingCompleted, // Include in token if needed
+      },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
@@ -50,6 +56,7 @@ const handleRegister = async (req, res, next) => {
         userName: user.userName,
         email: user.email,
         role: user.role,
+        onboardingCompleted: user.onboardingCompleted, 
       },
     });
   } catch (error) {
@@ -57,9 +64,10 @@ const handleRegister = async (req, res, next) => {
     next(new ErrorResponse("Registration failed", 500));
   }
 };
+
 // User login
 const handleLogin = async (req, res, next) => {
-  const { login, password } = req.body; 
+  const { login, password } = req.body;
 
   if (!login || !password) {
     return next(
@@ -88,7 +96,12 @@ const handleLogin = async (req, res, next) => {
     }
 
     const token = jwt.sign(
-      { userId: user._id, email: user.email, role: user.role },
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        onboardingCompleted: user.onboardingCompleted,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
@@ -101,9 +114,10 @@ const handleLogin = async (req, res, next) => {
         id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
-        userName: user.userName, 
+        userName: user.userName,
         email: user.email,
         role: user.role,
+        onboardingCompleted: user.onboardingCompleted,
       },
     });
   } catch (error) {
@@ -114,9 +128,9 @@ const handleLogin = async (req, res, next) => {
 // Update user details including image and bio
 const HandleUpdateUser = async (req, res, next) => {
   try {
-    const { id } = req.params; 
+    const { id } = req.params;
     const { firstName, lastName, userName, email, bio } = req.body;
-    const authenticatedUserId = req.user.userId; 
+    const authenticatedUserId = req.user.userId;
 
     // Check if user exists
     const user = await USER.findById(id);
@@ -166,11 +180,10 @@ const HandleUpdateUser = async (req, res, next) => {
     if (req.file) updateData.image = imageUrl;
 
     // Perform the update
-    const updatedUser = await USER.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    ).select("-password"); 
+    const updatedUser = await USER.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    }).select("-password");
 
     res.status(200).json({
       success: true,
