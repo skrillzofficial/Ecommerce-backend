@@ -56,6 +56,55 @@ const userSchema = new mongoose.Schema({
       min: { type: Number, min: 0 },
       max: { type: Number, min: 0 },
     },
+    paymentMethods: [
+      {
+        id: String,
+        type: {
+          type: String,
+          enum: ["credit_card", "debit_card", "paypal", "bank_transfer"],
+        },
+        details: mongoose.Schema.Types.Mixed,
+        isDefault: {
+          type: Boolean,
+          default: false,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
+    linkedAccounts: [
+      {
+        provider: {
+          type: String,
+          enum: ["google", "facebook", "github", "twitter"],
+        },
+        providerId: String,
+        profile: mongoose.Schema.Types.Mixed,
+        linkedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
+    communicationPrefs: {
+      email: { type: Boolean, default: true },
+      push: { type: Boolean, default: true },
+      sms: { type: Boolean, default: false },
+      newsletter: { type: Boolean, default: true },
+      marketing: { type: Boolean, default: false },
+    },
+
+    deletedAt: Date,
+    status: {
+      type: String,
+      enum: ["active", "suspended", "deleted"],
+      default: "active",
+    },
+
     locationPreference: {
       type: String,
       enum: ["City Center", "Suburbs", "Online", "Anywhere", ""],
