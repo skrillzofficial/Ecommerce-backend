@@ -97,7 +97,8 @@ const handleLogin = async (req, res, next) => {
       },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
-    );
+    ); 
+    
 
     res.status(200).json({
       success: true,

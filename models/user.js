@@ -168,5 +168,23 @@ userSchema.pre("save", async function (next) {
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
+// Method to get user profile without sensitive info
+userSchema.methods.getProfile = function () {
+  return {
+    _id: this._id,
+    firstName: this.firstName,
+    lastName: this.lastName,
+    userName: this.userName,
+    email: this.email,
+    role: this.role,
+    onboardingCompleted: this.onboardingCompleted,
+    bio: this.bio,
+    image: this.image,
+    preferences: this.preferences,
+    createdAt: this.createdAt,
+    lastActive: this.lastActive,
+    // Add any other fields you want to include in the profile response
+  };
+};
 
 module.exports = mongoose.model("User", userSchema);
