@@ -31,7 +31,7 @@ const handleRegister = async (req, res, next) => {
       password,
       role: role || "user",
       isVerified: true,
-      onboardingCompleted: false, // Explicitly set to false for new users
+      onboardingCompleted: false,
     });
 
     const token = jwt.sign(
