@@ -18,7 +18,7 @@ router.post("/register", handleRegister);
 router.post("/login", handleLogin);
 
 // Protected routes
-router.get("/me", protect, getCurrentUser);
+router.get("/profile", protect, getCurrentUser);
 
 // User can update their own profile, admin can update any profile
 router.patch("/:id", protect, authorizeUserOrAdmin, HandleUpdateUser);
