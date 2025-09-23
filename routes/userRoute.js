@@ -3,20 +3,29 @@ const {
   handleRegister,
   handleLogin,
   getAllUsers,
+  getCurrentUser,
   deleteUser,
   HandleUpdateUser,
 } = require("../controllers/user.controller");
-const { protect, authenticate } = require("../middleware/auth");
-const { authorizeAdmin } = require("../middleware/adminAuth");
+const { protect } = require("../middleware/auth");
+const {
+  authorizeAdmin,
+  authorizeUserOrAdmin,
+} = require("../middleware/adminAuth");
 
 // Public routes
 router.post("/register", handleRegister);
 router.post("/login", handleLogin);
-router.patch('/user/:id', authenticate, HandleUpdateUser);
 
-// Admin-protected routes
-router.get("/user", protect, authorizeAdmin, getAllUsers);
-// Admin-protected routes that involves use of Id
-router.delete("/user/:id", protect, authorizeAdmin, deleteUser);
+// Protected routes
+router.get("/me", protect, getCurrentUser);
+
+// User can update their own profile, admin can update any profile
+router.patch("/:id", protect, authorizeUserOrAdmin, HandleUpdateUser);
+
+// Admin-only routes
+router.get("/", protect, authorizeAdmin, getAllUsers);
+router.get("/:id", protect, authorizeAdmin);
+router.delete("/:id", protect, authorizeAdmin, deleteUser);
 
 module.exports = router;

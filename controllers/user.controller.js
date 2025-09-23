@@ -56,7 +56,7 @@ const handleRegister = async (req, res, next) => {
         userName: user.userName,
         email: user.email,
         role: user.role,
-        onboardingCompleted: user.onboardingCompleted, 
+        onboardingCompleted: user.onboardingCompleted,
       },
     });
   } catch (error) {
@@ -219,7 +219,37 @@ const getAllUsers = async (req, res, next) => {
     next(new ErrorResponse("Failed to fetch users", 500));
   }
 };
+// Get current user profile (using JWT token)
+const getCurrentUser = async (req, res, next) => {
+  try {
+    const user = req.user;
 
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    res.status(200).json({
+      success: true,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        userName: user.userName,
+        email: user.email,
+        role: user.role,
+        bio: user.bio,
+        image: user.image,
+        isVerified: user.isVerified,
+        onboardingCompleted: user.onboardingCompleted,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Get current user error:", error);
+    next(new ErrorResponse("Failed to fetch user profile", 500));
+  }
+};
 // Delete single user
 const deleteUser = async (req, res, next) => {
   try {
@@ -243,5 +273,6 @@ module.exports = {
   handleLogin,
   HandleUpdateUser,
   getAllUsers,
+  getCurrentUser,
   deleteUser,
 };
