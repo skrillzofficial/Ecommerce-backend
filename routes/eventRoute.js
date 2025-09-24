@@ -1,23 +1,19 @@
+// routes/eventRoute.js - PROTECTED ROUTES ONLY
 const express = require("express");
 const {
   createEvent,
   updateEvent,
-  deleteEvent,
-  getEvents,
-  getEventById
+  deleteEvent
 } = require("../controllers/event.controller");
 const { protect } = require("../middleware/auth");
 const { authorizeAdmin } = require("../middleware/adminAuth");
 
 const router = express.Router();
 
-// PUBLIC ROUTES - No authentication required
-router.get("/events", getEvents);
-router.get("/events/:id", getEventById);
+// All routes in this file require authentication
+router.use(protect);
 
-// PROTECTED ROUTES - Require authentication + admin role
-router.use(protect); // Apply protection to all routes below this line
-
+// Protected admin-only routes (require authentication + admin role)
 router.post("/events", authorizeAdmin, createEvent);
 router.patch("/events/:id", authorizeAdmin, updateEvent);
 router.delete("/events/:id", authorizeAdmin, deleteEvent);
