@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 4000;
 // Routes and middleware
 const authRouter = require("./routes/userRoute");
 const eventRouter = require("./routes/eventRoute");
-const onboardingRouter = require("./routes/onboardingRoute"); // ADD THIS
+const onboardingRouter = require("./routes/onboardingRoute"); 
 const errorHandler = require("./middleware/errorHandler");
 
 // EXPRESS SERVER
@@ -25,7 +25,7 @@ cloudinary.config({
 // CORS configuration
 app.use(cors({
   origin: [
-    "https://eventra-liard.vercel.app/",
+    "https://eventra-liard.vercel.app",
     "http://localhost:5174",
     "http://localhost:5173",
   ],
