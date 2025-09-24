@@ -26,105 +26,169 @@ const {
   closeAccount,
 } = require("../controllers/user.controller");
 
-// Google OAuth Client
-const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI ||
-    `${process.env.BACKEND_URL}/api/v1/auth/google/callback`
-);
+// Google OAuth Client - FIXED INITIALIZATION
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-//  GOOGLE OAUTH ROUTES
-// Initiate Google OAuth
-router.get("/auth/google", (req, res) => {
-  const url = client.generateAuthUrl({
-    access_type: "offline",
-    scope: ["profile", "email"],
-    prompt: "consent",
-    state: req.query.redirect || "/",
-  });
-  console.log("Redirecting to Google OAuth:", url);
-  res.redirect(url);
+// Verify configuration on startup
+console.log('🔐 Google OAuth Configuration Check:', {
+  clientId: process.env.GOOGLE_CLIENT_ID ? '✅ Set' : '❌ Missing',
+  frontendUrl: process.env.FRONTEND_URL ? '✅ Set' : '❌ Missing',
+  backendUrl: process.env.BACKEND_URL ? '✅ Set' : '❌ Missing'
 });
 
-// Google OAuth callback
-router.get("/auth/google/callback", async (req, res, next) => {
+// GOOGLE OAUTH ROUTES
+// Initiate Google OAuth
+router.get("/auth/google", (req, res) => {
   try {
-    const { code, state, error } = req.query;
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      throw new Error('Google Client ID not configured');
+    }
 
-    // Check for OAuth errors from Google
+    const url = client.generateAuthUrl({
+      access_type: "offline",
+      scope: ["profile", "email", "openid"],
+      prompt: "consent",
+      state: req.query.redirect || "/",
+      include_granted_scopes: true
+    });
+    
+    console.log("🔗 Redirecting to Google OAuth");
+    res.redirect(url);
+  } catch (error) {
+    console.error("❌ Error generating auth URL:", error);
+    res.redirect(`${process.env.FRONTEND_URL}/login?error=config_error`);
+  }
+});
+
+// Google OAuth callback - SIMPLIFIED AND FIXED
+router.get("/auth/google/callback", async (req, res) => {
+  try {
+    console.log('🔄 Google OAuth callback received');
+    const { code, error } = req.query;
+
     if (error) {
-      console.error("Google OAuth error:", error);
-      return res.redirect(
-        `${process.env.FRONTEND_URL}/login?error=oauth_denied`
-      );
+      console.error("❌ Google OAuth error:", error);
+      return res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_denied`);
     }
 
     if (!code) {
-      console.error("No authorization code received from Google");
+      console.error("❌ No authorization code received");
       return res.redirect(`${process.env.FRONTEND_URL}/login?error=no_code`);
     }
 
-    console.log("Received Google OAuth code, exchanging for tokens...");
+    console.log("🔄 Exchanging code for tokens...");
 
     // Exchange code for tokens
-    const { tokens } = await client.getToken(code);
-    client.setCredentials(tokens);
-
-    console.log("Tokens received from Google");
+    const { tokens } = await client.getToken({
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: process.env.GOOGLE_REDIRECT_URI || `${process.env.BACKEND_URL}/api/v1/auth/google/callback`
+    });
+    
+    console.log("✅ Tokens received:", {
+      hasIdToken: !!tokens.id_token,
+      idTokenLength: tokens.id_token?.length
+    });
 
     if (!tokens.id_token) {
       throw new Error("No ID token received from Google");
     }
 
-    // Create a mock request object for the controller
+    // Create a proper mock request
     const mockReq = {
       body: { token: tokens.id_token },
+      headers: {}
     };
 
-    // Create a custom response handler that redirects to frontend
+    // Create a proper mock response that handles the redirect
+    let responseSent = false;
+    
     const mockRes = {
-      status: (statusCode) => ({
-        json: (data) => {
-          if (statusCode === 200 && data.success) {
-            // Successful login - redirect to frontend with token
-            const redirectUrl = `${
-              process.env.FRONTEND_URL
-            }/auth/success?token=${encodeURIComponent(
-              data.token
-            )}&onboarding=${!data.user.onboardingCompleted}`;
-            console.log(
-              "Google OAuth successful, redirecting to:",
-              redirectUrl
-            );
-            res.redirect(redirectUrl);
-          } else {
-            // Login failed - redirect to frontend with error
-            const errorMessage = data.message || "authentication_failed";
-            const redirectUrl = `${
-              process.env.FRONTEND_URL
-            }/login?error=${encodeURIComponent(errorMessage)}`;
-            console.log("Google OAuth failed, redirecting to:", redirectUrl);
-            res.redirect(redirectUrl);
-          }
-        },
-      }),
+      status: function(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json: (data) => {
+        if (responseSent) return;
+        responseSent = true;
+        
+        console.log('📨 Controller response:', { statusCode: mockRes.statusCode, success: data.success });
+        
+        if (mockRes.statusCode === 200 && data.success) {
+          // Successful login
+          const redirectUrl = `${process.env.FRONTEND_URL}/auth/success?token=${encodeURIComponent(data.token)}&onboarding=${!data.user.onboardingCompleted}`;
+          console.log("✅ Login successful, redirecting to:", redirectUrl);
+          res.redirect(redirectUrl);
+        } else {
+          // Login failed
+          const errorMessage = data.message || "authentication_failed";
+          const redirectUrl = `${process.env.FRONTEND_URL}/login?error=${encodeURIComponent(errorMessage)}`;
+          console.log("❌ Login failed, redirecting to:", redirectUrl);
+          res.redirect(redirectUrl);
+        }
+      }
     };
 
-    // Call the existing handleGoogleLogin controller
-    await handleGoogleLogin(mockReq, mockRes, next);
+    // Add error handling to the mock response
+    mockRes.status = mockRes.status.bind(mockRes);
+
+    // Call the controller
+    console.log('🔄 Calling handleGoogleLogin controller...');
+    await handleGoogleLogin(mockReq, mockRes, (err) => {
+      if (err && !responseSent) {
+        responseSent = true;
+        console.error('❌ Controller error:', err);
+        res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
+      }
+    });
+
+    // If no response was sent within a timeout, send an error
+    setTimeout(() => {
+      if (!responseSent) {
+        responseSent = true;
+        console.error('⏰ Controller timeout - no response sent');
+        res.redirect(`${process.env.FRONTEND_URL}/login?error=timeout`);
+      }
+    }, 10000);
+
   } catch (error) {
-    console.error("Google OAuth callback error:", error);
-
-    // Determine appropriate error message
+    console.error("❌ Google OAuth callback error:", error);
+    
     let errorMessage = "auth_failed";
-    if (error.message.includes("invalid_grant")) {
-      errorMessage = "invalid_grant";
-    } else if (error.message.includes("token")) {
-      errorMessage = "invalid_token";
-    }
-
+    if (error.message.includes("invalid_grant")) errorMessage = "invalid_grant";
+    else if (error.message.includes("token")) errorMessage = "invalid_token";
+    else if (error.message.includes("client_id")) errorMessage = "invalid_client";
+    
     res.redirect(`${process.env.FRONTEND_URL}/login?error=${errorMessage}`);
+  }
+});
+
+// TEST ROUTE - Add this to debug
+router.get("/auth/google/test", async (req, res) => {
+  try {
+    // Test the Google client configuration
+    const testPayload = {
+      clientId: process.env.GOOGLE_CLIENT_ID ? '✅ Configured' : '❌ Missing',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET ? '✅ Configured' : '❌ Missing',
+      redirectUri: process.env.GOOGLE_REDIRECT_URI || 'Using default',
+      frontendUrl: process.env.FRONTEND_URL || '❌ Missing'
+    };
+    
+    res.json({
+      success: true,
+      message: 'Google OAuth Test',
+      config: testPayload,
+      endpoints: {
+        initiate: '/api/v1/auth/google',
+        callback: '/api/v1/auth/google/callback'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
