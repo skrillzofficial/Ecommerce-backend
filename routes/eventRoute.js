@@ -11,14 +11,15 @@ const { authorizeAdmin } = require("../middleware/adminAuth");
 
 const router = express.Router();
 
-
-// Public routes (no authentication required) - Users can view events
+// PUBLIC ROUTES - No authentication required
 router.get("/events", getEvents);
 router.get("/events/:id", getEventById);
 
-// Protected admin-only routes (require authentication + admin role)
-router.post("/events", protect, authorizeAdmin, createEvent);
-router.patch("/events/:id", protect, authorizeAdmin, updateEvent);
-router.delete("/events/:id", protect, authorizeAdmin, deleteEvent);
+// PROTECTED ROUTES - Require authentication + admin role
+router.use(protect); // Apply protection to all routes below this line
+
+router.post("/events", authorizeAdmin, createEvent);
+router.patch("/events/:id", authorizeAdmin, updateEvent);
+router.delete("/events/:id", authorizeAdmin, deleteEvent);
 
 module.exports = router;
