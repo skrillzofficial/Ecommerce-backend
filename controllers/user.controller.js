@@ -194,14 +194,18 @@ const handleUpdateUser = async (req, res, next) => {
     next(new ErrorResponse("Update failed", 500));
   }
 };
-// Google Login Controller
+// In controllers/user.controller.js - Update the handleGoogleLogin function
 const handleGoogleLogin = async (req, res, next) => {
   try {
+    console.log('Google login attempt started');
     const { token } = req.body;
 
     if (!token) {
+      console.error('No Google token provided');
       return next(new ErrorResponse("Google token is required", 400));
     }
+
+    console.log('Received Google token, verifying...');
 
     // Verify Google token
     const ticket = await client.verifyIdToken({
@@ -209,13 +213,23 @@ const handleGoogleLogin = async (req, res, next) => {
       audience: process.env.GOOGLE_CLIENT_ID,
     });
 
+    console.log('Google token verified successfully');
+
     const payload = ticket.getPayload();
+    console.log('Google payload received:', {
+      email: payload.email,
+      name: payload.name,
+      googleId: payload.sub
+    });
+
     const { email, given_name, family_name, sub: googleId, picture } = payload;
 
     // Check if user already exists
     let user = await USER.findOne({
       $or: [{ email }, { googleId }],
     });
+
+    console.log('User lookup result:', user ? 'User found' : 'New user');
 
     if (user) {
       // User exists - update Google ID if not set
@@ -224,10 +238,11 @@ const handleGoogleLogin = async (req, res, next) => {
         user.profilePicture = picture || user.profilePicture;
         user.isVerified = true;
         await user.save();
+        console.log('Updated existing user with Google ID');
       }
     } else {
       // Create new user with Google data
-      const baseUsername = email.split("@")[0];
+      const baseUsername = email.split('@')[0];
       let userName = baseUsername;
       let counter = 1;
 
@@ -237,17 +252,21 @@ const handleGoogleLogin = async (req, res, next) => {
         counter++;
       }
 
+      console.log('Creating new user with username:', userName);
+
       user = await USER.create({
         firstName: given_name,
-        lastName: family_name || "",
+        lastName: family_name || '',
         userName,
         email,
         googleId,
         profilePicture: picture,
         onboardingCompleted: false,
-        isVerified: true, 
-        password: undefined, 
+        isVerified: true,
+        password: undefined,
       });
+
+      console.log('New user created successfully');
     }
 
     // Generate JWT token
@@ -259,23 +278,35 @@ const handleGoogleLogin = async (req, res, next) => {
         onboardingCompleted: user.onboardingCompleted,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "2d" }
+      { expiresIn: '2d' }
     );
+
+    console.log('JWT token generated, login successful');
 
     res.status(200).json({
       success: true,
-      message: "Google login successful",
+      message: 'Google login successful',
       token: jwtToken,
       user: user.getProfile(),
     });
-  } catch (error) {
-    console.error("Google login error:", error);
 
-    if (error.message.includes("Invalid token")) {
-      return next(new ErrorResponse("Invalid Google token", 401));
+  } catch (error) {
+    console.error('Google login error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+
+    // More specific error handling
+    if (error.message.includes('Invalid token')) {
+      return next(new ErrorResponse('Invalid Google token', 401));
+    }
+    
+    if (error.message.includes('Audience mismatch')) {
+      return next(new ErrorResponse('Google OAuth configuration error', 500));
     }
 
-    next(new ErrorResponse("Google authentication failed", 500));
+    next(new ErrorResponse('Google authentication failed', 500));
   }
 };
 
