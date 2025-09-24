@@ -14,7 +14,9 @@ const userSchema = new mongoose.Schema({
   },
   userName: {
     type: String,
-    required: [true, "Please enter a username"],
+    required: function () {
+      return !this.googleId;
+    },
     trim: true,
   },
   onboardingCompleted: {
@@ -124,8 +126,18 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, "Please enter a password"],
+    required: function () {
+      return !this.googleId;
+    },
     minlength: [6, "Password must be at least 6 characters"],
+  },
+  googleId: {
+    type: String,
+    sparse: true,
+  },
+  profilePicture: {
+    type: String,
+    default: "",
   },
   bio: {
     type: String,
@@ -179,11 +191,11 @@ userSchema.methods.getProfile = function () {
     role: this.role,
     onboardingCompleted: this.onboardingCompleted,
     bio: this.bio,
-    image: this.image,
+    image: this.image || this.profilePicture,
     preferences: this.preferences,
     createdAt: this.createdAt,
     lastActive: this.lastActive,
-    // Add any other fields you want to include in the profile response
+    isVerified: this.isVerified,
   };
 };
 

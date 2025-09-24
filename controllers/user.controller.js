@@ -2,6 +2,8 @@ const USER = require("../models/user");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const ErrorResponse = require("../utils/errorResponse");
+const { OAuth2Client } = require("google-auth-library");
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // User registration
 const handleRegister = async (req, res, next) => {
@@ -97,8 +99,7 @@ const handleLogin = async (req, res, next) => {
       },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
-    ); 
-    
+    );
 
     res.status(200).json({
       success: true,
@@ -191,6 +192,90 @@ const handleUpdateUser = async (req, res, next) => {
     }
 
     next(new ErrorResponse("Update failed", 500));
+  }
+};
+// Google Login Controller
+const handleGoogleLogin = async (req, res, next) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return next(new ErrorResponse("Google token is required", 400));
+    }
+
+    // Verify Google token
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { email, given_name, family_name, sub: googleId, picture } = payload;
+
+    // Check if user already exists
+    let user = await USER.findOne({
+      $or: [{ email }, { googleId }],
+    });
+
+    if (user) {
+      // User exists - update Google ID if not set
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.profilePicture = picture || user.profilePicture;
+        user.isVerified = true;
+        await user.save();
+      }
+    } else {
+      // Create new user with Google data
+      const baseUsername = email.split("@")[0];
+      let userName = baseUsername;
+      let counter = 1;
+
+      // Ensure unique username
+      while (await USER.findOne({ userName })) {
+        userName = `${baseUsername}${counter}`;
+        counter++;
+      }
+
+      user = await USER.create({
+        firstName: given_name,
+        lastName: family_name || "",
+        userName,
+        email,
+        googleId,
+        profilePicture: picture,
+        onboardingCompleted: false,
+        isVerified: true, 
+        password: undefined, 
+      });
+    }
+
+    // Generate JWT token
+    const jwtToken = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        onboardingCompleted: user.onboardingCompleted,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "2d" }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Google login successful",
+      token: jwtToken,
+      user: user.getProfile(),
+    });
+  } catch (error) {
+    console.error("Google login error:", error);
+
+    if (error.message.includes("Invalid token")) {
+      return next(new ErrorResponse("Invalid Google token", 401));
+    }
+
+    next(new ErrorResponse("Google authentication failed", 500));
   }
 };
 
@@ -537,7 +622,7 @@ const closeAccount = async (req, res, next) => {
       return next(new ErrorResponse("Invalid password", 401));
     }
 
-    // Soft delete 
+    // Soft delete
     user.deletedAt = new Date();
     user.status = "deleted";
     user.email = `deleted_${Date.now()}@deleted.com`;
@@ -560,6 +645,7 @@ const closeAccount = async (req, res, next) => {
 module.exports = {
   handleRegister,
   handleLogin,
+  handleGoogleLogin,
   handleUpdateUser,
   getAllUsers,
   getCurrentUser,

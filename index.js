@@ -8,8 +8,8 @@ const PORT = process.env.PORT || 4000;
 
 // Routes and middleware
 const authRouter = require("./routes/userRoute");
-const publicEventRoutes = require("./routes/publicEventRoutes"); // NEW: Public routes
-const protectedEventRoutes = require("./routes/eventRoute"); // RENAMED: Protected routes
+const publicEventRoutes = require("./routes/publicEventRoutes"); 
+const protectedEventRoutes = require("./routes/eventRoute"); 
 const onboardingRouter = require("./routes/onboardingRoute"); 
 const errorHandler = require("./middleware/errorHandler");
 
@@ -46,9 +46,9 @@ app.use(
 );
 
 // ROUTES - IMPORTANT: Public routes first, then protected routes
-app.use("/api/v1/", publicEventRoutes); // PUBLIC routes come FIRST
+app.use("/api/v1/", publicEventRoutes); 
 app.use("/api/v1/", authRouter);
-app.use("/api/v1/", protectedEventRoutes); // PROTECTED routes come after
+app.use("/api/v1/", protectedEventRoutes);  
 app.use("/api/v1/", onboardingRouter);
 
 // Test routes
@@ -99,9 +99,9 @@ const startServer = async () => {
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       
       // Log route information
-      console.log('\n📋 Route Configuration:');
-      console.log('✅ PUBLIC routes: GET /api/v1/events, GET /api/v1/events/:id');
-      console.log('🔒 PROTECTED routes: POST/PATCH/DELETE /api/v1/events');
+      console.log('Route Configuration:');
+      console.log('PUBLIC routes: GET /api/v1/events, GET /api/v1/events/:id');
+      console.log('PROTECTED routes: POST/PATCH/DELETE /api/v1/events');
     });
   } catch (error) {
     console.error("Error connecting to the database", error);
