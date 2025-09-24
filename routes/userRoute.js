@@ -30,15 +30,17 @@ const {
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI // This is crucial!
+  process.env.GOOGLE_REDIRECT_URI 
 );
 
+const verifyClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
 // Verify configuration on startup
-console.log('🔐 Google OAuth Configuration:', {
-  clientId: process.env.GOOGLE_CLIENT_ID ? '✅ Set' : '❌ Missing',
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET ? '✅ Set' : '❌ Missing',
-  redirectUri: process.env.GOOGLE_REDIRECT_URI ? '✅ Set' : '❌ Missing',
-  frontendUrl: process.env.FRONTEND_URL ? '✅ Set' : '❌ Missing'
+console.log("🔐 Google OAuth Configuration:", {
+  clientId: process.env.GOOGLE_CLIENT_ID ? "✅ Set" : "❌ Missing",
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET ? "✅ Set" : "❌ Missing",
+  redirectUri: process.env.GOOGLE_REDIRECT_URI ? "✅ Set" : "❌ Missing",
+  frontendUrl: process.env.FRONTEND_URL ? "✅ Set" : "❌ Missing",
 });
 
 // GOOGLE OAUTH ROUTES
@@ -46,21 +48,21 @@ console.log('🔐 Google OAuth Configuration:', {
 router.get("/auth/google", (req, res) => {
   try {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_REDIRECT_URI) {
-      throw new Error('Google OAuth not properly configured');
+      throw new Error("Google OAuth not properly configured");
     }
 
     const redirectUri = process.env.GOOGLE_REDIRECT_URI;
-    console.log('🔗 Using redirect URI:', redirectUri);
+    console.log("🔗 Using redirect URI:", redirectUri);
 
     const url = client.generateAuthUrl({
       access_type: "offline",
       scope: ["profile", "email", "openid"],
       prompt: "consent",
       state: req.query.redirect || "/",
-      redirect_uri: redirectUri, // EXPLICITLY SET THIS
-      include_granted_scopes: true
+      redirect_uri: redirectUri,
+      include_granted_scopes: true,
     });
-    
+
     console.log("🔗 Generated Google OAuth URL");
     res.redirect(url);
   } catch (error) {
@@ -69,15 +71,17 @@ router.get("/auth/google", (req, res) => {
   }
 });
 
-// Google OAuth callback - FIXED VERSION
+// Google OAuth callback - ENHANCED DEBUG VERSION
 router.get("/auth/google/callback", async (req, res) => {
   try {
-    console.log('🔄 Google OAuth callback received');
+    console.log("=== GOOGLE OAUTH CALLBACK START ===");
     const { code, error } = req.query;
 
     if (error) {
       console.error("❌ Google OAuth error:", error);
-      return res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_denied`);
+      return res.redirect(
+        `${process.env.FRONTEND_URL}/login?error=oauth_denied`
+      );
     }
 
     if (!code) {
@@ -87,84 +91,145 @@ router.get("/auth/google/callback", async (req, res) => {
 
     console.log("🔄 Exchanging code for tokens...");
 
-    // Exchange code for tokens - WITH EXPLICIT REDIRECT URI
+    // Exchange code for tokens
     const { tokens } = await client.getToken({
       code: code,
-      redirect_uri: process.env.GOOGLE_REDIRECT_URI, // MUST MATCH EXACTLY
-      client_id: process.env.GOOGLE_CLIENT_ID,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET
+      redirect_uri: process.env.GOOGLE_REDIRECT_URI,
     });
-    
-    console.log("✅ Tokens received successfully");
+
+    console.log("✅ Tokens received:", {
+      hasIdToken: !!tokens.id_token,
+      idTokenPreview: tokens.id_token
+        ? tokens.id_token.substring(0, 50) + "..."
+        : "none",
+    });
 
     if (!tokens.id_token) {
       throw new Error("No ID token received from Google");
     }
 
-    // Create mock request for controller
+    // TEST: Verify the token works before calling controller
+    try {
+      const ticket = await client.verifyIdToken({
+        idToken: tokens.id_token,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      const payload = ticket.getPayload();
+      console.log("✅ Token verification successful:", {
+        email: payload.email,
+        name: payload.name,
+      });
+    } catch (verifyError) {
+      console.error("❌ Token verification failed:", verifyError);
+      throw verifyError;
+    }
+
+    // Create a SIMPLE mock response that definitely works
     const mockReq = {
-      body: { token: tokens.id_token }
+      body: { token: tokens.id_token },
     };
 
-    let responseSent = false;
-    
-    const mockRes = {
-      status: function(code) {
-        this.statusCode = code;
-        return this;
-      },
-      json: (data) => {
-        if (responseSent) return;
-        responseSent = true;
-        
-        if (this.statusCode === 200 && data.success) {
-          const redirectUrl = `${process.env.FRONTEND_URL}/auth/success?token=${encodeURIComponent(data.token)}&onboarding=${!data.user.onboardingCompleted}`;
-          console.log("✅ Login successful, redirecting to frontend");
-          res.redirect(redirectUrl);
-        } else {
-          const errorMessage = data.message || "authentication_failed";
-          const redirectUrl = `${process.env.FRONTEND_URL}/login?error=${encodeURIComponent(errorMessage)}`;
-          console.log("❌ Login failed");
-          res.redirect(redirectUrl);
+    console.log("🔄 Calling handleGoogleLogin controller...");
+
+    // Use a Promise to handle the controller call
+    await new Promise((resolve, reject) => {
+      let responseSent = false;
+      let timeoutId;
+
+      const mockRes = {
+        status: function (code) {
+          this.statusCode = code;
+          return this;
+        },
+        json: (data) => {
+          if (responseSent) return;
+          responseSent = true;
+          clearTimeout(timeoutId);
+
+          console.log("📨 Controller responded with:", {
+            statusCode: this.statusCode,
+            success: data.success,
+            hasToken: !!data.token,
+            hasUser: !!data.user,
+          });
+
+          if (this.statusCode === 200 && data.success) {
+            const redirectUrl = `${
+              process.env.FRONTEND_URL
+            }/auth/success?token=${encodeURIComponent(
+              data.token
+            )}&onboarding=${!data.user.onboardingCompleted}`;
+            console.log("✅ Success - redirecting to frontend");
+            res.redirect(redirectUrl);
+          } else {
+            const errorMessage = data.message || "authentication_failed";
+            const redirectUrl = `${
+              process.env.FRONTEND_URL
+            }/login?error=${encodeURIComponent(errorMessage)}`;
+            console.log("❌ Controller returned error");
+            res.redirect(redirectUrl);
+          }
+          resolve();
+        },
+      };
+
+      mockRes.status = mockRes.status.bind(mockRes);
+
+      // Add error handling to mockRes
+      mockRes.send = mockRes.json;
+      mockRes.end = () => {};
+
+      // Set timeout to prevent hanging
+      timeoutId = setTimeout(() => {
+        if (!responseSent) {
+          responseSent = true;
+          console.error("⏰ Controller timeout after 10 seconds");
+          res.redirect(`${process.env.FRONTEND_URL}/login?error=timeout`);
+          resolve();
         }
-      }
-    };
+      }, 10000);
 
-    mockRes.status = mockRes.status.bind(mockRes);
-
-    // Call the controller
-    await handleGoogleLogin(mockReq, mockRes, (err) => {
-      if (err && !responseSent) {
-        responseSent = true;
-        console.error('❌ Controller error:', err);
-        res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
-      }
+      // Call the controller
+      handleGoogleLogin(mockReq, mockRes, (err) => {
+        if (err && !responseSent) {
+          responseSent = true;
+          clearTimeout(timeoutId);
+          console.error("❌ Controller middleware error:", err);
+          res.redirect(
+            `${process.env.FRONTEND_URL}/login?error=controller_error`
+          );
+          resolve();
+        }
+      });
     });
 
+    console.log("=== GOOGLE OAUTH CALLBACK COMPLETE ===");
   } catch (error) {
-    console.error("❌ Google OAuth callback error:", error);
-    res.redirect(`${process.env.FRONTEND_URL}/login?error=auth_failed`);
+    console.error("❌ Google OAuth callback error:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    res.redirect(`${process.env.FRONTEND_URL}/login?error=server_error`);
   }
 });
-
 // TEST ROUTE - Check your configuration
 router.get("/auth/google/debug", (req, res) => {
   const config = {
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
     frontendUrl: process.env.FRONTEND_URL,
-    backendUrl: process.env.BACKEND_URL
+    backendUrl: process.env.BACKEND_URL,
   };
-  
-  console.log('🔍 OAuth Debug Info:', config);
-  
+
+  console.log("🔍 OAuth Debug Info:", config);
+
   res.json({
     success: true,
     config: config,
     required: {
-      redirectUri: 'Must match exactly in Google Cloud Console',
-      clientId: 'Must match exactly in Google Cloud Console'
-    }
+      redirectUri: "Must match exactly in Google Cloud Console",
+      clientId: "Must match exactly in Google Cloud Console",
+    },
   });
 });
 
