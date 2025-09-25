@@ -254,10 +254,10 @@ router.get("/auth/google/debug", (req, res) => {
 router.post("/register", handleRegister);
 router.post("/login", handleLogin);
 router.post("/google-login", handleGoogleLogin);
-// ... other routes ...
+
 // Protected routes
-router.get("/profile", protect, getCurrentUser);
-router.patch("/profile", protect, handleUpdateUser);
+router.get("profile", protect, getCurrentUser);
+router.patch("profile", protect, handleUpdateUser);
 
 // Payment methods
 router.get("/payment-methods", protect, getPaymentMethods);
