@@ -158,7 +158,7 @@ router.get("/auth/google/callback", async (req, res) => {
           // Success case
           if (this.statusCode === 200 && data?.success && data?.token) {
             const onboarding = data.user?.onboardingCompleted === false;
-            const redirectUrl = `${process.env.FRONTEND_URL}/auth/success?token=${encodeURIComponent(data.token)}&onboarding=${onboarding}`;
+            const redirectUrl = `${process.env.FRONTEND_URL}/login?token=${encodeURIComponent(data.token)}&onboarding=${onboarding}`;
             console.log("✅ Success - redirecting to:", redirectUrl);
             res.redirect(redirectUrl);
           } else {
