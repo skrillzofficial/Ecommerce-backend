@@ -17,9 +17,16 @@ const userSchema = new mongoose.Schema({
     required: function () {
       return !this.googleId;
     },
+    unique: true,
+    sparse: true,
     trim: true,
   },
   onboardingCompleted: {
+    type: Boolean,
+    default: false,
+  },
+  // ✅ ADDED: Missing isVerified field
+  isVerified: {
     type: Boolean,
     default: false,
   },
@@ -130,10 +137,12 @@ const userSchema = new mongoose.Schema({
       return !this.googleId;
     },
     minlength: [6, "Password must be at least 6 characters"],
+    select: false,
   },
   googleId: {
     type: String,
-    sparse: true,
+    unique: true,
+    sparse: true, 
   },
   profilePicture: {
     type: String,
@@ -169,15 +178,33 @@ const userSchema = new mongoose.Schema({
   },
 });
 
-// Hash password before saving
+// ✅ FIXED: Hash password before saving - with proper null/undefined checks
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
-  this.password = await bcrypt.hash(this.password, 12);
-  next();
+  try {
+    // Skip if password is not modified or if password is null/undefined
+    if (!this.isModified("password") || !this.password) {
+      return next();
+    }
+
+    // Only hash if password exists and is a string
+    if (typeof this.password === 'string' && this.password.length > 0) {
+      console.log("🔐 Hashing password for user:", this.email);
+      this.password = await bcrypt.hash(this.password, 12);
+    }
+    
+    next();
+  } catch (error) {
+    console.error("❌ Password hashing error:", error);
+    next(error);
+  }
 });
 
-// Method to compare passwords
+// ✅ IMPROVED: Method to compare passwords with null checks
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  // Return false if no password is set (OAuth users)
+  if (!this.password) {
+    return false;
+  }
   return await bcrypt.compare(candidatePassword, this.password);
 };
 // Method to get user profile without sensitive info
@@ -192,10 +219,12 @@ userSchema.methods.getProfile = function () {
     onboardingCompleted: this.onboardingCompleted,
     bio: this.bio,
     image: this.image || this.profilePicture,
+    profilePicture: this.profilePicture,
     preferences: this.preferences,
     createdAt: this.createdAt,
     lastActive: this.lastActive,
     isVerified: this.isVerified,
+    googleId: this.googleId, 
   };
 };
 

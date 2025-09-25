@@ -8,9 +8,9 @@ const PORT = process.env.PORT || 4000;
 
 // Routes and middleware
 const authRouter = require("./routes/userRoute");
-const publicEventRoutes = require("./routes/publicEventRoutes"); 
-const protectedEventRoutes = require("./routes/eventRoute"); 
-const onboardingRouter = require("./routes/onboardingRoute"); 
+const publicEventRoutes = require("./routes/publicEventRoutes");
+const protectedEventRoutes = require("./routes/eventRoute");
+const onboardingRouter = require("./routes/onboardingRoute");
 const errorHandler = require("./middleware/errorHandler");
 
 // EXPRESS SERVER
@@ -24,16 +24,18 @@ cloudinary.config({
 });
 
 // CORS configuration
-app.use(cors({
-  origin: [
-    "https://eventra-liard.vercel.app",
-    "http://localhost:5174",
-    "http://localhost:5173",
-  ],
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
-}));
+app.use(
+  cors({
+    origin: [
+      "https://eventra-liard.vercel.app",
+      "http://localhost:5174",
+      "http://localhost:5173",
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  })
+);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -46,9 +48,9 @@ app.use(
 );
 
 // ROUTES - IMPORTANT: Public routes first, then protected routes
-app.use("/api/v1/", publicEventRoutes); 
+app.use("/api/v1/", publicEventRoutes);
 app.use("/api/v1/", authRouter);
-app.use("/api/v1/", protectedEventRoutes);  
+app.use("/api/v1/", protectedEventRoutes);
 app.use("/api/v1/", onboardingRouter);
 
 // Test routes
@@ -57,10 +59,10 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/v1/test", (req, res) => {
-  res.status(200).json({ 
-    success: true, 
+  res.status(200).json({
+    success: true,
     message: "API is working!",
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || "development",
   });
 });
 
@@ -70,7 +72,8 @@ app.get("/api/v1/health", (req, res) => {
     success: true,
     message: "Server is healthy",
     timestamp: new Date().toISOString(),
-    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
+    database:
+      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
   });
 });
 
@@ -78,7 +81,7 @@ app.get("/api/v1/health", (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: `Route ${req.originalUrl} not found`
+    message: `Route ${req.originalUrl} not found`,
   });
 });
 
@@ -96,12 +99,6 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
       console.log(`Frontend URL: ${process.env.FRONTEND_URL}`);
-      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-      
-      // Log route information
-      console.log('Route Configuration:');
-      console.log('PUBLIC routes: GET /api/v1/events, GET /api/v1/events/:id');
-      console.log('PROTECTED routes: POST/PATCH/DELETE /api/v1/events');
     });
   } catch (error) {
     console.error("Error connecting to the database", error);
@@ -110,8 +107,8 @@ const startServer = async () => {
 };
 
 // Handle shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down gracefully...');
+process.on("SIGINT", async () => {
+  console.log("Shutting down gracefully...");
   await mongoose.connection.close();
   process.exit(0);
 });

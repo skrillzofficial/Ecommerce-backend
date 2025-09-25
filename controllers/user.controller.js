@@ -204,7 +204,7 @@ const handleUpdateUser = async (req, res, next) => {
     next(new ErrorResponse("Update failed", 500));
   }
 };
-// Handle Google OAuth login
+/// Final Handle Google OAuth login - Bulletproof Version
 const handleGoogleLogin = async (req, res, next) => {
   console.log("=== HANDLE GOOGLE LOGIN START ===");
   console.log("Request received:", {
@@ -224,15 +224,12 @@ const handleGoogleLogin = async (req, res, next) => {
       });
     }
 
-    console.log(
-      "🔑 Verifying Google token with client ID:",
-      process.env.GOOGLE_CLIENT_ID
-    );
+    console.log("🔑 Verifying Google token...");
 
-    // ✅ IMPORTANT: Verify the token with explicit configuration
+    // Verify the token
     const ticket = await client.verifyIdToken({
       idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID, // Explicitly set audience
+      audience: process.env.GOOGLE_CLIENT_ID,
     });
 
     console.log("✅ Google token verified successfully");
@@ -245,7 +242,7 @@ const handleGoogleLogin = async (req, res, next) => {
       emailVerified: payload.email_verified,
     });
 
-    // ✅ Validate essential payload data
+    // Validate essential payload data
     if (!payload.email_verified) {
       console.error("❌ Google email not verified");
       return res.status(400).json({
@@ -254,7 +251,23 @@ const handleGoogleLogin = async (req, res, next) => {
       });
     }
 
-    const { email, given_name, family_name, sub: googleId, picture } = payload;
+    // Extract data with proper fallbacks
+    const {
+      email,
+      given_name: firstName,
+      family_name: lastName,
+      sub: googleId,
+      picture
+    } = payload;
+
+    // Validate required fields
+    if (!email || !googleId) {
+      console.error("❌ Missing required Google data:", { email, googleId });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Google token data",
+      });
+    }
 
     // Check if user already exists
     let user = await USER.findOne({
@@ -269,18 +282,19 @@ const handleGoogleLogin = async (req, res, next) => {
     if (user) {
       // User exists - update Google ID if not set
       if (!user.googleId) {
+        console.log("📝 Updating existing user with Google ID");
         user.googleId = googleId;
         user.profilePicture = picture || user.profilePicture;
         user.isVerified = true;
         await user.save();
-        console.log("📝 Updated existing user with Google ID");
+        console.log("✅ Existing user updated");
       }
     } else {
-      // Create new user with Google data
+      // Create new user
       const baseUsername = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "");
-      let userName = baseUsername.substring(0, 15); // Limit username length
+      let userName = baseUsername.substring(0, 15);
       let counter = 1;
-      let originalUserName = userName;
+      const originalUserName = userName;
 
       // Ensure unique username
       while (await USER.findOne({ userName })) {
@@ -293,58 +307,90 @@ const handleGoogleLogin = async (req, res, next) => {
 
       console.log("👤 Creating new user with username:", userName);
 
-      user = await USER.create({
-        firstName: given_name || "User",
-        lastName: family_name || "",
+      // Create user data object - ONLY include fields that exist in schema
+      const userData = {
+        firstName: firstName || "User",
+        lastName: lastName || "",
         userName: userName,
         email: email,
         googleId: googleId,
         profilePicture: picture || "",
         onboardingCompleted: false,
         isVerified: true,
-        password: undefined, // No password for Google users
+        role: "user",
+        // DO NOT include password field at all for Google users
+      };
+
+      console.log("📝 Creating user with data:", {
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        userName: userData.userName,
+        email: userData.email,
+        hasGoogleId: !!userData.googleId,
       });
 
-      console.log("✅ New user created successfully with ID:", user._id);
+      try {
+        user = await USER.create(userData);
+        console.log("✅ New user created successfully with ID:", user._id);
+      } catch (createError) {
+        console.error("❌ User creation failed:", createError);
+        
+        // Handle specific MongoDB errors
+        if (createError.code === 11000) {
+          // Duplicate key error
+          const field = Object.keys(createError.keyPattern)[0];
+          return res.status(409).json({
+            success: false,
+            message: `${field} already exists`,
+          });
+        }
+        
+        if (createError.name === 'ValidationError') {
+          return res.status(400).json({
+            success: false,
+            message: "User validation failed: " + createError.message,
+          });
+        }
+        
+        throw createError; // Re-throw if not handled
+      }
     }
 
-    // ✅ Generate JWT token
+    // Generate JWT token
     if (!process.env.JWT_SECRET) {
-      throw new Error("JWT_SECRET not configured");
+      console.error("❌ JWT_SECRET not configured");
+      return res.status(500).json({
+        success: false,
+        message: "Server configuration error",
+      });
     }
+
+    const jwtPayload = {
+      userId: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      onboardingCompleted: user.onboardingCompleted,
+    };
+
+    console.log("🎫 Creating JWT with payload:", jwtPayload);
 
     const jwtToken = jwt.sign(
-      {
-        userId: user._id,
-        email: user.email,
-        role: user.role,
-        onboardingCompleted: user.onboardingCompleted,
-      },
+      jwtPayload,
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
 
     console.log("🎫 JWT token generated successfully");
-
     console.log("=== HANDLE GOOGLE LOGIN SUCCESS ===");
 
-    // ✅ Return success response
+    // Return success response using the user's getProfile method
     return res.status(200).json({
       success: true,
       message: "Google login successful",
       token: jwtToken,
-      user: {
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        userName: user.userName,
-        email: user.email,
-        role: user.role,
-        onboardingCompleted: user.onboardingCompleted,
-        profilePicture: user.profilePicture,
-        isVerified: user.isVerified,
-      },
+      user: user.getProfile(), // Use the model's method
     });
+
   } catch (error) {
     console.error("❌ Google login error details:", {
       message: error.message,
@@ -352,7 +398,7 @@ const handleGoogleLogin = async (req, res, next) => {
       name: error.name,
     });
 
-    // ✅ Return proper error response
+    // Handle specific errors
     if (error.message.includes("Token used too late")) {
       return res.status(400).json({
         success: false,
@@ -367,9 +413,25 @@ const handleGoogleLogin = async (req, res, next) => {
       });
     }
 
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        message: "User data validation failed",
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "User with this email already exists",
+      });
+    }
+
+    // Generic error response
     return res.status(500).json({
       success: false,
-      message: "Google authentication failed: " + error.message,
+      message: "Google authentication failed",
+      ...(process.env.NODE_ENV === 'development' && { error: error.message }),
     });
   }
 };
