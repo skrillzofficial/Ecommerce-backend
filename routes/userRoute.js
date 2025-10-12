@@ -256,8 +256,8 @@ router.post("/login", handleLogin);
 router.post("/google-login", handleGoogleLogin);
 
 // Protected routes
-router.get("profile", protect, getCurrentUser);
-router.patch("profile", protect, handleUpdateUser);
+router.get("/profile", protect, getCurrentUser);
+router.patch("/profile", protect, handleUpdateUser);
 
 // Payment methods
 router.get("/payment-methods", protect, getPaymentMethods);

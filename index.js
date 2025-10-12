@@ -27,7 +27,7 @@ cloudinary.config({
 app.use(
   cors({
     origin: [
-      "https://eventra-liard.vercel.app",
+      "https://eventry-swart.vercel.app/",
       "http://localhost:5174",
       "http://localhost:5173",
     ],
