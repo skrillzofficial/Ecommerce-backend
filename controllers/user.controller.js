@@ -1,111 +1,264 @@
 const USER = require("../models/user");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const ErrorResponse = require("../utils/errorResponse");
 const { OAuth2Client } = require("google-auth-library");
+const { sendWelcomeEmail, sendResetEmail } = require("../utils/sendEmail");
+const cloudinary = require("cloudinary").v2;
+const fs = require("fs");
 
-// ✅ PROPERLY CONFIGURED Google OAuth Client
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// Verify client configuration
-console.log("🔐 Google OAuth Client in Controller:", {
-  clientId: process.env.GOOGLE_CLIENT_ID ? "✅ Set" : "❌ Missing",
-  clientIdLength: process.env.GOOGLE_CLIENT_ID
-    ? process.env.GOOGLE_CLIENT_ID.length
-    : 0,
-});
-
-// User registration
 const handleRegister = async (req, res, next) => {
-  const { firstName, lastName, userName, email, password, role } = req.body;
+  const { userName, email, password, userType } = req.body;
 
-  if (!firstName || !lastName || !userName || !email || !password) {
+  if (!userName || !email || !password || !userType) {
     return next(new ErrorResponse("All fields are required", 400));
   }
 
+  if (!["attendee", "organizer"].includes(userType)) {
+    return next(new ErrorResponse("Invalid user type", 400));
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return next(new ErrorResponse("Please provide a valid email address", 400));
+  }
+
+  if (password.length < 6) {
+    return next(new ErrorResponse("Password must be at least 6 characters", 400));
+  }
+
   try {
-    // Check for existing email OR username separately
-    const existingEmail = await USER.findOne({ email });
-    const existingUsername = await USER.findOne({ userName });
+    const existingUser = await USER.findOne({
+      $or: [{ email: email.toLowerCase() }, { userName: userName }],
+    });
 
-    if (existingEmail) {
-      return next(new ErrorResponse("Email already exists", 409));
+    if (existingUser) {
+      if (existingUser.email.toLowerCase() === email.toLowerCase()) {
+        return next(new ErrorResponse("Email already exists", 409));
+      }
+      if (existingUser.userName === userName) {
+        return next(new ErrorResponse("Username already taken", 409));
+      }
     }
 
-    if (existingUsername) {
-      return next(new ErrorResponse("Username already taken", 409));
-    }
+    const firstName = userName.split(" ")[0] || userName;
+    const lastName = userName.split(" ").slice(1).join(" ") || "User";
 
     const user = await USER.create({
       firstName,
       lastName,
       userName,
-      email,
+      email: email.toLowerCase(),
       password,
-      role: role || "user",
-      isVerified: true,
-      onboardingCompleted: false,
+      role: userType,
+      isVerified: false,
     });
 
-    const token = jwt.sign(
+    let verificationToken;
+    try {
+      verificationToken = user.createEmailVerificationToken();
+      await user.save({ validateBeforeSave: false });
+    } catch (tokenError) {
+      return res.status(201).json({
+        success: true,
+        message: "Account created successfully! Please use the resend verification feature to verify your email.",
+      });
+    }
+
+    try {
+      const clientUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+      const emailSent = await sendWelcomeEmail({
+        fullName: user.firstName + " " + user.lastName,
+        clientUrl: clientUrl,
+        email: user.email,
+      });
+
+      if (emailSent) {
+        res.status(201).json({
+          success: true,
+          message: "Account created successfully! Please check your email to verify your account.",
+        });
+      } else {
+        res.status(201).json({
+          success: true,
+          message: "Account created successfully! Please use the resend verification feature to verify your email.",
+        });
+      }
+    } catch (emailError) {
+      res.status(201).json({
+        success: true,
+        message: "Account created successfully! Please use the resend verification feature to verify your email.",
+      });
+    }
+  } catch (error) {
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      const message = field === "email" ? "Email already exists" : "Username already taken";
+      return next(new ErrorResponse(message, 409));
+    }
+
+    if (error.name === "ValidationError") {
+      const messages = Object.values(error.errors).map((val) => val.message);
+      return next(new ErrorResponse(messages.join(", "), 400));
+    }
+
+    next(new ErrorResponse("Registration failed. Please try again.", 500));
+  }
+};
+
+const verifyEmail = async (req, res, next) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return next(new ErrorResponse("Invalid verification token", 400));
+    }
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await USER.findOne({
+      emailVerificationToken: hashedToken,
+      emailVerificationExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return next(new ErrorResponse("Invalid or expired verification token", 400));
+    }
+
+    if (user.isVerified) {
+      return next(new ErrorResponse("Email is already verified", 400));
+    }
+
+    user.isVerified = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save();
+
+    try {
+      await sendWelcomeEmail({
+        fullName: user.firstName + " " + user.lastName,
+        clientUrl: `${process.env.FRONTEND_URL}/dashboard`,
+        email: user.email,
+      });
+    } catch (emailError) {
+      console.error("Failed to send welcome email:", emailError);
+    }
+
+    const jwtToken = jwt.sign(
       {
         userId: user._id,
         email: user.email,
         role: user.role,
-        onboardingCompleted: user.onboardingCompleted,
+        userName: user.userName,
       },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
 
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: "User registered successfully",
-      token,
+      message: "Email verified successfully!",
+      token: jwtToken,
       user: user.getProfile(),
     });
   } catch (error) {
-    console.error("Registration error:", error);
-    next(new ErrorResponse("Registration failed", 500));
+    next(new ErrorResponse("Email verification failed", 500));
   }
 };
 
-// User login
-const handleLogin = async (req, res, next) => {
-  const { login, password } = req.body;
+const resendVerificationEmail = async (req, res, next) => {
+  try {
+    const { email } = req.body;
 
-  if (!login || !password) {
-    return next(
-      new ErrorResponse("Login identifier and password are required", 400)
-    );
+    if (!email) {
+      return next(new ErrorResponse("Email is required", 400));
+    }
+
+    const user = await USER.findOne({ email });
+
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    if (user.isVerified) {
+      return next(new ErrorResponse("Email is already verified", 400));
+    }
+
+    const verificationToken = user.createEmailVerificationToken();
+    await user.save({ validateBeforeSave: false });
+
+    try {
+      const clientUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+      const emailSent = await sendWelcomeEmail({
+        fullName: user.firstName + " " + user.lastName,
+        clientUrl: clientUrl,
+        email: user.email,
+      });
+
+      if (emailSent) {
+        res.status(200).json({
+          success: true,
+          message: "Verification email sent successfully!",
+        });
+      } else {
+        return next(new ErrorResponse("Failed to send verification email. Please try again.", 500));
+      }
+    } catch (emailError) {
+      return next(new ErrorResponse("Failed to send verification email. Please try again.", 500));
+    }
+  } catch (error) {
+    next(new ErrorResponse("Failed to resend verification email", 500));
+  }
+};
+
+const handleLogin = async (req, res, next) => {
+  const { email, password, userType } = req.body;
+
+  if (!email || !password || !userType) {
+    return next(new ErrorResponse("Email, password, and user type are required", 400));
+  }
+
+  if (!["attendee", "organizer", "superadmin"].includes(userType)) {
+    return next(new ErrorResponse("Invalid user type", 400));
   }
 
   try {
-    // Check if login is email or username
-    const isEmail = login.includes("@");
-
-    let user;
-    if (isEmail) {
-      user = await USER.findOne({ email: login }).select("+password");
-    } else {
-      user = await USER.findOne({ userName: login }).select("+password");
-    }
+    const user = await USER.findOne({ email }).select("+password");
 
     if (!user) {
-      return next(new ErrorResponse("Invalid credentials", 401));
+      return next(new ErrorResponse("Invalid email or password", 401));
     }
 
-    const isPasswordCorrect = await user.comparePassword(password);
-    if (!isPasswordCorrect) {
-      return next(new ErrorResponse("Invalid credentials", 401));
+    if (!user.isActive || user.status !== "active") {
+      return next(new ErrorResponse("Your account has been suspended or deactivated. Please contact support.", 403));
     }
+
+    if (user.role !== userType) {
+      return next(new ErrorResponse(`Please select "${user.role}" account type for this email`, 401));
+    }
+
+    if (!user.isVerified) {
+      return next(new ErrorResponse("Please verify your email before logging in. Check your email for the verification link.", 401));
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return next(new ErrorResponse("Invalid email or password", 401));
+    }
+
+    user.lastLogin = new Date();
+    user.loginCount += 1;
+    await user.save();
 
     const token = jwt.sign(
       {
         userId: user._id,
         email: user.email,
         role: user.role,
-        onboardingCompleted: user.onboardingCompleted,
+        userName: user.userName,
       },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
@@ -118,389 +271,115 @@ const handleLogin = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    console.error("Login error:", error);
-    next(new ErrorResponse("Login failed", 500));
+    next(new ErrorResponse("Login failed. Please try again.", 500));
   }
 };
 
-// Update user details including image and bio
-const handleUpdateUser = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { firstName, lastName, userName, email, bio } = req.body;
-    const authenticatedUserId = req.user.userId;
+const handleGoogleAuth = async (req, res, next) => {
+  const { token, userType } = req.body;
 
-    // Check if user exists
-    const user = await USER.findById(id);
-    if (!user) {
-      return next(new ErrorResponse("User not found", 404));
-    }
-
-    // Authorization check - user can only update their own profile
-    if (
-      user._id.toString() !== authenticatedUserId &&
-      req.user.role !== "admin"
-    ) {
-      return next(new ErrorResponse("Not authorized to update this user", 403));
-    }
-
-    // Check if new email or username already exists (excluding current user)
-    if (email && email !== user.email) {
-      const existingEmail = await USER.findOne({
-        email,
-        _id: { $ne: id },
-      });
-      if (existingEmail) {
-        return next(new ErrorResponse("Email already in use", 409));
-      }
-    }
-
-    if (userName && userName !== user.userName) {
-      const existingUsername = await USER.findOne({
-        userName,
-        _id: { $ne: id },
-      });
-      if (existingUsername) {
-        return next(new ErrorResponse("Username already taken", 409));
-      }
-    }
-
-    // Handle image upload if file is provided
-    let imageUrl = user.image;
-    if (req.file) {
-      imageUrl = req.file.path;
-    }
-
-    // Update user fields
-    const updateData = {};
-    if (firstName) updateData.firstName = firstName;
-    if (lastName) updateData.lastName = lastName;
-    if (userName) updateData.userName = userName;
-    if (email) updateData.email = email;
-    if (bio !== undefined) updateData.bio = bio;
-    if (req.file) updateData.image = imageUrl;
-
-    // Perform the update
-    const updatedUser = await USER.findByIdAndUpdate(id, updateData, {
-      new: true,
-      runValidators: true,
-    }).select("-password");
-
-    res.status(200).json({
-      success: true,
-      message: "User updated successfully",
-      user: updatedUser.getProfile(),
-    });
-  } catch (error) {
-    console.error("Update user error:", error);
-
-    if (error.name === "CastError") {
-      return next(new ErrorResponse("Invalid user ID", 400));
-    }
-    if (error.name === "ValidationError") {
-      return next(new ErrorResponse(error.message, 400));
-    }
-
-    next(new ErrorResponse("Update failed", 500));
+  if (!token || !userType) {
+    return next(new ErrorResponse("Google token and user type are required", 400));
   }
-};
-/// Final Handle Google OAuth login - Bulletproof Version
-const handleGoogleLogin = async (req, res, next) => {
-  console.log("=== HANDLE GOOGLE LOGIN START ===");
-  console.log("Request received:", {
-    hasToken: !!req.body.token,
-    tokenLength: req.body.token ? req.body.token.length : 0,
-    clientId: process.env.GOOGLE_CLIENT_ID ? "✅ Available" : "❌ Missing",
-  });
+
+  if (userType === "superadmin") {
+    return next(new ErrorResponse("Google authentication is not available for superadmin", 400));
+  }
 
   try {
-    const { token } = req.body;
-
-    if (!token) {
-      console.error("❌ No token provided in request body");
-      return res.status(400).json({
-        success: false,
-        message: "Google token is required",
-      });
-    }
-
-    console.log("🔑 Verifying Google token...");
-
-    // Verify the token
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
 
-    console.log("✅ Google token verified successfully");
-
     const payload = ticket.getPayload();
-    console.log("👤 Google payload received:", {
-      email: payload.email,
-      name: payload.name,
-      googleId: payload.sub,
-      emailVerified: payload.email_verified,
-    });
 
-    // Validate essential payload data
     if (!payload.email_verified) {
-      console.error("❌ Google email not verified");
-      return res.status(400).json({
-        success: false,
-        message: "Google email not verified",
-      });
+      return next(new ErrorResponse("Google email not verified", 400));
     }
 
-    // Extract data with proper fallbacks
-    const {
-      email,
-      given_name: firstName,
-      family_name: lastName,
-      sub: googleId,
-      picture
-    } = payload;
+    const { email, given_name, family_name, sub: googleId, picture } = payload;
 
-    // Validate required fields
-    if (!email || !googleId) {
-      console.error("❌ Missing required Google data:", { email, googleId });
-      return res.status(400).json({
-        success: false,
-        message: "Invalid Google token data",
-      });
-    }
-
-    // Check if user already exists
     let user = await USER.findOne({
       $or: [{ email }, { googleId }],
     });
 
-    console.log(
-      "🔍 User lookup result:",
-      user ? `Found user: ${user.email}` : "New user needed"
-    );
-
     if (user) {
-      // User exists - update Google ID if not set
       if (!user.googleId) {
-        console.log("📝 Updating existing user with Google ID");
         user.googleId = googleId;
         user.profilePicture = picture || user.profilePicture;
         user.isVerified = true;
         await user.save();
-        console.log("✅ Existing user updated");
       }
+
+      if (user.role !== userType) {
+        return next(new ErrorResponse(`Please select "${user.role}" account type for this email`, 401));
+      }
+
+      user.lastLogin = new Date();
+      user.loginCount += 1;
+      await user.save();
     } else {
-      // Create new user
       const baseUsername = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "");
       let userName = baseUsername.substring(0, 15);
       let counter = 1;
       const originalUserName = userName;
 
-      // Ensure unique username
       while (await USER.findOne({ userName })) {
         userName = `${originalUserName}${counter}`;
         counter++;
-        if (counter > 100) {
-          throw new Error("Could not generate unique username");
-        }
+        if (counter > 100) throw new Error("Could not generate unique username");
       }
 
-      console.log("👤 Creating new user with username:", userName);
-
-      // Create user data object - ONLY include fields that exist in schema
       const userData = {
-        firstName: firstName || "User",
-        lastName: lastName || "",
-        userName: userName,
-        email: email,
-        googleId: googleId,
+        firstName: given_name || "User",
+        lastName: family_name || "",
+        userName,
+        email,
+        googleId,
         profilePicture: picture || "",
-        onboardingCompleted: false,
+        role: userType,
         isVerified: true,
-        role: "user",
-        // DO NOT include password field at all for Google users
+        lastLogin: new Date(),
+        loginCount: 1,
       };
 
-      console.log("📝 Creating user with data:", {
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        userName: userData.userName,
-        email: userData.email,
-        hasGoogleId: !!userData.googleId,
-      });
-
-      try {
-        user = await USER.create(userData);
-        console.log("✅ New user created successfully with ID:", user._id);
-      } catch (createError) {
-        console.error("❌ User creation failed:", createError);
-        
-        // Handle specific MongoDB errors
-        if (createError.code === 11000) {
-          // Duplicate key error
-          const field = Object.keys(createError.keyPattern)[0];
-          return res.status(409).json({
-            success: false,
-            message: `${field} already exists`,
-          });
-        }
-        
-        if (createError.name === 'ValidationError') {
-          return res.status(400).json({
-            success: false,
-            message: "User validation failed: " + createError.message,
-          });
-        }
-        
-        throw createError; // Re-throw if not handled
-      }
+      user = await USER.create(userData);
     }
-
-    // Generate JWT token
-    if (!process.env.JWT_SECRET) {
-      console.error("❌ JWT_SECRET not configured");
-      return res.status(500).json({
-        success: false,
-        message: "Server configuration error",
-      });
-    }
-
-    const jwtPayload = {
-      userId: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      onboardingCompleted: user.onboardingCompleted,
-    };
-
-    console.log("🎫 Creating JWT with payload:", jwtPayload);
 
     const jwtToken = jwt.sign(
-      jwtPayload,
+      {
+        userId: user._id.toString(),
+        email: user.email,
+        role: user.role,
+        userName: user.userName,
+      },
       process.env.JWT_SECRET,
       { expiresIn: "2d" }
     );
 
-    console.log("🎫 JWT token generated successfully");
-    console.log("=== HANDLE GOOGLE LOGIN SUCCESS ===");
-
-    // Return success response using the user's getProfile method
-    return res.status(200).json({
+    res.status(200).json({
       success: true,
-      message: "Google login successful",
+      message: "Google authentication successful",
       token: jwtToken,
-      user: user.getProfile(), // Use the model's method
+      user: user.getProfile(),
     });
-
   } catch (error) {
-    console.error("❌ Google login error details:", {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-    });
-
-    // Handle specific errors
-    if (error.message.includes("Token used too late")) {
-      return res.status(400).json({
-        success: false,
-        message: "Google token expired",
-      });
-    }
-
-    if (error.message.includes("Invalid token")) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid Google token",
-      });
-    }
-
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        message: "User data validation failed",
-      });
+    if (error.message.includes("Token used too late") || error.message.includes("Invalid token")) {
+      return next(new ErrorResponse("Invalid or expired Google token", 400));
     }
 
     if (error.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: "User with this email already exists",
-      });
+      return next(new ErrorResponse("User with this email already exists", 409));
     }
 
-    // Generic error response
-    return res.status(500).json({
-      success: false,
-      message: "Google authentication failed",
-      ...(process.env.NODE_ENV === 'development' && { error: error.message }),
-    });
-  }
-};
-// Get all users (Admin only)
-const getAllUsers = async (req, res, next) => {
-  try {
-    const { page = 1, limit = 10, search = "" } = req.query;
-
-    const query = {};
-    if (search) {
-      query.$or = [
-        { firstName: { $regex: search, $options: "i" } },
-        { lastName: { $regex: search, $options: "i" } },
-        { userName: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
-
-    const users = await USER.find(query)
-      .select("-password -__v")
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .sort({ createdAt: -1 });
-
-    const total = await USER.countDocuments(query);
-
-    res.status(200).json({
-      success: true,
-      count: users.length,
-      total,
-      page: parseInt(page),
-      pages: Math.ceil(total / limit),
-      users: users.map((user) => user.getProfile()),
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to fetch users", 500));
+    next(new ErrorResponse("Google authentication failed", 500));
   }
 };
 
-// Get user by ID
-const getUserById = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-
-    const user = await USER.findById(id).select("-password -__v");
-
-    if (!user) {
-      return next(new ErrorResponse("User not found", 404));
-    }
-
-    res.status(200).json({
-      success: true,
-      user: user.getProfile(),
-    });
-  } catch (error) {
-    console.error("Get user error:", error);
-
-    if (error.name === "CastError") {
-      return next(new ErrorResponse("Invalid user ID format", 400));
-    }
-
-    next(new ErrorResponse("Failed to fetch user", 500));
-  }
-};
-
-// Get current user profile (using JWT token)
 const getCurrentUser = async (req, res, next) => {
   try {
-    const user = await USER.findById(req.user.userId).select("-password");
+    const user = await USER.findById(req.user.userId);
 
     if (!user) {
       return next(new ErrorResponse("User not found", 404));
@@ -511,260 +390,176 @@ const getCurrentUser = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    console.error("Get current user error:", error);
     next(new ErrorResponse("Failed to fetch user profile", 500));
   }
 };
 
-// Delete single user
-const deleteUser = async (req, res, next) => {
+const updateProfile = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const { userName, bio, firstName, lastName, preferences } = req.body;
+    const userId = req.user.userId;
 
-    // Prevent users from deleting themselves (unless admin deleting another user)
-    if (id === req.user.userId && req.user.role !== "admin") {
-      return next(
-        new ErrorResponse(
-          "You cannot delete your own account using this endpoint. Use close account instead.",
-          403
-        )
-      );
-    }
-
-    const user = await USER.findByIdAndDelete(id);
-
+    const user = await USER.findById(userId);
     if (!user) {
       return next(new ErrorResponse("User not found", 404));
     }
 
-    res.status(200).json({
-      success: true,
-      message: "User deleted successfully",
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to delete user", 500));
-  }
-};
-
-// Payment methods (simplified implementation)
-const getPaymentMethods = async (req, res, next) => {
-  try {
-    // In a real application, this would fetch from a PaymentMethod model
-    const user = await USER.findById(req.user.userId);
-    const paymentMethods = user.paymentMethods || [];
-
-    res.status(200).json({
-      success: true,
-      paymentMethods,
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to fetch payment methods", 500));
-  }
-};
-
-const addPaymentMethod = async (req, res, next) => {
-  try {
-    const { type, details } = req.body;
-
-    if (!type || !details) {
-      return next(
-        new ErrorResponse("Payment method type and details are required", 400)
-      );
+    if (userName && userName !== user.userName) {
+      const existingUser = await USER.findOne({ userName });
+      if (existingUser) {
+        return next(new ErrorResponse("Username already taken", 409));
+      }
+      user.userName = userName;
     }
 
-    const user = await USER.findById(req.user.userId);
-    const newPaymentMethod = {
-      id: Date.now().toString(),
-      type,
-      details,
-      isDefault: false,
-      createdAt: new Date(),
-    };
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+    if (bio !== undefined) user.bio = bio;
+    if (preferences) user.preferences = { ...user.preferences, ...preferences };
 
-    user.paymentMethods = user.paymentMethods || [];
-    user.paymentMethods.push(newPaymentMethod);
-    await user.save();
+    if (req.files && req.files.profilePicture) {
+      const profilePicture = req.files.profilePicture;
 
-    res.status(201).json({
-      success: true,
-      message: "Payment method added successfully",
-      paymentMethod: newPaymentMethod,
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to add payment method", 500));
-  }
-};
+      try {
+        const result = await cloudinary.uploader.upload(profilePicture.tempFilePath, {
+          folder: "inklune/profilePictures",
+          use_filename: true,
+          unique_filename: false,
+          resource_type: "image",
+          transformation: [
+            { width: 500, height: 500, crop: "limit" },
+            { quality: "auto" },
+            { format: "jpg" },
+          ],
+        });
 
-const updatePaymentMethod = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
+        user.profilePicture = result.secure_url;
 
-    const user = await USER.findById(req.user.userId);
-    const paymentMethod = user.paymentMethods?.find((pm) => pm.id === id);
-
-    if (!paymentMethod) {
-      return next(new ErrorResponse("Payment method not found", 404));
+        fs.unlink(profilePicture.tempFilePath, (err) => {
+          if (err) console.error("Failed to delete temp file:", err);
+        });
+      } catch (uploadError) {
+        return next(new ErrorResponse("Failed to upload profile picture", 500));
+      }
     }
 
-    Object.assign(paymentMethod, updates);
     await user.save();
 
     res.status(200).json({
       success: true,
-      message: "Payment method updated successfully",
-      paymentMethod,
+      message: "Profile updated successfully",
+      user: user.getProfile(),
     });
   } catch (error) {
-    next(new ErrorResponse("Failed to update payment method", 500));
+    next(new ErrorResponse("Failed to update profile", 500));
   }
 };
 
-const deletePaymentMethod = async (req, res, next) => {
+const forgotPassword = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const { email } = req.body;
 
-    const user = await USER.findById(req.user.userId);
-    user.paymentMethods =
-      user.paymentMethods?.filter((pm) => pm.id !== id) || [];
-    await user.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Payment method deleted successfully",
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to delete payment method", 500));
-  }
-};
-
-// Linked accounts (OAuth integration)
-const getLinkedAccounts = async (req, res, next) => {
-  try {
-    const user = await USER.findById(req.user.userId);
-    const linkedAccounts = user.linkedAccounts || [];
-
-    res.status(200).json({
-      success: true,
-      linkedAccounts,
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to fetch linked accounts", 500));
-  }
-};
-
-const linkAccount = async (req, res, next) => {
-  try {
-    const { provider, providerId, profile } = req.body;
-
-    if (!provider || !providerId) {
-      return next(
-        new ErrorResponse("Provider and provider ID are required", 400)
-      );
+    if (!email) {
+      return next(new ErrorResponse("Email is required", 400));
     }
 
-    const user = await USER.findById(req.user.userId);
-    const newLinkedAccount = {
-      provider,
-      providerId,
-      profile: profile || {},
-      linkedAt: new Date(),
-    };
+    const user = await USER.findOne({ email });
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If the email exists, a password reset link has been sent",
+      });
+    }
 
-    user.linkedAccounts = user.linkedAccounts || [];
-    user.linkedAccounts.push(newLinkedAccount);
-    await user.save();
+    const resetToken = user.createPasswordResetToken();
+    await user.save({ validateBeforeSave: false });
 
-    res.status(201).json({
-      success: true,
-      message: "Account linked successfully",
-      linkedAccount: newLinkedAccount,
-    });
+    try {
+      const clientUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+      sendResetEmail({
+        fullName: user.firstName + " " + user.lastName,
+        clientUrl: clientUrl,
+        email: user.email,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "If the email exists, a password reset link has been sent",
+      });
+    } catch (emailError) {
+      user.passwordResetToken = undefined;
+      user.passwordResetExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+
+      return next(new ErrorResponse("Failed to send reset email. Please try again.", 500));
+    }
   } catch (error) {
-    next(new ErrorResponse("Failed to link account", 500));
+    next(new ErrorResponse("Failed to process password reset", 500));
   }
 };
 
-const unlinkAccount = async (req, res, next) => {
+const resetPassword = async (req, res, next) => {
   try {
-    const { provider } = req.params;
+    const { token } = req.query;
+    const { password } = req.body;
 
-    const user = await USER.findById(req.user.userId);
-    user.linkedAccounts =
-      user.linkedAccounts?.filter((acc) => acc.provider !== provider) || [];
+    if (!token) {
+      return next(new ErrorResponse("Invalid reset token", 400));
+    }
+
+    if (!password || password.length < 6) {
+      return next(new ErrorResponse("Password must be at least 6 characters", 400));
+    }
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await USER.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return next(new ErrorResponse("Invalid or expired reset token", 400));
+    }
+
+    user.password = password;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
     await user.save();
+
+    const jwtToken = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        userName: user.userName,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "2d" }
+    );
 
     res.status(200).json({
       success: true,
-      message: "Account unlinked successfully",
+      message: "Password reset successfully!",
+      token: jwtToken,
+      user: user.getProfile(),
     });
   } catch (error) {
-    next(new ErrorResponse("Failed to unlink account", 500));
+    next(new ErrorResponse("Password reset failed", 500));
   }
 };
 
-// Communication preferences
-const getCommunicationPrefs = async (req, res, next) => {
+const changePassword = async (req, res, next) => {
   try {
-    const user = await USER.findById(req.user.userId);
-    const communicationPrefs = user.communicationPrefs || {
-      email: true,
-      push: true,
-      sms: false,
-      newsletter: true,
-      marketing: false,
-    };
-
-    res.status(200).json({
-      success: true,
-      communicationPrefs,
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to fetch communication preferences", 500));
-  }
-};
-
-const updateCommunicationPrefs = async (req, res, next) => {
-  try {
-    const { email, push, sms, newsletter, marketing } = req.body;
-
-    const user = await USER.findById(req.user.userId);
-    user.communicationPrefs = {
-      email: email !== undefined ? email : user.communicationPrefs?.email,
-      push: push !== undefined ? push : user.communicationPrefs?.push,
-      sms: sms !== undefined ? sms : user.communicationPrefs?.sms,
-      newsletter:
-        newsletter !== undefined
-          ? newsletter
-          : user.communicationPrefs?.newsletter,
-      marketing:
-        marketing !== undefined
-          ? marketing
-          : user.communicationPrefs?.marketing,
-    };
-
-    await user.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Communication preferences updated successfully",
-      communicationPrefs: user.communicationPrefs,
-    });
-  } catch (error) {
-    next(new ErrorResponse("Failed to update communication preferences", 500));
-  }
-};
-
-// Close account
-const closeAccount = async (req, res, next) => {
-  try {
-    const { password, reason } = req.body;
+    const { currentPassword, newPassword } = req.body;
     const userId = req.user.userId;
 
-    if (!password) {
-      return next(
-        new ErrorResponse("Password is required to close your account", 400)
-      );
+    if (!currentPassword || !newPassword) {
+      return next(new ErrorResponse("Current password and new password are required", 400));
+    }
+
+    if (newPassword.length < 6) {
+      return next(new ErrorResponse("New password must be at least 6 characters", 400));
     }
 
     const user = await USER.findById(userId).select("+password");
@@ -772,49 +567,190 @@ const closeAccount = async (req, res, next) => {
       return next(new ErrorResponse("User not found", 404));
     }
 
-    // Verify password
-    const isPasswordCorrect = await user.comparePassword(password);
-    if (!isPasswordCorrect) {
-      return next(new ErrorResponse("Invalid password", 401));
+    const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+    if (!isCurrentPasswordValid) {
+      return next(new ErrorResponse("Current password is incorrect", 401));
     }
 
-    // Soft delete
-    user.deletedAt = new Date();
-    user.status = "deleted";
-    user.email = `deleted_${Date.now()}@deleted.com`;
-    user.userName = `deleted_${Date.now()}`;
+    user.password = newPassword;
     await user.save();
-
-    // In a real application, you might want to actually delete after a grace period
-    // await USER.findByIdAndDelete(userId);
 
     res.status(200).json({
       success: true,
-      message: "Account closed successfully",
+      message: "Password changed successfully!",
     });
   } catch (error) {
-    console.error("Close account error:", error);
-    next(new ErrorResponse("Failed to close account", 500));
+    next(new ErrorResponse("Failed to change password", 500));
+  }
+};
+
+const updatePreferences = async (req, res, next) => {
+  try {
+    const { preferences } = req.body;
+    const userId = req.user.userId;
+
+    const user = await USER.findById(userId);
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    if (preferences) {
+      user.preferences = { ...user.preferences, ...preferences };
+      await user.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Preferences updated successfully",
+      preferences: user.preferences,
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to update preferences", 500));
+  }
+};
+
+const logout = async (req, res, next) => {
+  try {
+    res.status(200).json({
+      success: true,
+      message: "Logged out successfully",
+    });
+  } catch (error) {
+    next(new ErrorResponse("Logout failed", 500));
+  }
+};
+
+const checkUsernameAvailability = async (req, res, next) => {
+  try {
+    const { username } = req.query;
+
+    if (!username) {
+      return next(new ErrorResponse("Username is required", 400));
+    }
+
+    if (username.length < 3) {
+      return next(new ErrorResponse("Username must be at least 3 characters", 400));
+    }
+
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return next(new ErrorResponse("Username can only contain letters, numbers, and underscores", 400));
+    }
+
+    const existingUser = await USER.findOne({ userName: username });
+
+    res.status(200).json({
+      success: true,
+      available: !existingUser,
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to check username availability", 500));
+  }
+};
+
+const checkEmailAvailability = async (req, res, next) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return next(new ErrorResponse("Email is required", 400));
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return next(new ErrorResponse("Please provide a valid email address", 400));
+    }
+
+    const existingUser = await USER.findOne({ email });
+
+    res.status(200).json({
+      success: true,
+      available: !existingUser,
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to check email availability", 500));
+  }
+};
+
+const deleteAccount = async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const { password } = req.body;
+
+    if (!password) {
+      return next(new ErrorResponse("Password is required to delete account", 400));
+    }
+
+    const user = await USER.findById(userId).select("+password");
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return next(new ErrorResponse("Incorrect password", 401));
+    }
+
+    if (user.profilePicture && user.profilePicture.includes("cloudinary")) {
+      try {
+        const publicId = user.profilePicture.split("/").pop().split(".")[0];
+        await cloudinary.uploader.destroy(`inklune/profilePictures/${publicId}`);
+      } catch (cloudinaryError) {
+        console.error("Failed to delete Cloudinary image:", cloudinaryError);
+      }
+    }
+
+    await USER.findByIdAndDelete(userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Account deleted successfully",
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to delete account", 500));
+  }
+};
+
+const getUserProfile = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await USER.findById(userId).select("-email -role -isVerified -preferences");
+
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    res.status(200).json({
+      success: true,
+      user: {
+        userName: user.userName,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        bio: user.bio,
+        profilePicture: user.profilePicture,
+        createdAt: user.createdAt,
+      },
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to fetch user profile", 500));
   }
 };
 
 module.exports = {
   handleRegister,
   handleLogin,
-  handleGoogleLogin,
-  handleUpdateUser,
-  getAllUsers,
+  handleGoogleAuth,
+  verifyEmail,
+  resendVerificationEmail,
   getCurrentUser,
-  getUserById,
-  deleteUser,
-  getPaymentMethods,
-  addPaymentMethod,
-  updatePaymentMethod,
-  deletePaymentMethod,
-  getLinkedAccounts,
-  linkAccount,
-  unlinkAccount,
-  getCommunicationPrefs,
-  updateCommunicationPrefs,
-  closeAccount,
+  updateProfile,
+  forgotPassword,
+  resetPassword,
+  changePassword,
+  updatePreferences,
+  logout,
+  checkUsernameAvailability,
+  checkEmailAvailability,
+  deleteAccount,
+  getUserProfile,
 };

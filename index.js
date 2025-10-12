@@ -8,9 +8,7 @@ const PORT = process.env.PORT || 4000;
 
 // Routes and middleware
 const authRouter = require("./routes/userRoute");
-const publicEventRoutes = require("./routes/publicEventRoutes");
-const protectedEventRoutes = require("./routes/eventRoute");
-const onboardingRouter = require("./routes/onboardingRoute");
+const superAdminRoutes = require("./routes/superAdminRoute");
 const errorHandler = require("./middleware/errorHandler");
 
 // EXPRESS SERVER
@@ -47,11 +45,9 @@ app.use(
   })
 );
 
-// ROUTES - IMPORTANT: Public routes first, then protected routes
-app.use("/api/v1/", publicEventRoutes);
+//Public routes first, then protected routes
 app.use("/api/v1/", authRouter);
-app.use("/api/v1/", protectedEventRoutes);
-app.use("/api/v1/", onboardingRouter);
+app.use("/api/v1/", superAdminRoutes);
 
 // Test routes
 app.get("/", (req, res) => {

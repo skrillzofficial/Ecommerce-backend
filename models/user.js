@@ -1,148 +1,53 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const userSchema = new mongoose.Schema({
   firstName: {
     type: String,
-    required: [true, "firstname is Required"],
+    required: true,
     trim: true,
+    maxlength: [50, "First name cannot be more than 50 characters"],
   },
   lastName: {
     type: String,
-    required: [true, "last is Required"],
+    required: true,
     trim: true,
+    maxlength: [50, "Last name cannot be more than 50 characters"],
   },
   userName: {
     type: String,
-    required: function () {
+    required: function() {
       return !this.googleId;
     },
-    unique: true,
-    sparse: true,
     trim: true,
-  },
-  onboardingCompleted: {
-    type: Boolean,
-    default: false,
-  },
-  // ✅ ADDED: Missing isVerified field
-  isVerified: {
-    type: Boolean,
-    default: false,
-  },
-  preferences: {
-    eventTypes: [
-      {
-        type: String,
-        enum: [
-          "Concerts",
-          "Conferences",
-          "Workshops",
-          "Sports",
-          "Networking",
-          "Parties",
-          "Cultural",
-          "Food & Drink",
-        ],
-      },
-    ],
-    interests: [
-      {
-        type: String,
-        enum: [
-          "Technology",
-          "Music",
-          "Art",
-          "Business",
-          "Health",
-          "Education",
-          "Travel",
-          "Food",
-        ],
-      },
-    ],
-    budgetRange: {
-      min: { type: Number, min: 0 },
-      max: { type: Number, min: 0 },
-    },
-    paymentMethods: [
-      {
-        id: String,
-        type: {
-          type: String,
-          enum: ["credit_card", "debit_card", "paypal", "bank_transfer"],
-        },
-        details: mongoose.Schema.Types.Mixed,
-        isDefault: {
-          type: Boolean,
-          default: false,
-        },
-        createdAt: {
-          type: Date,
-          default: Date.now,
-        },
-      },
-    ],
-
-    linkedAccounts: [
-      {
-        provider: {
-          type: String,
-          enum: ["google", "facebook", "github", "twitter"],
-        },
-        providerId: String,
-        profile: mongoose.Schema.Types.Mixed,
-        linkedAt: {
-          type: Date,
-          default: Date.now,
-        },
-      },
-    ],
-
-    communicationPrefs: {
-      email: { type: Boolean, default: true },
-      push: { type: Boolean, default: true },
-      sms: { type: Boolean, default: false },
-      newsletter: { type: Boolean, default: true },
-      marketing: { type: Boolean, default: false },
-    },
-
-    deletedAt: Date,
-    status: {
-      type: String,
-      enum: ["active", "suspended", "deleted"],
-      default: "active",
-    },
-
-    locationPreference: {
-      type: String,
-      enum: ["City Center", "Suburbs", "Online", "Anywhere", ""],
-    },
-    groupSize: {
-      type: Number,
-      min: 1,
-      max: 50,
-    },
+    minlength: [3, "Username must be at least 3 characters"],
+    maxlength: [30, "Username cannot be more than 30 characters"],
+    match: [/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"],
   },
   email: {
     type: String,
-    required: [true, "Please enter your email"],
-    unique: true,
+    required: true,
     lowercase: true,
-    match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+    trim: true,
+    match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Please provide a valid email address"],
   },
   password: {
     type: String,
-    required: function () {
+    required: function() {
       return !this.googleId;
     },
     minlength: [6, "Password must be at least 6 characters"],
     select: false,
   },
+  role: {
+    type: String,
+    enum: ["superadmin", "organizer", "attendee"],
+    default: "attendee",
+  },
   googleId: {
     type: String,
-    unique: true,
-    sparse: true, 
+    sparse: true,
   },
   profilePicture: {
     type: String,
@@ -152,63 +57,264 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: "",
     trim: true,
+    maxlength: [500, "Bio cannot be more than 500 characters"],
   },
-  image: {
-    type: String,
-    default: "",
-    trim: true,
-  },
-
-  role: {
-    type: String,
-    enum: ["user", "admin"],
-    default: "user",
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
-  lastActive: {
-    type: Date,
-    default: Date.now,
-  },
-  isDeleted: {
+  isVerified: {
     type: Boolean,
     default: false,
   },
+  isActive: {
+    type: Boolean,
+    default: true,
+  },
+  status: {
+    type: String,
+    enum: ["active", "suspended", "deleted", "banned"],
+    default: "active",
+  },
+  emailVerificationToken: String,
+  emailVerificationExpires: Date,
+  passwordResetToken: String,
+  passwordResetExpires: Date,
+  lastLogin: {
+    type: Date,
+    default: Date.now,
+  },
+  loginCount: {
+    type: Number,
+    default: 0,
+  },
+  organizerInfo: {
+    companyName: {
+      type: String,
+      trim: true,
+      maxlength: [100, "Company name cannot be more than 100 characters"],
+    },
+    website: {
+      type: String,
+      trim: true,
+      match: [/^https?:\/\/.+\..+$/, "Please provide a valid website URL"],
+    },
+    phone: {
+      type: String,
+      trim: true,
+    },
+    address: {
+      street: String,
+      city: String,
+      state: String,
+      country: String,
+      zipCode: String,
+    },
+    verified: {
+      type: Boolean,
+      default: false,
+    },
+    verificationStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected", "unverified"],
+      default: "unverified",
+    },
+    verificationNotes: String,
+    verifiedAt: Date,
+  },
+  preferences: {
+    emailNotifications: { type: Boolean, default: true },
+    pushNotifications: { type: Boolean, default: true },
+    newsletter: { type: Boolean, default: true },
+    eventReminders: { type: Boolean, default: true },
+    marketingEmails: { type: Boolean, default: false },
+  },
+  deletedAt: Date,
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
 });
 
-// ✅ FIXED: Hash password before saving - with proper null/undefined checks
-userSchema.pre("save", async function (next) {
-  try {
-    // Skip if password is not modified or if password is null/undefined
-    if (!this.isModified("password") || !this.password) {
-      return next();
-    }
+// Virtual for full name
+userSchema.virtual("fullName").get(function() {
+  return `${this.firstName} ${this.lastName}`.trim();
+});
 
-    // Only hash if password exists and is a string
-    if (typeof this.password === 'string' && this.password.length > 0) {
-      console.log("🔐 Hashing password for user:", this.email);
-      this.password = await bcrypt.hash(this.password, 12);
-    }
-    
+// Indexes
+userSchema.index({ email: 1 });
+userSchema.index({ userName: 1 });
+userSchema.index({ role: 1 });
+userSchema.index({ "organizerInfo.verificationStatus": 1 });
+userSchema.index({ status: 1 });
+userSchema.index({ emailVerificationToken: 1 });
+userSchema.index({ passwordResetToken: 1 });
+userSchema.index({ createdAt: 1 });
+userSchema.index({ isVerified: 1, status: 1 });
+
+// Compound indexes
+userSchema.index({ email: 1, status: 1 });
+userSchema.index({ role: 1, status: 1 });
+
+// Pre-save middleware for password hashing
+userSchema.pre("save", async function(next) {
+  if (!this.isModified("password")) {
+    return next();
+  }
+  
+  if (!this.password) {
+    return next();
+  }
+  
+  try {
+    const salt = await bcrypt.genSalt(12);
+    this.password = await bcrypt.hash(this.password, salt);
     next();
   } catch (error) {
-    console.error("❌ Password hashing error:", error);
     next(error);
   }
 });
 
-// ✅ IMPROVED: Method to compare passwords with null checks
-userSchema.methods.comparePassword = async function (candidatePassword) {
-  // Return false if no password is set (OAuth users)
-  if (!this.password) {
-    return false;
+// Pre-save middleware for username generation for Google users
+userSchema.pre("save", async function(next) {
+  // Only run if this is a Google user without a username
+  if (this.googleId && !this.userName) {
+    try {
+      const baseUsername = this.email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
+      let username = baseUsername.substring(0, 15);
+      let counter = 1;
+      const originalUsername = username;
+
+      // Ensure unique username
+      while (await this.constructor.findOne({ userName: username })) {
+        username = `${originalUsername}${counter}`;
+        counter++;
+        if (counter > 100) {
+          throw new Error("Could not generate unique username");
+        }
+      }
+
+      this.userName = username;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  } else {
+    next();
   }
-  return await bcrypt.compare(candidatePassword, this.password);
+});
+
+// Method to compare password
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  if (!this.password) return false;
+  
+  try {
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch (error) {
+    throw new Error("Password comparison failed");
+  }
 };
-// Method to get user profile without sensitive info
-userSchema.methods.getProfile = function () {
+
+// Method to generate secure random token with fallback
+userSchema.methods.generateSecureToken = function(length = 32) {
+  try {
+    // Try using crypto.randomBytes first (more secure)
+    return crypto.randomBytes(length).toString('hex');
+  } catch (error) {
+    console.error("crypto.randomBytes failed, using Math.random fallback:", error.message);
+    
+    // Fallback using Math.random (less secure but functional)
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let result = '';
+    for (let i = 0; i < length * 2; i++) {
+      result += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return result;
+  }
+};
+
+// Method to create email verification token
+userSchema.methods.createEmailVerificationToken = function() {
+  const verificationToken = this.generateSecureToken(32);
+  
+  this.emailVerificationToken = crypto
+    .createHash('sha256')
+    .update(verificationToken)
+    .digest('hex');
+  
+  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  
+  return verificationToken;
+};
+
+// Method to create password reset token
+userSchema.methods.createPasswordResetToken = function() {
+  const resetToken = this.generateSecureToken(32);
+  
+  this.passwordResetToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+  
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  
+  return resetToken;
+};
+
+// Method to verify email
+userSchema.methods.verifyEmail = function() {
+  this.isVerified = true;
+  this.emailVerificationToken = undefined;
+  this.emailVerificationExpires = undefined;
+  return this.save();
+};
+
+// Method to mark as deleted (soft delete)
+userSchema.methods.softDelete = function() {
+  this.status = "deleted";
+  this.isActive = false;
+  this.deletedAt = new Date();
+  return this.save();
+};
+
+// Method to restore user
+userSchema.methods.restore = function() {
+  this.status = "active";
+  this.isActive = true;
+  this.deletedAt = undefined;
+  return this.save();
+};
+
+// Method to suspend user
+userSchema.methods.suspend = function() {
+  this.status = "suspended";
+  this.isActive = false;
+  return this.save();
+};
+
+// Method to ban user
+userSchema.methods.ban = function() {
+  this.status = "banned";
+  this.isActive = false;
+  return this.save();
+};
+
+// Method to get public profile (safe for public viewing)
+userSchema.methods.getPublicProfile = function() {
+  return {
+    _id: this._id,
+    userName: this.userName,
+    firstName: this.firstName,
+    lastName: this.lastName,
+    profilePicture: this.profilePicture,
+    bio: this.bio,
+    organizerInfo: this.organizerInfo ? {
+      companyName: this.organizerInfo.companyName,
+      website: this.organizerInfo.website,
+      verified: this.organizerInfo.verified,
+    } : undefined,
+    createdAt: this.createdAt,
+  };
+};
+
+// Method to get user profile (for authenticated user)
+userSchema.methods.getProfile = function() {
   return {
     _id: this._id,
     firstName: this.firstName,
@@ -216,16 +322,182 @@ userSchema.methods.getProfile = function () {
     userName: this.userName,
     email: this.email,
     role: this.role,
-    onboardingCompleted: this.onboardingCompleted,
-    bio: this.bio,
-    image: this.image || this.profilePicture,
     profilePicture: this.profilePicture,
-    preferences: this.preferences,
-    createdAt: this.createdAt,
-    lastActive: this.lastActive,
+    bio: this.bio,
     isVerified: this.isVerified,
-    googleId: this.googleId, 
+    isActive: this.isActive,
+    organizerInfo: this.organizerInfo,
+    preferences: this.preferences,
+    status: this.status,
+    lastLogin: this.lastLogin,
+    loginCount: this.loginCount,
+    createdAt: this.createdAt,
+    updatedAt: this.updatedAt,
   };
+};
+
+// Method to get detailed profile (for admin/user management)
+userSchema.methods.getDetailedProfile = function() {
+  const profile = this.getProfile();
+  return {
+    ...profile,
+    googleId: this.googleId,
+    emailVerificationToken: this.emailVerificationToken ? "***" : undefined,
+    passwordResetToken: this.passwordResetToken ? "***" : undefined,
+    deletedAt: this.deletedAt,
+  };
+};
+
+// Static method to find active users
+userSchema.statics.findActiveUsers = function() {
+  return this.find({ status: "active", isActive: true });
+};
+
+// Static method to find by email (case insensitive)
+userSchema.statics.findByEmail = function(email) {
+  return this.findOne({ email: email.toLowerCase().trim() });
+};
+
+// Static method to find by username
+userSchema.statics.findByUsername = function(userName) {
+  return this.findOne({ userName: userName.trim() });
+};
+
+// Static method to get user statistics
+userSchema.statics.getUserStats = async function() {
+  const userCounts = await this.aggregate([
+    {
+      $match: {
+        status: { $ne: "deleted" } // Exclude deleted users
+      }
+    },
+    {
+      $group: {
+        _id: "$role",
+        count: { $sum: 1 },
+        activeUsers: { 
+          $sum: { 
+            $cond: [{ $eq: ["$status", "active"] }, 1, 0] 
+          } 
+        },
+        verifiedUsers: {
+          $sum: {
+            $cond: [{ $eq: ["$isVerified", true] }, 1, 0]
+          }
+        },
+        googleUsers: {
+          $sum: {
+            $cond: [{ $ne: ["$googleId", null] }, 1, 0]
+          }
+        }
+      }
+    }
+  ]);
+
+  const totalStats = await this.aggregate([
+    {
+      $match: {
+        status: { $ne: "deleted" }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalUsers: { $sum: 1 },
+        totalActive: { 
+          $sum: { 
+            $cond: [{ $eq: ["$status", "active"] }, 1, 0] 
+          } 
+        },
+        totalVerified: {
+          $sum: {
+            $cond: [{ $eq: ["$isVerified", true] }, 1, 0]
+          }
+        },
+        totalGoogleUsers: {
+          $sum: {
+            $cond: [{ $ne: ["$googleId", null] }, 1, 0]
+          }
+        },
+        avgLoginCount: { $avg: "$loginCount" }
+      }
+    }
+  ]);
+
+  const recentUsers = await this.aggregate([
+    {
+      $match: {
+        status: "active",
+        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } // Last 30 days
+      }
+    },
+    {
+      $group: {
+        _id: {
+          $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+        },
+        count: { $sum: 1 }
+      }
+    },
+    { $sort: { _id: 1 } }
+  ]);
+
+  return {
+    byRole: userCounts,
+    overall: totalStats[0] || { 
+      totalUsers: 0, 
+      totalActive: 0, 
+      totalVerified: 0, 
+      totalGoogleUsers: 0,
+      avgLoginCount: 0 
+    },
+    recentRegistrations: recentUsers
+  };
+};
+
+// Static method to cleanup expired tokens
+userSchema.statics.cleanupExpiredTokens = async function() {
+  const now = new Date();
+  
+  const result = await this.updateMany(
+    {
+      $or: [
+        { 
+          emailVerificationExpires: { $lt: now },
+          emailVerificationToken: { $exists: true }
+        },
+        {
+          passwordResetExpires: { $lt: now },
+          passwordResetToken: { $exists: true }
+        }
+      ]
+    },
+    {
+      $unset: {
+        emailVerificationToken: "",
+        emailVerificationExpires: "",
+        passwordResetToken: "",
+        passwordResetExpires: ""
+      }
+    }
+  );
+
+  return result;
+};
+
+// Query helper to exclude deleted users
+userSchema.query.excludeDeleted = function() {
+  return this.where({ status: { $ne: "deleted" } });
+};
+
+// Query helper for active users only
+userSchema.query.activeOnly = function() {
+  return this.where({ status: "active", isActive: true });
+};
+
+// Query helper for verified users only
+userSchema.query.verifiedOnly = function() {
+  return this.where({ isVerified: true });
 };
 
 module.exports = mongoose.model("User", userSchema);
