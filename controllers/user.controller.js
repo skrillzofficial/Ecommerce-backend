@@ -27,7 +27,9 @@ const handleRegister = async (req, res, next) => {
   }
 
   if (password.length < 6) {
-    return next(new ErrorResponse("Password must be at least 6 characters", 400));
+    return next(
+      new ErrorResponse("Password must be at least 6 characters", 400)
+    );
   }
 
   try {
@@ -64,7 +66,8 @@ const handleRegister = async (req, res, next) => {
     } catch (tokenError) {
       return res.status(201).json({
         success: true,
-        message: "Account created successfully! Please use the resend verification feature to verify your email.",
+        message:
+          "Account created successfully! Please use the resend verification feature to verify your email.",
       });
     }
 
@@ -79,24 +82,28 @@ const handleRegister = async (req, res, next) => {
       if (emailSent) {
         res.status(201).json({
           success: true,
-          message: "Account created successfully! Please check your email to verify your account.",
+          message:
+            "Account created successfully! Please check your email to verify your account.",
         });
       } else {
         res.status(201).json({
           success: true,
-          message: "Account created successfully! Please use the resend verification feature to verify your email.",
+          message:
+            "Account created successfully! Please use the resend verification feature to verify your email.",
         });
       }
     } catch (emailError) {
       res.status(201).json({
         success: true,
-        message: "Account created successfully! Please use the resend verification feature to verify your email.",
+        message:
+          "Account created successfully! Please use the resend verification feature to verify your email.",
       });
     }
   } catch (error) {
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
-      const message = field === "email" ? "Email already exists" : "Username already taken";
+      const message =
+        field === "email" ? "Email already exists" : "Username already taken";
       return next(new ErrorResponse(message, 409));
     }
 
@@ -110,8 +117,13 @@ const handleRegister = async (req, res, next) => {
 };
 
 const verifyEmail = async (req, res, next) => {
+  console.log("Verify email route hit!");
+  console.log("Query params:", req.query);
+  console.log("Token:", req.query.token);
   try {
     const { token } = req.query;
+
+    console.log("Received token:", token);
 
     if (!token) {
       return next(new ErrorResponse("Invalid verification token", 400));
@@ -125,7 +137,9 @@ const verifyEmail = async (req, res, next) => {
     });
 
     if (!user) {
-      return next(new ErrorResponse("Invalid or expired verification token", 400));
+      return next(
+        new ErrorResponse("Invalid or expired verification token", 400)
+      );
     }
 
     if (user.isVerified) {
@@ -204,10 +218,20 @@ const resendVerificationEmail = async (req, res, next) => {
           message: "Verification email sent successfully!",
         });
       } else {
-        return next(new ErrorResponse("Failed to send verification email. Please try again.", 500));
+        return next(
+          new ErrorResponse(
+            "Failed to send verification email. Please try again.",
+            500
+          )
+        );
       }
     } catch (emailError) {
-      return next(new ErrorResponse("Failed to send verification email. Please try again.", 500));
+      return next(
+        new ErrorResponse(
+          "Failed to send verification email. Please try again.",
+          500
+        )
+      );
     }
   } catch (error) {
     next(new ErrorResponse("Failed to resend verification email", 500));
@@ -218,7 +242,9 @@ const handleLogin = async (req, res, next) => {
   const { email, password, userType } = req.body;
 
   if (!email || !password || !userType) {
-    return next(new ErrorResponse("Email, password, and user type are required", 400));
+    return next(
+      new ErrorResponse("Email, password, and user type are required", 400)
+    );
   }
 
   if (!["attendee", "organizer", "superadmin"].includes(userType)) {
@@ -233,15 +259,30 @@ const handleLogin = async (req, res, next) => {
     }
 
     if (!user.isActive || user.status !== "active") {
-      return next(new ErrorResponse("Your account has been suspended or deactivated. Please contact support.", 403));
+      return next(
+        new ErrorResponse(
+          "Your account has been suspended or deactivated. Please contact support.",
+          403
+        )
+      );
     }
 
     if (user.role !== userType) {
-      return next(new ErrorResponse(`Please select "${user.role}" account type for this email`, 401));
+      return next(
+        new ErrorResponse(
+          `Please select "${user.role}" account type for this email`,
+          401
+        )
+      );
     }
 
     if (!user.isVerified) {
-      return next(new ErrorResponse("Please verify your email before logging in. Check your email for the verification link.", 401));
+      return next(
+        new ErrorResponse(
+          "Please verify your email before logging in. Check your email for the verification link.",
+          401
+        )
+      );
     }
 
     const isPasswordValid = await user.comparePassword(password);
@@ -279,11 +320,18 @@ const handleGoogleAuth = async (req, res, next) => {
   const { token, userType } = req.body;
 
   if (!token || !userType) {
-    return next(new ErrorResponse("Google token and user type are required", 400));
+    return next(
+      new ErrorResponse("Google token and user type are required", 400)
+    );
   }
 
   if (userType === "superadmin") {
-    return next(new ErrorResponse("Google authentication is not available for superadmin", 400));
+    return next(
+      new ErrorResponse(
+        "Google authentication is not available for superadmin",
+        400
+      )
+    );
   }
 
   try {
@@ -313,7 +361,12 @@ const handleGoogleAuth = async (req, res, next) => {
       }
 
       if (user.role !== userType) {
-        return next(new ErrorResponse(`Please select "${user.role}" account type for this email`, 401));
+        return next(
+          new ErrorResponse(
+            `Please select "${user.role}" account type for this email`,
+            401
+          )
+        );
       }
 
       user.lastLogin = new Date();
@@ -328,7 +381,8 @@ const handleGoogleAuth = async (req, res, next) => {
       while (await USER.findOne({ userName })) {
         userName = `${originalUserName}${counter}`;
         counter++;
-        if (counter > 100) throw new Error("Could not generate unique username");
+        if (counter > 100)
+          throw new Error("Could not generate unique username");
       }
 
       const userData = {
@@ -365,12 +419,17 @@ const handleGoogleAuth = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    if (error.message.includes("Token used too late") || error.message.includes("Invalid token")) {
+    if (
+      error.message.includes("Token used too late") ||
+      error.message.includes("Invalid token")
+    ) {
       return next(new ErrorResponse("Invalid or expired Google token", 400));
     }
 
     if (error.code === 11000) {
-      return next(new ErrorResponse("User with this email already exists", 409));
+      return next(
+        new ErrorResponse("User with this email already exists", 409)
+      );
     }
 
     next(new ErrorResponse("Google authentication failed", 500));
@@ -421,17 +480,20 @@ const updateProfile = async (req, res, next) => {
       const profilePicture = req.files.profilePicture;
 
       try {
-        const result = await cloudinary.uploader.upload(profilePicture.tempFilePath, {
-          folder: "inklune/profilePictures",
-          use_filename: true,
-          unique_filename: false,
-          resource_type: "image",
-          transformation: [
-            { width: 500, height: 500, crop: "limit" },
-            { quality: "auto" },
-            { format: "jpg" },
-          ],
-        });
+        const result = await cloudinary.uploader.upload(
+          profilePicture.tempFilePath,
+          {
+            folder: "inklune/profilePictures",
+            use_filename: true,
+            unique_filename: false,
+            resource_type: "image",
+            transformation: [
+              { width: 500, height: 500, crop: "limit" },
+              { quality: "auto" },
+              { format: "jpg" },
+            ],
+          }
+        );
 
         user.profilePicture = result.secure_url;
 
@@ -491,7 +553,9 @@ const forgotPassword = async (req, res, next) => {
       user.passwordResetExpires = undefined;
       await user.save({ validateBeforeSave: false });
 
-      return next(new ErrorResponse("Failed to send reset email. Please try again.", 500));
+      return next(
+        new ErrorResponse("Failed to send reset email. Please try again.", 500)
+      );
     }
   } catch (error) {
     next(new ErrorResponse("Failed to process password reset", 500));
@@ -508,7 +572,9 @@ const resetPassword = async (req, res, next) => {
     }
 
     if (!password || password.length < 6) {
-      return next(new ErrorResponse("Password must be at least 6 characters", 400));
+      return next(
+        new ErrorResponse("Password must be at least 6 characters", 400)
+      );
     }
 
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
@@ -555,11 +621,15 @@ const changePassword = async (req, res, next) => {
     const userId = req.user.userId;
 
     if (!currentPassword || !newPassword) {
-      return next(new ErrorResponse("Current password and new password are required", 400));
+      return next(
+        new ErrorResponse("Current password and new password are required", 400)
+      );
     }
 
     if (newPassword.length < 6) {
-      return next(new ErrorResponse("New password must be at least 6 characters", 400));
+      return next(
+        new ErrorResponse("New password must be at least 6 characters", 400)
+      );
     }
 
     const user = await USER.findById(userId).select("+password");
@@ -629,11 +699,18 @@ const checkUsernameAvailability = async (req, res, next) => {
     }
 
     if (username.length < 3) {
-      return next(new ErrorResponse("Username must be at least 3 characters", 400));
+      return next(
+        new ErrorResponse("Username must be at least 3 characters", 400)
+      );
     }
 
     if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-      return next(new ErrorResponse("Username can only contain letters, numbers, and underscores", 400));
+      return next(
+        new ErrorResponse(
+          "Username can only contain letters, numbers, and underscores",
+          400
+        )
+      );
     }
 
     const existingUser = await USER.findOne({ userName: username });
@@ -657,7 +734,9 @@ const checkEmailAvailability = async (req, res, next) => {
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      return next(new ErrorResponse("Please provide a valid email address", 400));
+      return next(
+        new ErrorResponse("Please provide a valid email address", 400)
+      );
     }
 
     const existingUser = await USER.findOne({ email });
@@ -677,7 +756,9 @@ const deleteAccount = async (req, res, next) => {
     const { password } = req.body;
 
     if (!password) {
-      return next(new ErrorResponse("Password is required to delete account", 400));
+      return next(
+        new ErrorResponse("Password is required to delete account", 400)
+      );
     }
 
     const user = await USER.findById(userId).select("+password");
@@ -693,7 +774,9 @@ const deleteAccount = async (req, res, next) => {
     if (user.profilePicture && user.profilePicture.includes("cloudinary")) {
       try {
         const publicId = user.profilePicture.split("/").pop().split(".")[0];
-        await cloudinary.uploader.destroy(`inklune/profilePictures/${publicId}`);
+        await cloudinary.uploader.destroy(
+          `inklune/profilePictures/${publicId}`
+        );
       } catch (cloudinaryError) {
         console.error("Failed to delete Cloudinary image:", cloudinaryError);
       }
@@ -714,7 +797,9 @@ const getUserProfile = async (req, res, next) => {
   try {
     const { userId } = req.params;
 
-    const user = await USER.findById(userId).select("-email -role -isVerified -preferences");
+    const user = await USER.findById(userId).select(
+      "-email -role -isVerified -preferences"
+    );
 
     if (!user) {
       return next(new ErrorResponse("User not found", 404));
