@@ -117,34 +117,64 @@ const handleRegister = async (req, res, next) => {
 };
 
 const verifyEmail = async (req, res, next) => {
-  console.log("Verify email route hit!");
-  console.log("Query params:", req.query);
-  console.log("Token:", req.query.token);
   try {
+    console.log("=== VERIFY EMAIL ROUTE HIT ===");
+    console.log("Query params:", req.query);
+
     const token = req.query.token || req.params.token;
 
-    console.log("❌ No token provided");
-
     if (!token) {
-      return next(new ErrorResponse("Invalid verification token", 400));
+      console.log("❌ No token provided");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification token",
+      });
     }
+
     console.log("✅ Token received (first 20 chars):", token.substring(0, 20));
 
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
     console.log("Hashed token (first 20 chars):", hashedToken.substring(0, 20));
+
+    // Check if user with token exists (for debugging)
+    const userWithToken = await USER.findOne({
+      emailVerificationToken: hashedToken,
+    });
+
+    console.log("User with token found:", userWithToken ? "YES" : "NO");
+
+    if (userWithToken) {
+      console.log(
+        "Token expires at:",
+        new Date(userWithToken.emailVerificationExpires)
+      );
+      console.log("Current time:", new Date());
+      console.log(
+        "Is expired?",
+        userWithToken.emailVerificationExpires < Date.now()
+      );
+      console.log("Is already verified?", userWithToken.isVerified);
+    }
+
     const user = await USER.findOne({
       emailVerificationToken: hashedToken,
       emailVerificationExpires: { $gt: Date.now() },
     });
 
     if (!user) {
-      return next(
-        new ErrorResponse("Invalid or expired verification token", 400)
-      );
+      console.log("❌ No valid user found");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired verification token",
+      });
     }
 
     if (user.isVerified) {
-      return next(new ErrorResponse("Email is already verified", 400));
+      console.log("❌ Email already verified");
+      return res.status(400).json({
+        success: false,
+        message: "Email is already verified",
+      });
     }
 
     user.isVerified = true;
@@ -152,15 +182,7 @@ const verifyEmail = async (req, res, next) => {
     user.emailVerificationExpires = undefined;
     await user.save();
 
-    try {
-      await sendWelcomeEmail({
-        fullName: user.firstName + " " + user.lastName,
-        clientUrl: `${process.env.FRONTEND_URL}/dashboard`,
-        email: user.email,
-      });
-    } catch (emailError) {
-      console.error("Failed to send welcome email:", emailError);
-    }
+    console.log("✅ Email verified successfully for:", user.email);
 
     const jwtToken = jwt.sign(
       {
@@ -180,7 +202,12 @@ const verifyEmail = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    next(new ErrorResponse("Email verification failed", 500));
+    console.error("❌ Email verification error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Email verification failed",
+      error: error.message,
+    });
   }
 };
 
