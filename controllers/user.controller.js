@@ -121,16 +121,17 @@ const verifyEmail = async (req, res, next) => {
   console.log("Query params:", req.query);
   console.log("Token:", req.query.token);
   try {
-    const { token } = req.query;
+    const token = req.query.token || req.params.token;
 
-    console.log("Received token:", token);
+    console.log("❌ No token provided");
 
     if (!token) {
       return next(new ErrorResponse("Invalid verification token", 400));
     }
+    console.log("✅ Token received (first 20 chars):", token.substring(0, 20));
 
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
-
+    console.log("Hashed token (first 20 chars):", hashedToken.substring(0, 20));
     const user = await USER.findOne({
       emailVerificationToken: hashedToken,
       emailVerificationExpires: { $gt: Date.now() },

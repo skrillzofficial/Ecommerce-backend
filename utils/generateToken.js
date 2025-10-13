@@ -1,4 +1,4 @@
-const crypto = require("crypto") //crypto bit is used to generate random number
+const crypto = require("crypto") 
 
 const generateToken = () =>{
     return crypto.randomBytes(32).toString("hex")
