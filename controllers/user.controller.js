@@ -129,7 +129,8 @@ const handleRegister = async (req, res, next) => {
 const verifyEmail = async (req, res, next) => {
   try {
     console.log("=== VERIFY EMAIL ROUTE HIT ===");
-    console.log("Query params:", req.query);
+    console.log("Full req.query:", req.query);
+    console.log("Full req.params:", req.params);
 
     const token = req.query.token || req.params.token;
 
@@ -141,38 +142,60 @@ const verifyEmail = async (req, res, next) => {
       });
     }
 
-    console.log("✅ Token received (first 20 chars):", token.substring(0, 20));
+    console.log("Raw token from request:", token);
+    console.log("Raw token length:", token.length);
+    console.log("Raw token (hex):", Buffer.from(token).toString("hex"));
 
+    // Hash the token EXACTLY as it comes from the request
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    console.log("Hashed token:", hashedToken);
     console.log("Hashed token (first 20 chars):", hashedToken.substring(0, 20));
 
-    // Check if user with token exists (for debugging)
-    const userWithToken = await USER.findOne({
-      emailVerificationToken: hashedToken,
+    // Find ALL users with verification tokens (for debugging)
+    const allUsersWithTokens = await USER.find({
+      emailVerificationToken: { $exists: true, $ne: null },
     });
 
-    console.log("User with token found:", userWithToken ? "YES" : "NO");
+    console.log(
+      `Found ${allUsersWithTokens.length} users with verification tokens`
+    );
 
-    if (userWithToken) {
+    allUsersWithTokens.forEach((u, idx) => {
+      console.log(`User ${idx + 1} - Email: ${u.email}`);
       console.log(
-        "Token expires at:",
-        new Date(userWithToken.emailVerificationExpires)
+        `  Stored token (first 20 chars): ${u.emailVerificationToken.substring(
+          0,
+          20
+        )}`
       );
-      console.log("Current time:", new Date());
-      console.log(
-        "Is expired?",
-        userWithToken.emailVerificationExpires < Date.now()
-      );
-      console.log("Is already verified?", userWithToken.isVerified);
-    }
+      console.log(`  Token expires: ${new Date(u.emailVerificationExpires)}`);
+      console.log(`  Token match: ${u.emailVerificationToken === hashedToken}`);
+    });
 
+    // Now search with the hashed token
     const user = await USER.findOne({
       emailVerificationToken: hashedToken,
       emailVerificationExpires: { $gt: Date.now() },
     });
 
     if (!user) {
-      console.log("❌ No valid user found");
+      console.log("❌ No valid user found with matching token");
+
+      // Try to find if token exists but is expired
+      const expiredUser = await USER.findOne({
+        emailVerificationToken: hashedToken,
+      });
+
+      if (expiredUser) {
+        console.log("⚠️ Token found but EXPIRED");
+        console.log(
+          "   Expires:",
+          new Date(expiredUser.emailVerificationExpires)
+        );
+        console.log("   Now:", new Date());
+      }
+
       return res.status(400).json({
         success: false,
         message: "Invalid or expired verification token",
@@ -192,7 +215,7 @@ const verifyEmail = async (req, res, next) => {
     user.emailVerificationExpires = undefined;
     await user.save();
 
-    console.log(" Email verified successfully for:", user.email);
+    console.log("✅ Email verified successfully for:", user.email);
 
     const jwtToken = jwt.sign(
       {
@@ -212,7 +235,7 @@ const verifyEmail = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    console.error(" Email verification error:", error);
+    console.error("❌ Email verification error:", error);
     res.status(500).json({
       success: false,
       message: "Email verification failed",
