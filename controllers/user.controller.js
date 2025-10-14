@@ -267,7 +267,6 @@ const verifyEmail = async (req, res, next) => {
     });
   }
 };
-
 const resendVerificationEmail = async (req, res, next) => {
   try {
     const { email } = req.body;
