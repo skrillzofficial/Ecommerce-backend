@@ -4,10 +4,37 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const ErrorResponse = require("../utils/errorResponse");
 const { OAuth2Client } = require("google-auth-library");
-const { sendWelcomeEmail, sendResetEmail } = require("../utils/sendEmail");
+const { sendWelcomeEmail, sendResetEmail, sendResendVerificationEmail } = require("../utils/sendEmail");
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 
+// ============================================
+// CLEANUP FUNCTION - Delete unverified users older than 7 days
+// ============================================
+const deleteExpiredUnverifiedUsers = async () => {
+  try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    
+    const result = await USER.deleteMany({
+      isVerified: false,
+      createdAt: { $lt: sevenDaysAgo }
+    });
+
+    if (result.deletedCount > 0) {
+      console.log(`🗑️ Cleanup: Deleted ${result.deletedCount} unverified users older than 7 days`);
+    }
+  } catch (error) {
+    console.error("❌ Cleanup error:", error);
+  }
+};
+
+// Schedule cleanup to run daily at 2 AM
+// If using node-cron: cron.schedule('0 2 * * *', deleteExpiredUnverifiedUsers);
+// Or manually call this in your server initialization
+
+// ============================================
+// REGISTER HANDLER
+// ============================================
 const handleRegister = async (req, res, next) => {
   const { userName, email, password, userType } = req.body;
 
@@ -63,7 +90,7 @@ const handleRegister = async (req, res, next) => {
     try {
       verificationToken = user.createEmailVerificationToken();
 
-      console.log("🔐 Token created in memory:");
+      console.log("✉️ Token created in memory:");
       console.log(
         "   emailVerificationToken:",
         user.emailVerificationToken
@@ -77,7 +104,6 @@ const handleRegister = async (req, res, next) => {
 
       await user.save({ validateBeforeSave: false });
 
-      // RE-FETCH from DB to confirm it was saved
       const savedUser = await USER.findById(user._id);
       console.log("✅ After save - re-fetched from DB:");
       console.log(
@@ -150,6 +176,10 @@ const handleRegister = async (req, res, next) => {
     next(new ErrorResponse("Registration failed. Please try again.", 500));
   }
 };
+
+// ============================================
+// EMAIL VERIFICATION HANDLER
+// ============================================
 const verifyEmail = async (req, res, next) => {
   try {
     console.log("=== VERIFY EMAIL ROUTE HIT ===");
@@ -167,12 +197,10 @@ const verifyEmail = async (req, res, next) => {
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
     console.log("Hashed token:", hashedToken.substring(0, 20));
 
-    // ✅ NEW: First, try to find user by token (whether expired or not)
     const userWithToken = await USER.findOne({
       emailVerificationToken: hashedToken,
     });
 
-    // ✅ NEW: Check if this user is already verified
     if (userWithToken && userWithToken.isVerified) {
       console.log("✅ User already verified, allowing login");
       
@@ -195,7 +223,6 @@ const verifyEmail = async (req, res, next) => {
       });
     }
 
-    // Now check for valid, non-expired token
     const user = await USER.findOne({
       emailVerificationToken: hashedToken,
       emailVerificationExpires: { $gt: Date.now() },
@@ -204,7 +231,6 @@ const verifyEmail = async (req, res, next) => {
     if (!user) {
       console.log("❌ No valid user found with matching token");
       
-      // Check if token exists but is expired
       const expiredUser = await USER.findOne({
         emailVerificationToken: hashedToken,
       });
@@ -224,7 +250,6 @@ const verifyEmail = async (req, res, next) => {
       });
     }
 
-    // Verify the user
     user.isVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
@@ -258,6 +283,10 @@ const verifyEmail = async (req, res, next) => {
     });
   }
 };
+
+// ============================================
+// RESEND VERIFICATION EMAIL HANDLER
+// ============================================
 const resendVerificationEmail = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -266,7 +295,7 @@ const resendVerificationEmail = async (req, res, next) => {
       return next(new ErrorResponse("Email is required", 400));
     }
 
-    const user = await USER.findOne({ email });
+    const user = await USER.findOne({ email: email.toLowerCase() });
 
     if (!user) {
       return next(new ErrorResponse("User not found", 404));
@@ -276,21 +305,47 @@ const resendVerificationEmail = async (req, res, next) => {
       return next(new ErrorResponse("Email is already verified", 400));
     }
 
+    // Check resend attempt limit (optional: max 3 attempts per hour)
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentAttempts = user.verificationResendAttempts || [];
+    const recentCount = recentAttempts.filter(
+      (attempt) => new Date(attempt) > oneHourAgo
+    ).length;
+
+    if (recentCount >= 3) {
+      return next(
+        new ErrorResponse(
+          "Too many resend attempts. Please try again in 1 hour.",
+          429
+        )
+      );
+    }
+
     const verificationToken = user.createEmailVerificationToken();
+    
+    // Track resend attempts
+    if (!user.verificationResendAttempts) {
+      user.verificationResendAttempts = [];
+    }
+    user.verificationResendAttempts.push(new Date());
+    
     await user.save({ validateBeforeSave: false });
 
     try {
       const clientUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
-      const emailSent = await sendWelcomeEmail({
+      console.log("📨 Resending verification email to:", user.email);
+
+      const emailSent = await sendResendVerificationEmail({
         fullName: user.firstName + " " + user.lastName,
         clientUrl: clientUrl,
         email: user.email,
       });
 
       if (emailSent) {
+        console.log("✅ Resend successful");
         res.status(200).json({
           success: true,
-          message: "Verification email sent successfully!",
+          message: "Verification email sent successfully! Check your inbox.",
         });
       } else {
         return next(
@@ -301,6 +356,7 @@ const resendVerificationEmail = async (req, res, next) => {
         );
       }
     } catch (emailError) {
+      console.error("❌ Email error:", emailError);
       return next(
         new ErrorResponse(
           "Failed to send verification email. Please try again.",
@@ -309,10 +365,14 @@ const resendVerificationEmail = async (req, res, next) => {
       );
     }
   } catch (error) {
+    console.error("❌ Resend verification error:", error);
     next(new ErrorResponse("Failed to resend verification email", 500));
   }
 };
 
+// ============================================
+// LOGIN HANDLER
+// ============================================
 const handleLogin = async (req, res, next) => {
   const { email, password, userType } = req.body;
 
@@ -327,7 +387,7 @@ const handleLogin = async (req, res, next) => {
   }
 
   try {
-    const user = await USER.findOne({ email }).select("+password");
+    const user = await USER.findOne({ email: email.toLowerCase() }).select("+password");
 
     if (!user) {
       return next(new ErrorResponse("Invalid email or password", 401));
@@ -391,6 +451,9 @@ const handleLogin = async (req, res, next) => {
   }
 };
 
+// ============================================
+// GOOGLE AUTH HANDLER
+// ============================================
 const handleGoogleAuth = async (req, res, next) => {
   const { token, userType } = req.body;
 
@@ -410,6 +473,7 @@ const handleGoogleAuth = async (req, res, next) => {
   }
 
   try {
+    const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
@@ -424,7 +488,7 @@ const handleGoogleAuth = async (req, res, next) => {
     const { email, given_name, family_name, sub: googleId, picture } = payload;
 
     let user = await USER.findOne({
-      $or: [{ email }, { googleId }],
+      $or: [{ email: email.toLowerCase() }, { googleId }],
     });
 
     if (user) {
@@ -464,7 +528,7 @@ const handleGoogleAuth = async (req, res, next) => {
         firstName: given_name || "User",
         lastName: family_name || "",
         userName,
-        email,
+        email: email.toLowerCase(),
         googleId,
         profilePicture: picture || "",
         role: userType,
@@ -511,6 +575,9 @@ const handleGoogleAuth = async (req, res, next) => {
   }
 };
 
+// ============================================
+// GET CURRENT USER
+// ============================================
 const getCurrentUser = async (req, res, next) => {
   try {
     const user = await USER.findById(req.user.userId);
@@ -528,6 +595,9 @@ const getCurrentUser = async (req, res, next) => {
   }
 };
 
+// ============================================
+// UPDATE PROFILE
+// ============================================
 const updateProfile = async (req, res, next) => {
   try {
     const { userName, bio, firstName, lastName, preferences } = req.body;
@@ -592,6 +662,9 @@ const updateProfile = async (req, res, next) => {
   }
 };
 
+// ============================================
+// FORGOT PASSWORD
+// ============================================
 const forgotPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -600,7 +673,7 @@ const forgotPassword = async (req, res, next) => {
       return next(new ErrorResponse("Email is required", 400));
     }
 
-    const user = await USER.findOne({ email });
+    const user = await USER.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(200).json({
         success: true,
@@ -613,7 +686,7 @@ const forgotPassword = async (req, res, next) => {
 
     try {
       const clientUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
-      sendResetEmail({
+      const emailSent = await sendResetEmail({
         fullName: user.firstName + " " + user.lastName,
         clientUrl: clientUrl,
         email: user.email,
@@ -637,6 +710,9 @@ const forgotPassword = async (req, res, next) => {
   }
 };
 
+// ============================================
+// RESET PASSWORD
+// ============================================
 const resetPassword = async (req, res, next) => {
   try {
     const { token } = req.query;
@@ -690,6 +766,9 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
+// ============================================
+// CHANGE PASSWORD
+// ============================================
 const changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -729,6 +808,9 @@ const changePassword = async (req, res, next) => {
   }
 };
 
+// ============================================
+// UPDATE PREFERENCES
+// ============================================
 const updatePreferences = async (req, res, next) => {
   try {
     const { preferences } = req.body;
@@ -754,6 +836,9 @@ const updatePreferences = async (req, res, next) => {
   }
 };
 
+// ============================================
+// LOGOUT
+// ============================================
 const logout = async (req, res, next) => {
   try {
     res.status(200).json({
@@ -765,6 +850,9 @@ const logout = async (req, res, next) => {
   }
 };
 
+// ============================================
+// CHECK USERNAME AVAILABILITY
+// ============================================
 const checkUsernameAvailability = async (req, res, next) => {
   try {
     const { username } = req.query;
@@ -799,6 +887,9 @@ const checkUsernameAvailability = async (req, res, next) => {
   }
 };
 
+// ============================================
+// CHECK EMAIL AVAILABILITY
+// ============================================
 const checkEmailAvailability = async (req, res, next) => {
   try {
     const { email } = req.query;
@@ -814,7 +905,7 @@ const checkEmailAvailability = async (req, res, next) => {
       );
     }
 
-    const existingUser = await USER.findOne({ email });
+    const existingUser = await USER.findOne({ email: email.toLowerCase() });
 
     res.status(200).json({
       success: true,
@@ -825,6 +916,9 @@ const checkEmailAvailability = async (req, res, next) => {
   }
 };
 
+// ============================================
+// DELETE ACCOUNT
+// ============================================
 const deleteAccount = async (req, res, next) => {
   try {
     const userId = req.user.userId;
@@ -868,6 +962,9 @@ const deleteAccount = async (req, res, next) => {
   }
 };
 
+// ============================================
+// GET USER PROFILE
+// ============================================
 const getUserProfile = async (req, res, next) => {
   try {
     const { userId } = req.params;
@@ -913,4 +1010,5 @@ module.exports = {
   checkEmailAvailability,
   deleteAccount,
   getUserProfile,
+  deleteExpiredUnverifiedUsers,
 };

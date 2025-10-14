@@ -74,6 +74,11 @@ const userSchema = new mongoose.Schema({
   },
   emailVerificationToken: String,
   emailVerificationExpires: Date,
+  verificationResendAttempts: {
+    type: [Date],
+    default: [],
+    select: false,
+  },
   passwordResetToken: String,
   passwordResetExpires: Date,
   lastLogin: {
@@ -173,7 +178,6 @@ userSchema.pre("save", async function(next) {
 
 // Pre-save middleware for username generation for Google users
 userSchema.pre("save", async function(next) {
-  // Only run if this is a Google user without a username
   if (this.googleId && !this.userName) {
     try {
       const baseUsername = this.email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
@@ -181,7 +185,6 @@ userSchema.pre("save", async function(next) {
       let counter = 1;
       const originalUsername = username;
 
-      // Ensure unique username
       while (await this.constructor.findOne({ userName: username })) {
         username = `${originalUsername}${counter}`;
         counter++;
@@ -214,12 +217,10 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 // Method to generate secure random token with fallback
 userSchema.methods.generateSecureToken = function(length = 32) {
   try {
-    // Try using crypto.randomBytes first (more secure)
     return crypto.randomBytes(length).toString('hex');
   } catch (error) {
     console.error("crypto.randomBytes failed, using Math.random fallback:", error.message);
     
-    // Fallback using Math.random (less secure but functional)
     const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let result = '';
     for (let i = 0; i < length * 2; i++) {
@@ -262,6 +263,7 @@ userSchema.methods.verifyEmail = function() {
   this.isVerified = true;
   this.emailVerificationToken = undefined;
   this.emailVerificationExpires = undefined;
+  this.verificationResendAttempts = [];
   return this.save();
 };
 
@@ -368,7 +370,7 @@ userSchema.statics.getUserStats = async function() {
   const userCounts = await this.aggregate([
     {
       $match: {
-        status: { $ne: "deleted" } // Exclude deleted users
+        status: { $ne: "deleted" }
       }
     },
     {
@@ -428,7 +430,7 @@ userSchema.statics.getUserStats = async function() {
     {
       $match: {
         status: "active",
-        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } // Last 30 days
+        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
       }
     },
     {
@@ -481,6 +483,19 @@ userSchema.statics.cleanupExpiredTokens = async function() {
       }
     }
   );
+
+  return result;
+};
+
+// Static method to delete unverified users older than 7 days
+userSchema.statics.deleteUnverifiedOlderThan = async function(days = 7) {
+  const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  
+  const result = await this.deleteMany({
+    isVerified: false,
+    createdAt: { $lt: cutoffDate },
+    status: { $ne: "deleted" }
+  });
 
   return result;
 };

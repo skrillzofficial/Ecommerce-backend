@@ -1,5 +1,9 @@
 const sgMail = require('@sendgrid/mail');
-const { createResetTemplate, createWelcomeTemplate } = require("./emailTemplate");
+const { 
+  createResetTemplate, 
+  createWelcomeTemplate, 
+  createResendVerificationTemplate 
+} = require("./emailTemplate");
 
 // Initialize SendGrid
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
@@ -15,7 +19,7 @@ const sendMail = async ({ to, subject, html }) => {
   try {
     const msg = {
       to,
-      from: process.env.EMAIL || 'noreply@eventry.com', // Must be verified in SendGrid
+      from: process.env.EMAIL || 'noreply@eventry.com',
       subject,
       html,
     };
@@ -35,18 +39,39 @@ const sendMail = async ({ to, subject, html }) => {
   }
 };
 
+// ============================================
+// WELCOME EMAIL (Initial Registration)
+// ============================================
 const sendWelcomeEmail = async ({ fullName, clientUrl, email }) => {
   console.log("🔄 sendWelcomeEmail called for:", email);
-  const subject = "Welcome to Eventry";
+  const subject = "Welcome to Eventry - Verify Your Email";
   const html = createWelcomeTemplate(fullName, clientUrl);
   return await sendMail({ to: email, subject, html });
 };
 
+// ============================================
+// RESEND VERIFICATION EMAIL
+// ============================================
+const sendResendVerificationEmail = async ({ fullName, clientUrl, email }) => {
+  console.log("🔄 sendResendVerificationEmail called for:", email);
+  const subject = "Verify Your Email - Eventry";
+  const html = createResendVerificationTemplate(fullName, clientUrl);
+  return await sendMail({ to: email, subject, html });
+};
+
+// ============================================
+// PASSWORD RESET EMAIL
+// ============================================
 const sendResetEmail = async ({ fullName, clientUrl, email }) => {
   console.log("🔄 sendResetEmail called for:", email);
-  const subject = "Password Reset";
+  const subject = "Reset Your Password - Eventry";
   const html = createResetTemplate(fullName, clientUrl);
   return await sendMail({ to: email, subject, html });
 };
 
-module.exports = { sendWelcomeEmail, sendResetEmail };
+module.exports = { 
+  sendWelcomeEmail, 
+  sendResetEmail, 
+  sendResendVerificationEmail,
+  sendMail 
+};
