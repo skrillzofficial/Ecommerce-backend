@@ -8,8 +8,6 @@ const { sendWelcomeEmail, sendResetEmail } = require("../utils/sendEmail");
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
 const handleRegister = async (req, res, next) => {
   const { userName, email, password, userType } = req.body;
 
@@ -59,20 +57,24 @@ const handleRegister = async (req, res, next) => {
       isVerified: false,
     });
 
+    console.log("👤 User created:", user.email);
+
     let verificationToken;
     try {
       verificationToken = user.createEmailVerificationToken();
       await user.save({ validateBeforeSave: false });
+      console.log("🔐 Verification token created and saved");
     } catch (tokenError) {
-      return res.status(201).json({
-        success: true,
-        message:
-          "Account created successfully! Please use the resend verification feature to verify your email.",
-      });
+      console.error("❌ Token creation failed:", tokenError);
+      return next(
+        new ErrorResponse("Failed to generate verification token", 500)
+      );
     }
 
     try {
       const clientUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+      console.log("📨 Sending verification email to:", user.email);
+
       const emailSent = await sendWelcomeEmail({
         fullName: user.firstName + " " + user.lastName,
         clientUrl: clientUrl,
@@ -80,26 +82,34 @@ const handleRegister = async (req, res, next) => {
       });
 
       if (emailSent) {
+        console.log("✅ Registration successful, email sent");
         res.status(201).json({
           success: true,
           message:
             "Account created successfully! Please check your email to verify your account.",
         });
       } else {
+        // Email failed - delete the user or mark appropriately
+        console.warn(
+          "⚠️ Email failed to send, but user created. Advising resend."
+        );
         res.status(201).json({
           success: true,
           message:
-            "Account created successfully! Please use the resend verification feature to verify your email.",
+            "Account created but email failed. Use 'Resend Verification' to send the link.",
         });
       }
     } catch (emailError) {
+      console.error("❌ Email error caught:", emailError);
       res.status(201).json({
         success: true,
         message:
-          "Account created successfully! Please use the resend verification feature to verify your email.",
+          "Account created but email failed. Use 'Resend Verification' to send the link.",
       });
     }
   } catch (error) {
+    console.error("❌ Registration error:", error);
+
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
       const message =

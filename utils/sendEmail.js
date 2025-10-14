@@ -2,44 +2,56 @@ const nodemailer = require("nodemailer");
 const { createResetTemplate, createWelcomeTemplate } = require("./emailTemplate");
 
 const sendMail = async ({ to, subject, html }) => {
-    const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-            user: process.env.EMAIL,
-            pass: process.env.PASSWORD,
-        },
-        tls: {
-            rejectUnauthorized: false 
-        }
+  console.log("📧 Attempting to send email to:", to);
+  
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL,
+      pass: process.env.PASSWORD,
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+
+  try {
+    // Test connection first
+    await transporter.verify();
+    console.log("✅ SMTP connection verified");
+    
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL,
+      to: to,
+      subject: subject,
+      html: html,
     });
     
-    try {
-        const info = await transporter.sendMail({
-            from: process.env.EMAIL,
-            to: to,
-            subject: subject,
-            html: html,
-        });
-        console.log(` Email sent successfully: ${info.response}`);
-        return true; 
-    } catch (error) {
-        console.log(' Email sending failed:', error);
-        return false; 
-    }
-}
+    console.log("✅ Email sent successfully:", info.response);
+    return true;
+    
+  } catch (error) {
+    console.error("❌ Email sending failed:");
+    console.error("   Error:", error.message);
+    console.error("   Code:", error.code);
+    console.error("   Config - EMAIL:", process.env.EMAIL ? "SET" : "NOT SET");
+    console.error("   Config - PASSWORD:", process.env.PASSWORD ? "SET" : "NOT SET");
+    return false;
+  }
+};
 
-// function to send an email
 const sendWelcomeEmail = async ({ fullName, clientUrl, email }) => {
-    const subject = "Welcome to the awesome Eventry";
-    const html = createWelcomeTemplate(fullName, clientUrl);
-    return await sendMail({ to: email, subject, html }); 
-}
+  console.log("🔄 sendWelcomeEmail called for:", email);
+  const subject = "Welcome to Eventry";
+  const html = createWelcomeTemplate(fullName, clientUrl);
+  return await sendMail({ to: email, subject, html });
+};
 
-// function to send a password reset email
 const sendResetEmail = async ({ fullName, clientUrl, email }) => {
-    const subject = "Password Reset";
-    const html = createResetTemplate(fullName, clientUrl);
-    return await sendMail({ to: email, subject, html }); 
-}
+  console.log("🔄 sendResetEmail called for:", email);
+  const subject = "Password Reset";
+  const html = createResetTemplate(fullName, clientUrl);
+  return await sendMail({ to: email, subject, html });
+};
 
 module.exports = { sendWelcomeEmail, sendResetEmail };
