@@ -182,7 +182,7 @@ const verifyEmail = async (req, res, next) => {
     user.emailVerificationExpires = undefined;
     await user.save();
 
-    console.log("✅ Email verified successfully for:", user.email);
+    console.log(" Email verified successfully for:", user.email);
 
     const jwtToken = jwt.sign(
       {
@@ -202,7 +202,7 @@ const verifyEmail = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    console.error("❌ Email verification error:", error);
+    console.error(" Email verification error:", error);
     res.status(500).json({
       success: false,
       message: "Email verification failed",
