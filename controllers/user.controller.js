@@ -62,8 +62,34 @@ const handleRegister = async (req, res, next) => {
     let verificationToken;
     try {
       verificationToken = user.createEmailVerificationToken();
+
+      console.log("🔐 Token created in memory:");
+      console.log(
+        "   emailVerificationToken:",
+        user.emailVerificationToken
+          ? user.emailVerificationToken.substring(0, 20)
+          : "EMPTY"
+      );
+      console.log(
+        "   emailVerificationExpires:",
+        user.emailVerificationExpires
+      );
+
       await user.save({ validateBeforeSave: false });
-      console.log("🔐 Verification token created and saved");
+
+      // RE-FETCH from DB to confirm it was saved
+      const savedUser = await USER.findById(user._id);
+      console.log("✅ After save - re-fetched from DB:");
+      console.log(
+        "   emailVerificationToken:",
+        savedUser.emailVerificationToken
+          ? savedUser.emailVerificationToken.substring(0, 20)
+          : "NOT IN DB"
+      );
+      console.log(
+        "   emailVerificationExpires:",
+        savedUser.emailVerificationExpires
+      );
     } catch (tokenError) {
       console.error("❌ Token creation failed:", tokenError);
       return next(
@@ -89,7 +115,6 @@ const handleRegister = async (req, res, next) => {
             "Account created successfully! Please check your email to verify your account.",
         });
       } else {
-        // Email failed - delete the user or mark appropriately
         console.warn(
           "⚠️ Email failed to send, but user created. Advising resend."
         );
@@ -125,7 +150,6 @@ const handleRegister = async (req, res, next) => {
     next(new ErrorResponse("Registration failed. Please try again.", 500));
   }
 };
-
 const verifyEmail = async (req, res, next) => {
   try {
     console.log("=== VERIFY EMAIL ROUTE HIT ===");
