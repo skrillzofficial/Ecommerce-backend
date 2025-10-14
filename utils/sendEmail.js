@@ -3,7 +3,7 @@ const { createResetTemplate, createWelcomeTemplate } = require("./emailTemplate"
 
 const sendMail = async ({ to, subject, html }) => {
     const transporter = nodemailer.createTransport({
-        service: "587",
+        service: "gmail",
         auth: {
             user: process.env.EMAIL,
             pass: process.env.PASSWORD,
