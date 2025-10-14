@@ -1,39 +1,36 @@
-const nodemailer = require("nodemailer");
+const sgMail = require('@sendgrid/mail');
 const { createResetTemplate, createWelcomeTemplate } = require("./emailTemplate");
 
+// Initialize SendGrid
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
 const sendMail = async ({ to, subject, html }) => {
-  console.log("📧 Attempting to send email to:", to);
+  console.log("📧 Attempting to send email via SendGrid to:", to);
   
-  const transporter = nodemailer.createTransport({
-    host: "smtp.gmail.com",
-    port: 465, // Changed from default 587
-    secure: true, // Use SSL
-    auth: {
-      user: process.env.EMAIL,
-      pass: process.env.PASSWORD,
-    },
-  });
+  if (!process.env.SENDGRID_API_KEY) {
+    console.error("❌ SENDGRID_API_KEY not set in environment");
+    return false;
+  }
 
   try {
-    await transporter.verify();
-    console.log("✅ SMTP connection verified");
-    
-    const info = await transporter.sendMail({
-      from: process.env.EMAIL,
-      to: to,
-      subject: subject,
-      html: html,
-    });
-    
-    console.log("✅ Email sent successfully:", info.response);
+    const msg = {
+      to,
+      from: process.env.EMAIL || 'noreply@eventry.com', // Must be verified in SendGrid
+      subject,
+      html,
+    };
+
+    const response = await sgMail.send(msg);
+    console.log("✅ Email sent successfully via SendGrid");
+    console.log("   Response code:", response[0].statusCode);
     return true;
-    
+
   } catch (error) {
-    console.error("❌ Email sending failed:");
-    console.error("   Error:", error.message);
-    console.error("   Code:", error.code);
-    console.error("   Config - EMAIL:", process.env.EMAIL ? "SET" : "NOT SET");
-    console.error("   Config - PASSWORD:", process.env.PASSWORD ? "SET" : "NOT SET");
+    console.error("❌ SendGrid error:");
+    console.error("   Message:", error.message);
+    if (error.response?.body?.errors) {
+      console.error("   Details:", error.response.body.errors);
+    }
     return false;
   }
 };
