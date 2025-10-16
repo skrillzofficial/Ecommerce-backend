@@ -5,26 +5,33 @@ const cors = require("cors");
 const cron = require("node-cron");
 const cloudinary = require("cloudinary").v2;
 const fileUpload = require("express-fileupload");
+const cookieParser = require("cookie-parser");
+const helmet = require("helmet");
+const morgan = require("morgan");
 
 const PORT = process.env.PORT || 4000;
 
-// Routes and middleware
+// Routes
 const authRouter = require("./routes/userRoute");
 const superAdminRoutes = require("./routes/superAdminRoute");
+const eventRoutes = require("./routes/eventRoute");
+
+// Middleware
 const errorHandler = require("./middleware/errorHandler");
+const { sanitizeInput } = require("./middleware/validation");
+const { cleanupTempFiles } = require("./middleware/fileUpload");
 
 // Import cleanup function
-const { deleteExpiredUnverifiedUsers } = require("./controllers/user.controller");
+const {
+  deleteExpiredUnverifiedUsers,
+} = require("./controllers/user.controller");
 
 // EXPRESS SERVER
 const app = express();
 
-// MIDDLEWARE - Cloudinary configuration
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// SECURITY MIDDLEWARE
+// Helmet for security headers
+app.use(helmet());
 
 // CORS configuration
 app.use(
@@ -33,6 +40,7 @@ app.use(
       "https://eventry-swart.vercel.app",
       "http://localhost:5174",
       "http://localhost:5173",
+      "http://localhost:3000",
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -40,37 +48,64 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+// CLOUDINARY CONFIGURATION
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
+// Cookie parser (MOVE THIS BEFORE BODY PARSER)
+app.use(cookieParser());
+
+//  BODY PARSER MIDDLEWARE
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+//  FILE UPLOAD MIDDLEWARE
 app.use(
   fileUpload({
     useTempFiles: true,
-    limits: { fileSize: 10 * 1024 * 1024 },
+    tempFileDir: "/tmp/",
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    abortOnLimit: true,
+    createParentPath: true,
   })
 );
 
-// ============================================
-// SCHEDULE DAILY CLEANUP
-// ============================================
-// Runs every day at 2:00 AM
+// INPUT SANITIZATION
+app.use(sanitizeInput);
+
+//  LOGGING MIDDLEWARE
+// Log requests in development mode
+if (process.env.NODE_ENV === "development") {
+  app.use(morgan("dev"));
+}
+
+//  SCHEDULED TASKS
+// Cleanup unverified users daily at 2:00 AM
 cron.schedule("0 2 * * *", async () => {
-  console.log("🔄 Running scheduled cleanup of unverified users...");
+  console.log("Running scheduled cleanup of unverified users...");
   await deleteExpiredUnverifiedUsers();
 });
 
-// Optional: Run cleanup once on server startup (after DB connection)
+// Run cleanup once on server startup (after DB connection)
 let cleanupOnStartup = true;
 
-// Public routes first, then protected routes
-app.use("/api/v1/", authRouter);
-app.use("/api/v1/", superAdminRoutes);
-
-// Test routes
-app.get("/", (req, res) => {
-  res.send("Server is running. Use Postman to test endpoints.");
+//  API ROUTES
+// Health check endpoint (before other routes)
+app.get("/api/v1/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Server is healthy",
+    timestamp: new Date().toISOString(),
+    database:
+      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    environment: process.env.NODE_ENV || "development",
+  });
 });
 
+// Test route
 app.get("/api/v1/test", (req, res) => {
   res.status(200).json({
     success: true,
@@ -79,81 +114,121 @@ app.get("/api/v1/test", (req, res) => {
   });
 });
 
-// Health check endpoint
-app.get("/api/v1/health", (req, res) => {
+// Root route
+app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
-    message: "Server is healthy",
-    timestamp: new Date().toISOString(),
-    database:
-      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    message: "Eventry API Server",
+    version: "1.0.0",
+    endpoints: {
+      health: "/api/v1/health",
+      auth: "/api/v1/auth",
+      events: "/api/v1/events",
+      admin: "/api/v1/admin",
+    },
   });
 });
 
+// Main API routes
+app.use("/api/v1/", authRouter);
+app.use("/api/v1/events", eventRoutes);
+app.use("/api/v1/admin", superAdminRoutes);
+
+//  ERROR HANDLING
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,
+    timestamp: new Date().toISOString(),
   });
 });
 
-// Error handler middleware
+// Cleanup temp files on error
+app.use(cleanupTempFiles);
+
+// Global error handler
 app.use(errorHandler);
 
-// ============================================
-// DATABASE AND SERVER START
-// ============================================
+//  DATABASE CONNECTION & SERVER START
 const startServer = async () => {
   try {
+    // Connect to MongoDB
     await mongoose.connect(process.env.MONGODB_URL, {
       dbName: process.env.DB_NAME || "EventDB",
     });
-    console.log("✅ MongoDatabase connected successfully");
+    console.log("MongoDB connected successfully");
+    console.log(`Database: ${process.env.DB_NAME || "EventDB"}`);
 
     // Run cleanup once on startup after DB is connected
     if (cleanupOnStartup) {
-      console.log("🧹 Running initial cleanup on server startup...");
+      console.log(" Running initial cleanup on server startup...");
       await deleteExpiredUnverifiedUsers();
       cleanupOnStartup = false;
     }
 
+    // Start Express server
     app.listen(PORT, () => {
-      console.log(`✅ Server is running on port ${PORT}`);
-      console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL}`);
-      console.log(`📅 Cleanup scheduled for daily at 2:00 AM`);
+      console.log(`   Server is running on port ${PORT}`);
+      console.log(`   Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`   Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
+      console.log(`   API Base: http://localhost:${PORT}/api/v1`);
+      console.log(" Cleanup scheduled for daily at 2:00 AM");
+      console.log(" Server ready to accept connections\n");
     });
   } catch (error) {
-    console.error("❌ Error connecting to the database:", error);
+    console.error(" Error connecting to the database:", error);
     process.exit(1);
   }
 };
 
-// ============================================
-// GRACEFUL SHUTDOWN
-// ============================================
+//  GRACEFUL SHUTDOWN
 process.on("SIGINT", async () => {
-  console.log("\n⏹️  Shutting down gracefully...");
+  console.log(" Shutting down...");
   try {
     await mongoose.connection.close();
-    console.log("✅ Database connection closed");
+    console.log("Database connection closed");
+    console.log(" Server shut down successfully");
     process.exit(0);
   } catch (error) {
-    console.error("❌ Error during shutdown:", error);
+    console.error(" Error during shutdown:", error);
     process.exit(1);
   }
 });
 
+// Handle SIGTERM (server termination)
 process.on("SIGTERM", async () => {
-  console.log("\n⏹️  Server termination signal received...");
+  console.log(" Server termination signal received...");
   try {
     await mongoose.connection.close();
-    console.log("✅ Database connection closed");
+    console.log(" Database connection closed");
+    console.log(" Server terminated successfully");
     process.exit(0);
   } catch (error) {
-    console.error("❌ Error during shutdown:", error);
+    console.error(" Error during shutdown:", error);
     process.exit(1);
   }
 });
 
+// Handle uncaught exceptions
+process.on("uncaughtException", (error) => {
+  console.error("UNCAUGHT EXCEPTION! Shutting down...");
+  console.error(error.name, error.message);
+  console.error(error.stack);
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on("unhandledRejection", (error) => {
+  console.error(" UNHANDLED REJECTION! Shutting down...");
+  console.error(error);
+  mongoose.connection.close().then(() => {
+    process.exit(1);
+  });
+});
+
+// Start the server
 startServer();
+
+// Export app for testing purposes
+module.exports = app;

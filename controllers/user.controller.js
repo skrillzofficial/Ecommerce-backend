@@ -8,9 +8,6 @@ const { sendWelcomeEmail, sendResetEmail, sendResendVerificationEmail } = requir
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 
-// ============================================
-// CLEANUP FUNCTION - Delete unverified users older than 7 days
-// ============================================
 const deleteExpiredUnverifiedUsers = async () => {
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -21,20 +18,14 @@ const deleteExpiredUnverifiedUsers = async () => {
     });
 
     if (result.deletedCount > 0) {
-      console.log(`🗑️ Cleanup: Deleted ${result.deletedCount} unverified users older than 7 days`);
+      console.log(` Cleanup: Deleted ${result.deletedCount} unverified users older than 7 days`);
     }
   } catch (error) {
-    console.error("❌ Cleanup error:", error);
+    console.error(" Cleanup error:", error);
   }
 };
 
-// Schedule cleanup to run daily at 2 AM
-// If using node-cron: cron.schedule('0 2 * * *', deleteExpiredUnverifiedUsers);
-// Or manually call this in your server initialization
 
-// ============================================
-// REGISTER HANDLER
-// ============================================
 const handleRegister = async (req, res, next) => {
   const { userName, email, password, userType } = req.body;
 
@@ -84,13 +75,13 @@ const handleRegister = async (req, res, next) => {
       isVerified: false,
     });
 
-    console.log("👤 User created:", user.email);
+    console.log(" User created:", user.email);
 
     let verificationToken;
     try {
       verificationToken = user.createEmailVerificationToken();
 
-      console.log("✉️ Token created in memory:");
+      console.log(" Token created in memory:");
       console.log(
         "   emailVerificationToken:",
         user.emailVerificationToken
@@ -105,7 +96,7 @@ const handleRegister = async (req, res, next) => {
       await user.save({ validateBeforeSave: false });
 
       const savedUser = await USER.findById(user._id);
-      console.log("✅ After save - re-fetched from DB:");
+      console.log(" After save - re-fetched from DB:");
       console.log(
         "   emailVerificationToken:",
         savedUser.emailVerificationToken
@@ -117,7 +108,7 @@ const handleRegister = async (req, res, next) => {
         savedUser.emailVerificationExpires
       );
     } catch (tokenError) {
-      console.error("❌ Token creation failed:", tokenError);
+      console.error(" Token creation failed:", tokenError);
       return next(
         new ErrorResponse("Failed to generate verification token", 500)
       );
@@ -125,7 +116,7 @@ const handleRegister = async (req, res, next) => {
 
     try {
       const clientUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
-      console.log("📨 Sending verification email to:", user.email);
+      console.log(" Sending verification email to:", user.email);
 
       const emailSent = await sendWelcomeEmail({
         fullName: user.firstName + " " + user.lastName,
@@ -134,7 +125,7 @@ const handleRegister = async (req, res, next) => {
       });
 
       if (emailSent) {
-        console.log("✅ Registration successful, email sent");
+        console.log(" Registration successful, email sent");
         res.status(201).json({
           success: true,
           message:
@@ -151,7 +142,7 @@ const handleRegister = async (req, res, next) => {
         });
       }
     } catch (emailError) {
-      console.error("❌ Email error caught:", emailError);
+      console.error(" Email error caught:", emailError);
       res.status(201).json({
         success: true,
         message:
@@ -159,7 +150,7 @@ const handleRegister = async (req, res, next) => {
       });
     }
   } catch (error) {
-    console.error("❌ Registration error:", error);
+    console.error(" Registration error:", error);
 
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
@@ -177,16 +168,14 @@ const handleRegister = async (req, res, next) => {
   }
 };
 
-// ============================================
-// EMAIL VERIFICATION HANDLER
-// ============================================
+
 const verifyEmail = async (req, res, next) => {
   try {
     console.log("=== VERIFY EMAIL ROUTE HIT ===");
     const token = req.query.token || req.params.token;
 
     if (!token) {
-      console.log("❌ No token provided");
+      console.log(" No token provided");
       return res.status(400).json({
         success: false,
         message: "Invalid verification token",
@@ -202,7 +191,7 @@ const verifyEmail = async (req, res, next) => {
     });
 
     if (userWithToken && userWithToken.isVerified) {
-      console.log("✅ User already verified, allowing login");
+      console.log(" User already verified, allowing login");
       
       const jwtToken = jwt.sign(
         {
@@ -229,14 +218,14 @@ const verifyEmail = async (req, res, next) => {
     });
 
     if (!user) {
-      console.log("❌ No valid user found with matching token");
+      console.log(" No valid user found with matching token");
       
       const expiredUser = await USER.findOne({
         emailVerificationToken: hashedToken,
       });
 
       if (expiredUser) {
-        console.log("⚠️ Token found but EXPIRED");
+        console.log(" Token found but EXPIRED");
         return res.status(400).json({
           success: false,
           message: "Verification link has expired. Please request a new one.",
@@ -255,7 +244,7 @@ const verifyEmail = async (req, res, next) => {
     user.emailVerificationExpires = undefined;
     await user.save();
 
-    console.log("✅ Email verified successfully for:", user.email);
+    console.log(" Email verified successfully for:", user.email);
 
     const jwtToken = jwt.sign(
       {
@@ -275,7 +264,7 @@ const verifyEmail = async (req, res, next) => {
       user: user.getProfile(),
     });
   } catch (error) {
-    console.error("❌ Email verification error:", error);
+    console.error(" Email verification error:", error);
     res.status(500).json({
       success: false,
       message: "Email verification failed",
@@ -284,9 +273,7 @@ const verifyEmail = async (req, res, next) => {
   }
 };
 
-// ============================================
-// RESEND VERIFICATION EMAIL HANDLER
-// ============================================
+
 const resendVerificationEmail = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -333,7 +320,7 @@ const resendVerificationEmail = async (req, res, next) => {
 
     try {
       const clientUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
-      console.log("📨 Resending verification email to:", user.email);
+      console.log("Resending verification email to:", user.email);
 
       const emailSent = await sendResendVerificationEmail({
         fullName: user.firstName + " " + user.lastName,
@@ -342,7 +329,7 @@ const resendVerificationEmail = async (req, res, next) => {
       });
 
       if (emailSent) {
-        console.log("✅ Resend successful");
+        console.log(" Resend successful");
         res.status(200).json({
           success: true,
           message: "Verification email sent successfully! Check your inbox.",
@@ -356,7 +343,7 @@ const resendVerificationEmail = async (req, res, next) => {
         );
       }
     } catch (emailError) {
-      console.error("❌ Email error:", emailError);
+      console.error(" Email error:", emailError);
       return next(
         new ErrorResponse(
           "Failed to send verification email. Please try again.",
@@ -365,14 +352,12 @@ const resendVerificationEmail = async (req, res, next) => {
       );
     }
   } catch (error) {
-    console.error("❌ Resend verification error:", error);
+    console.error(" Resend verification error:", error);
     next(new ErrorResponse("Failed to resend verification email", 500));
   }
 };
 
-// ============================================
-// LOGIN HANDLER
-// ============================================
+
 const handleLogin = async (req, res, next) => {
   const { email, password, userType } = req.body;
 
@@ -451,9 +436,7 @@ const handleLogin = async (req, res, next) => {
   }
 };
 
-// ============================================
-// GOOGLE AUTH HANDLER
-// ============================================
+
 const handleGoogleAuth = async (req, res, next) => {
   const { token, userType } = req.body;
 
@@ -575,9 +558,7 @@ const handleGoogleAuth = async (req, res, next) => {
   }
 };
 
-// ============================================
-// GET CURRENT USER
-// ============================================
+
 const getCurrentUser = async (req, res, next) => {
   try {
     const user = await USER.findById(req.user.userId);
@@ -595,9 +576,6 @@ const getCurrentUser = async (req, res, next) => {
   }
 };
 
-// ============================================
-// UPDATE PROFILE
-// ============================================
 const updateProfile = async (req, res, next) => {
   try {
     const { userName, bio, firstName, lastName, preferences } = req.body;
@@ -662,9 +640,7 @@ const updateProfile = async (req, res, next) => {
   }
 };
 
-// ============================================
-// FORGOT PASSWORD
-// ============================================
+
 const forgotPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -710,9 +686,7 @@ const forgotPassword = async (req, res, next) => {
   }
 };
 
-// ============================================
-// RESET PASSWORD
-// ============================================
+
 const resetPassword = async (req, res, next) => {
   try {
     const { token } = req.query;
@@ -766,9 +740,7 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
-// ============================================
-// CHANGE PASSWORD
-// ============================================
+
 const changePassword = async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -808,9 +780,7 @@ const changePassword = async (req, res, next) => {
   }
 };
 
-// ============================================
-// UPDATE PREFERENCES
-// ============================================
+
 const updatePreferences = async (req, res, next) => {
   try {
     const { preferences } = req.body;
@@ -836,9 +806,7 @@ const updatePreferences = async (req, res, next) => {
   }
 };
 
-// ============================================
-// LOGOUT
-// ============================================
+
 const logout = async (req, res, next) => {
   try {
     res.status(200).json({
@@ -850,9 +818,7 @@ const logout = async (req, res, next) => {
   }
 };
 
-// ============================================
-// CHECK USERNAME AVAILABILITY
-// ============================================
+
 const checkUsernameAvailability = async (req, res, next) => {
   try {
     const { username } = req.query;
@@ -887,9 +853,7 @@ const checkUsernameAvailability = async (req, res, next) => {
   }
 };
 
-// ============================================
-// CHECK EMAIL AVAILABILITY
-// ============================================
+
 const checkEmailAvailability = async (req, res, next) => {
   try {
     const { email } = req.query;
@@ -916,9 +880,7 @@ const checkEmailAvailability = async (req, res, next) => {
   }
 };
 
-// ============================================
-// DELETE ACCOUNT
-// ============================================
+
 const deleteAccount = async (req, res, next) => {
   try {
     const userId = req.user.userId;
@@ -962,9 +924,7 @@ const deleteAccount = async (req, res, next) => {
   }
 };
 
-// ============================================
-// GET USER PROFILE
-// ============================================
+
 const getUserProfile = async (req, res, next) => {
   try {
     const { userId } = req.params;
