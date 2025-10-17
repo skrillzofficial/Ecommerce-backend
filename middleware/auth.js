@@ -40,9 +40,11 @@ const protect = async (req, res, next) => {
         return next(new ErrorResponse("Account has been deactivated", 403));
       }
 
-      // Attach user to request
+      //  Attach user with multiple ID formats for compatibility
       req.user = {
-        userId: user._id,
+        _id: user._id,       
+        id: user._id,         
+        userId: user._id,     
         email: user.email,
         role: user.role,
         userName: user.userName,
@@ -81,7 +83,6 @@ const authorize = (...roles) => {
   };
 };
 
-// Optional auth - Attach user if token exists, but don't fail if it doesn't
 const optionalAuth = async (req, res, next) => {
   try {
     let token;
@@ -102,6 +103,8 @@ const optionalAuth = async (req, res, next) => {
 
         if (user && user.isActive && user.status === "active") {
           req.user = {
+            _id: user._id,
+            id: user._id,
             userId: user._id,
             email: user.email,
             role: user.role,
@@ -131,10 +134,13 @@ const checkOwnership = (model) => {
         return next(new ErrorResponse("Resource not found", 404));
       }
 
+      // FIXED: Use consistent user ID format
+      const userId = req.user._id || req.user.userId;
+
       // Check if user owns the resource or is superadmin
       if (
-        resource.organizer?.toString() !== req.user.userId &&
-        resource.user?.toString() !== req.user.userId &&
+        resource.organizer?.toString() !== userId.toString() &&
+        resource.user?.toString() !== userId.toString() &&
         req.user.role !== "superadmin"
       ) {
         return next(
@@ -161,7 +167,7 @@ const rateLimit = (maxRequests = 100, windowMs = 15 * 60 * 1000) => {
       return next();
     }
 
-    const userId = req.user.userId.toString();
+    const userId = (req.user._id || req.user.userId).toString();
     const now = Date.now();
     const userRequests = requests.get(userId) || [];
 
