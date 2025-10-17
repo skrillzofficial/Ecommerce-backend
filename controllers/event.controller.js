@@ -28,7 +28,19 @@ const createEvent = async (req, res, next) => {
     } = req.body;
 
     // Validate required fields
-    if (!title || !description || !category || !date || !time || !endTime || !venue || !address || !city || price === undefined || !capacity) {
+    if (
+      !title ||
+      !description ||
+      !category ||
+      !date ||
+      !time ||
+      !endTime ||
+      !venue ||
+      !address ||
+      !city ||
+      price === undefined ||
+      !capacity
+    ) {
       return next(new ErrorResponse("Please provide all required fields", 400));
     }
 
@@ -46,8 +58,8 @@ const createEvent = async (req, res, next) => {
     // Handle image uploads
     let uploadedImages = [];
     if (req.files && req.files.images) {
-      const imageFiles = Array.isArray(req.files.images) 
-        ? req.files.images 
+      const imageFiles = Array.isArray(req.files.images)
+        ? req.files.images
         : [req.files.images];
 
       if (imageFiles.length > 3) {
@@ -106,7 +118,11 @@ const createEvent = async (req, res, next) => {
         companyName: organizer.organizerInfo?.companyName || "",
       },
       images: uploadedImages,
-      tags: tags ? (Array.isArray(tags) ? tags : tags.split(",").map(t => t.trim())) : [],
+      tags: tags
+        ? Array.isArray(tags)
+          ? tags
+          : tags.split(",").map((t) => t.trim())
+        : [],
       requirements,
       cancellationPolicy,
       refundPolicy: refundPolicy || "partial",
@@ -124,7 +140,7 @@ const createEvent = async (req, res, next) => {
     });
   } catch (error) {
     console.error("Create event error:", error);
-    
+
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map((val) => val.message);
       return next(new ErrorResponse(messages.join(", "), 400));
@@ -236,7 +252,10 @@ const getAllEvents = async (req, res, next) => {
       .sort(sortOption)
       .skip(skip)
       .limit(limitNum)
-      .populate("organizer", "firstName lastName userName profilePicture organizerInfo");
+      .populate(
+        "organizer",
+        "firstName lastName userName profilePicture organizerInfo"
+      );
 
     // Get total count for pagination
     const total = await Event.countDocuments(query);
@@ -264,13 +283,22 @@ const getEventById = async (req, res, next) => {
 
     // Try to find by ID first, then by slug
     let event = await Event.findById(id)
-      .populate("organizer", "firstName lastName userName email profilePicture organizerInfo")
+      .populate(
+        "organizer",
+        "firstName lastName userName email profilePicture organizerInfo"
+      )
       .populate("attendees.user", "firstName lastName userName profilePicture");
 
     if (!event) {
       event = await Event.findOne({ slug: id })
-        .populate("organizer", "firstName lastName userName email profilePicture organizerInfo")
-        .populate("attendees.user", "firstName lastName userName profilePicture");
+        .populate(
+          "organizer",
+          "firstName lastName userName email profilePicture organizerInfo"
+        )
+        .populate(
+          "attendees.user",
+          "firstName lastName userName profilePicture"
+        );
     }
 
     if (!event) {
@@ -299,22 +327,37 @@ const updateEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Find event
-    let event = await Event.findById(id);
+    // Find event and populate organizer
+    let event = await Event.findById(id).populate("organizer", "_id");
 
     if (!event) {
       return next(new ErrorResponse("Event not found", 404));
     }
 
-    // Check ownership
-    if (event.organizer.toString() !== req.user.userId && req.user.role !== "superadmin") {
-      return next(new ErrorResponse("Not authorized to update this event", 403));
+    // DEBUG: Log user and event info
+    console.log("Update Event - Debug Info:", {
+      eventId: event._id,
+      eventOrganizer: event.organizer?._id || event.organizer,
+      currentUserId: req.user._id || req.user.id,
+      currentUserRole: req.user.role,
+      userObject: req.user,
+    });
+
+    // Check ownership - FIXED: Use req.user._id or req.user.id
+    const eventOrganizerId =
+      event.organizer?._id?.toString() || event.organizer?.toString();
+    const currentUserId = req.user._id?.toString() || req.user.id?.toString();
+
+    if (eventOrganizerId !== currentUserId && req.user.role !== "superadmin") {
+      return next(
+        new ErrorResponse("Not authorized to update this event", 403)
+      );
     }
 
     // Handle new image uploads
     if (req.files && req.files.images) {
-      const imageFiles = Array.isArray(req.files.images) 
-        ? req.files.images 
+      const imageFiles = Array.isArray(req.files.images)
+        ? req.files.images
         : [req.files.images];
 
       if (event.images.length + imageFiles.length > 3) {
@@ -350,12 +393,52 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
+    // Handle JSON fields from frontend
+    if (req.body.tags && typeof req.body.tags === "string") {
+      try {
+        req.body.tags = JSON.parse(req.body.tags);
+      } catch (e) {
+        console.error("Error parsing tags:", e);
+      }
+    }
+
+    if (req.body.includes && typeof req.body.includes === "string") {
+      try {
+        req.body.includes = JSON.parse(req.body.includes);
+      } catch (e) {
+        console.error("Error parsing includes:", e);
+      }
+    }
+
+    if (req.body.requirements && typeof req.body.requirements === "string") {
+      try {
+        req.body.requirements = JSON.parse(req.body.requirements);
+      } catch (e) {
+        console.error("Error parsing requirements:", e);
+      }
+    }
+
     // Update allowed fields
     const allowedUpdates = [
-      "title", "description", "category", "date", "time", "endTime",
-      "venue", "address", "city", "price", "capacity", "tags",
-      "requirements", "cancellationPolicy", "refundPolicy", "status",
-      "isFeatured"
+      "title",
+      "description",
+      "longDescription",
+      "category",
+      "date",
+      "time",
+      "endTime",
+      "venue",
+      "address",
+      "city",
+      "price",
+      "capacity",
+      "tags",
+      "includes",
+      "requirements",
+      "cancellationPolicy",
+      "refundPolicy",
+      "status",
+      "isFeatured",
     ];
 
     allowedUpdates.forEach((field) => {
@@ -364,8 +447,19 @@ const updateEvent = async (req, res, next) => {
           event[field] = new Date(req.body[field]);
         } else if (field === "price" || field === "capacity") {
           event[field] = parseFloat(req.body[field]);
-        } else if (field === "tags" && typeof req.body[field] === "string") {
-          event[field] = req.body[field].split(",").map(t => t.trim());
+        } else if (
+          field === "tags" ||
+          field === "includes" ||
+          field === "requirements"
+        ) {
+          // Handle array fields
+          if (Array.isArray(req.body[field])) {
+            event[field] = req.body[field];
+          } else if (typeof req.body[field] === "string") {
+            event[field] = req.body[field]
+              .split(",")
+              .map((item) => item.trim());
+          }
         } else {
           event[field] = req.body[field];
         }
@@ -387,7 +481,7 @@ const updateEvent = async (req, res, next) => {
     });
   } catch (error) {
     console.error("Update event error:", error);
-    
+
     if (error.name === "ValidationError") {
       const messages = Object.values(error.errors).map((val) => val.message);
       return next(new ErrorResponse(messages.join(", "), 400));
@@ -411,7 +505,10 @@ const deleteEventImage = async (req, res, next) => {
     }
 
     // Check ownership
-    if (event.organizer.toString() !== req.user.userId && req.user.role !== "superadmin") {
+    if (
+      event.organizer.toString() !== req.user.userId &&
+      req.user.role !== "superadmin"
+    ) {
       return next(new ErrorResponse("Not authorized", 403));
     }
 
@@ -459,8 +556,13 @@ const deleteEvent = async (req, res, next) => {
     }
 
     // Check ownership
-    if (event.organizer.toString() !== req.user.userId && req.user.role !== "superadmin") {
-      return next(new ErrorResponse("Not authorized to delete this event", 403));
+    if (
+      event.organizer.toString() !== req.user.userId &&
+      req.user.role !== "superadmin"
+    ) {
+      return next(
+        new ErrorResponse("Not authorized to delete this event", 403)
+      );
     }
 
     // Check if event has bookings
@@ -582,7 +684,7 @@ const bookEventTicket = async (req, res, next) => {
 
     // Check if user already booked
     const existingBooking = event.attendees.find(
-      a => a.user.toString() === req.user.userId && a.status === "confirmed"
+      (a) => a.user.toString() === req.user.userId && a.status === "confirmed"
     );
 
     if (existingBooking) {
@@ -662,11 +764,11 @@ const getMyBookings = async (req, res, next) => {
       .populate("organizer", "firstName lastName userName organizerInfo");
 
     // Filter to only include user's booking details
-    const bookings = events.map(event => {
+    const bookings = events.map((event) => {
       const userBooking = event.attendees.find(
-        a => a.user.toString() === req.user.userId
+        (a) => a.user.toString() === req.user.userId
       );
-      
+
       return {
         event: {
           id: event._id,
@@ -752,8 +854,13 @@ const cancelEvent = async (req, res, next) => {
     }
 
     // Check ownership
-    if (event.organizer.toString() !== req.user.userId && req.user.role !== "superadmin") {
-      return next(new ErrorResponse("Not authorized to cancel this event", 403));
+    if (
+      event.organizer.toString() !== req.user.userId &&
+      req.user.role !== "superadmin"
+    ) {
+      return next(
+        new ErrorResponse("Not authorized to cancel this event", 403)
+      );
     }
 
     await event.cancelEvent(reason);
