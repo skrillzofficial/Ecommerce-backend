@@ -88,7 +88,7 @@ router.post(
 
 // Update event
 router.patch(
-  "/:id",
+  "/events/:id",
   authorize("organizer", "superadmin"),
   validateImages,
   validateEventUpdate,
