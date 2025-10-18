@@ -1,5 +1,31 @@
 const ErrorResponse = require("../utils/errorResponse");
 
+// Helper function to get value from req.body considering array notation
+const getValue = (body, key) => {
+  // Check for array notation first (e.g., field[])
+  if (body[`${key}[]`] !== undefined) {
+    return body[`${key}[]`];
+  }
+  // Then check regular field
+  return body[key];
+};
+
+// Helper function to parse array from various formats
+const parseArray = (value) => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [value];
+    } catch (e) {
+      return value.split(',').map(v => v.trim()).filter(Boolean);
+    }
+  }
+  return [];
+};
+
 // Validate event creation data
 const validateEventCreation = (req, res, next) => {
   const {
@@ -108,29 +134,44 @@ const validateEventCreation = (req, res, next) => {
     errors.push(`City must be one of: ${validCities.join(", ")}`);
   }
 
-  // Price validation
-  if (price === undefined || price === null) {
-    errors.push("Price is required");
-  } else {
-    const priceNum = parseFloat(price);
-    if (isNaN(priceNum) || priceNum < 0) {
-      errors.push("Price must be a non-negative number");
-    }
-    if (priceNum > 10000000) {
-      errors.push("Price seems unreasonably high");
+  // Price validation - ONLY if ticketTypes is not provided
+  const ticketTypes = req.body.ticketTypes;
+  let hasTicketTypes = false;
+  
+  if (ticketTypes) {
+    try {
+      const parsed = typeof ticketTypes === 'string' ? JSON.parse(ticketTypes) : ticketTypes;
+      hasTicketTypes = Array.isArray(parsed) && parsed.length > 0;
+    } catch (e) {
+      // Not valid ticket types
     }
   }
 
-  // Capacity validation
-  if (!capacity) {
-    errors.push("Capacity is required");
-  } else {
-    const capacityNum = parseInt(capacity);
-    if (isNaN(capacityNum) || capacityNum < 1) {
-      errors.push("Capacity must be at least 1");
+  if (!hasTicketTypes) {
+    // Only validate price/capacity if no ticket types
+    if (price === undefined || price === null || price === '') {
+      errors.push("Price is required");
+    } else {
+      const priceNum = parseFloat(price);
+      if (isNaN(priceNum) || priceNum < 0) {
+        errors.push("Price must be a non-negative number");
+      }
+      if (priceNum > 10000000) {
+        errors.push("Price seems unreasonably high");
+      }
     }
-    if (capacityNum > 100000) {
-      errors.push("Capacity seems unreasonably high");
+
+    // Capacity validation
+    if (!capacity || capacity === '') {
+      errors.push("Capacity is required");
+    } else {
+      const capacityNum = parseInt(capacity);
+      if (isNaN(capacityNum) || capacityNum < 1) {
+        errors.push("Capacity must be at least 1");
+      }
+      if (capacityNum > 100000) {
+        errors.push("Capacity seems unreasonably high");
+      }
     }
   }
 
@@ -145,28 +186,37 @@ const validateEventCreation = (req, res, next) => {
 const validateEventUpdate = (req, res, next) => {
   const errors = [];
 
+  // Get values considering array notation
+  const title = getValue(req.body, 'title');
+  const description = getValue(req.body, 'description');
+  const category = getValue(req.body, 'category');
+  const city = getValue(req.body, 'city');
+  const date = getValue(req.body, 'date');
+  const price = getValue(req.body, 'price');
+  const capacity = getValue(req.body, 'capacity');
+
   // Title validation (if provided)
-  if (req.body.title !== undefined) {
-    if (req.body.title.trim().length < 5) {
+  if (title !== undefined) {
+    if (title.trim().length < 5) {
       errors.push("Title must be at least 5 characters long");
     }
-    if (req.body.title.length > 200) {
+    if (title.length > 200) {
       errors.push("Title must not exceed 200 characters");
     }
   }
 
   // Description validation (if provided)
-  if (req.body.description !== undefined) {
-    if (req.body.description.trim().length < 50) {
+  if (description !== undefined) {
+    if (description.trim().length < 50) {
       errors.push("Description must be at least 50 characters long");
     }
-    if (req.body.description.length > 5000) {
+    if (description.length > 5000) {
       errors.push("Description must not exceed 5000 characters");
     }
   }
 
   // Category validation (if provided)
-  if (req.body.category !== undefined) {
+  if (category !== undefined) {
     const validCategories = [
       "Technology",
       "Business",
@@ -181,7 +231,7 @@ const validateEventUpdate = (req, res, next) => {
       "Networking",
       "Other"
     ];
-    if (!validCategories.includes(req.body.category)) {
+    if (!validCategories.includes(category)) {
       errors.push(
         `Category must be one of: ${validCategories.join(", ")}`
       );
@@ -189,7 +239,7 @@ const validateEventUpdate = (req, res, next) => {
   }
 
   // City validation (if provided)
-  if (req.body.city !== undefined) {
+  if (city !== undefined) {
     const validCities = [
       "Lagos",
       "Abuja",
@@ -205,14 +255,14 @@ const validateEventUpdate = (req, res, next) => {
       "Abeokuta",
       "Other"
     ];
-    if (!validCities.includes(req.body.city)) {
+    if (!validCities.includes(city)) {
       errors.push(`City must be one of: ${validCities.join(", ")}`);
     }
   }
 
   // Date validation (if provided)
-  if (req.body.date !== undefined) {
-    const eventDate = new Date(req.body.date);
+  if (date !== undefined) {
+    const eventDate = new Date(date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -224,16 +274,16 @@ const validateEventUpdate = (req, res, next) => {
   }
 
   // Price validation (if provided)
-  if (req.body.price !== undefined) {
-    const priceNum = parseFloat(req.body.price);
+  if (price !== undefined) {
+    const priceNum = parseFloat(price);
     if (isNaN(priceNum) || priceNum < 0) {
       errors.push("Price must be a non-negative number");
     }
   }
 
   // Capacity validation (if provided)
-  if (req.body.capacity !== undefined) {
-    const capacityNum = parseInt(req.body.capacity);
+  if (capacity !== undefined) {
+    const capacityNum = parseInt(capacity);
     if (isNaN(capacityNum) || capacityNum < 1) {
       errors.push("Capacity must be at least 1");
     }
@@ -342,28 +392,34 @@ const validateQueryParams = (req, res, next) => {
   next();
 };
 
-// Sanitize input
+// Sanitize input - Updated to handle arrays
 const sanitizeInput = (req, res, next) => {
   const sanitizeString = (str) => {
     if (typeof str !== "string") return str;
     return str.replace(/<[^>]*>/g, "").trim();
   };
 
+  const sanitizeValue = (value) => {
+    if (Array.isArray(value)) {
+      return value.map(sanitizeValue);
+    }
+    if (typeof value === 'string') {
+      return sanitizeString(value);
+    }
+    return value;
+  };
+
   // Sanitize body
   if (req.body) {
     Object.keys(req.body).forEach((key) => {
-      if (typeof req.body[key] === "string") {
-        req.body[key] = sanitizeString(req.body[key]);
-      }
+      req.body[key] = sanitizeValue(req.body[key]);
     });
   }
 
   // Sanitize query
   if (req.query) {
     Object.keys(req.query).forEach((key) => {
-      if (typeof req.query[key] === "string") {
-        req.query[key] = sanitizeString(req.query[key]);
-      }
+      req.query[key] = sanitizeValue(req.query[key]);
     });
   }
 
@@ -532,4 +588,4 @@ module.exports = {
   validateLogin,
   validatePasswordUpdate,
   validatePasswordReset
-}
+};
