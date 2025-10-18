@@ -47,7 +47,7 @@ const createEvent = async (req, res, next) => {
 
     // Parse ticket types if it's a string (from form data)
     let parsedTicketTypes = ticketTypes;
-    if (typeof ticketTypes === 'string') {
+    if (typeof ticketTypes === "string") {
       try {
         parsedTicketTypes = JSON.parse(ticketTypes);
       } catch (e) {
@@ -57,10 +57,19 @@ const createEvent = async (req, res, next) => {
     }
 
     // Validate ticket types OR legacy pricing
-    if (parsedTicketTypes && Array.isArray(parsedTicketTypes) && parsedTicketTypes.length > 0) {
+    if (
+      parsedTicketTypes &&
+      Array.isArray(parsedTicketTypes) &&
+      parsedTicketTypes.length > 0
+    ) {
       for (const ticket of parsedTicketTypes) {
         if (!ticket.name || ticket.price === undefined || !ticket.capacity) {
-          return next(new ErrorResponse("Each ticket type must have name, price, and capacity", 400));
+          return next(
+            new ErrorResponse(
+              "Each ticket type must have name, price, and capacity",
+              400
+            )
+          );
         }
       }
     } else if (price === undefined || !capacity) {
@@ -109,28 +118,45 @@ const createEvent = async (req, res, next) => {
             alt: title,
           });
 
-          fs.unlink(image.tempFilePath, (err) => {
-            if (err) console.error("Failed to delete temp file:", err);
-          });
+          // ✅ FIXED: Better error handling for temp file deletion
+          if (image.tempFilePath && fs.existsSync(image.tempFilePath)) {
+            fs.unlink(image.tempFilePath, (err) => {
+              if (err && err.code !== "ENOENT") {
+                console.error("Failed to delete temp file:", err);
+              }
+            });
+          }
         } catch (uploadError) {
           console.error("Image upload error:", uploadError);
+
+          // Clean up any already uploaded images
+          for (const uploadedImg of uploadedImages) {
+            try {
+              await cloudinary.uploader.destroy(uploadedImg.publicId);
+            } catch (cleanupError) {
+              console.error("Cleanup error:", cleanupError);
+            }
+          }
+
           return next(new ErrorResponse("Failed to upload event images", 500));
         }
       }
     }
-
     // Parse arrays from form data
     let parsedTags = tags;
-    if (typeof tags === 'string') {
+    if (typeof tags === "string") {
       try {
         parsedTags = JSON.parse(tags);
       } catch (e) {
-        parsedTags = tags.split(',').map(t => t.trim()).filter(Boolean);
+        parsedTags = tags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
       }
     }
 
     let parsedIncludes = includes;
-    if (typeof includes === 'string') {
+    if (typeof includes === "string") {
       try {
         parsedIncludes = JSON.parse(includes);
       } catch (e) {
@@ -139,7 +165,7 @@ const createEvent = async (req, res, next) => {
     }
 
     let parsedRequirements = requirements;
-    if (typeof requirements === 'string') {
+    if (typeof requirements === "string") {
       try {
         parsedRequirements = JSON.parse(requirements);
       } catch (e) {
@@ -176,8 +202,12 @@ const createEvent = async (req, res, next) => {
     };
 
     // Add ticket types OR legacy pricing
-    if (parsedTicketTypes && Array.isArray(parsedTicketTypes) && parsedTicketTypes.length > 0) {
-      eventData.ticketTypes = parsedTicketTypes.map(ticket => ({
+    if (
+      parsedTicketTypes &&
+      Array.isArray(parsedTicketTypes) &&
+      parsedTicketTypes.length > 0
+    ) {
+      eventData.ticketTypes = parsedTicketTypes.map((ticket) => ({
         name: ticket.name,
         price: parseFloat(ticket.price),
         capacity: parseInt(ticket.capacity),
@@ -185,9 +215,12 @@ const createEvent = async (req, res, next) => {
         description: ticket.description || "",
         benefits: ticket.benefits || [],
       }));
-      
+
       eventData.price = 0;
-      eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + parseInt(t.capacity), 0);
+      eventData.capacity = parsedTicketTypes.reduce(
+        (sum, t) => sum + parseInt(t.capacity),
+        0
+      );
       eventData.availableTickets = eventData.capacity;
     } else {
       eventData.price = parseFloat(price);
@@ -266,23 +299,27 @@ const getAllEvents = async (req, res, next) => {
     // Filter by price range (handles both ticketTypes and legacy price)
     if (minPrice !== undefined || maxPrice !== undefined) {
       const priceQuery = [];
-      
+
       // Check legacy price field
       if (minPrice !== undefined || maxPrice !== undefined) {
         const legacyPriceQuery = { price: {} };
-        if (minPrice !== undefined) legacyPriceQuery.price.$gte = parseFloat(minPrice);
-        if (maxPrice !== undefined) legacyPriceQuery.price.$lte = parseFloat(maxPrice);
+        if (minPrice !== undefined)
+          legacyPriceQuery.price.$gte = parseFloat(minPrice);
+        if (maxPrice !== undefined)
+          legacyPriceQuery.price.$lte = parseFloat(maxPrice);
         priceQuery.push(legacyPriceQuery);
       }
-      
+
       // Check ticket types price range
       if (minPrice !== undefined || maxPrice !== undefined) {
         const ticketTypePriceQuery = { "ticketTypes.price": {} };
-        if (minPrice !== undefined) ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(minPrice);
-        if (maxPrice !== undefined) ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(maxPrice);
+        if (minPrice !== undefined)
+          ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(minPrice);
+        if (maxPrice !== undefined)
+          ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(maxPrice);
         priceQuery.push(ticketTypePriceQuery);
       }
-      
+
       if (priceQuery.length > 0) {
         query.$or = priceQuery;
       }
@@ -467,39 +504,39 @@ const updateEvent = async (req, res, next) => {
     }
 
     // Handle array fields that come as form data with [] notation
-    if (req.body['tags[]']) {
-      req.body.tags = Array.isArray(req.body['tags[]']) 
-        ? req.body['tags[]'] 
-        : [req.body['tags[]']];
-      delete req.body['tags[]'];
+    if (req.body["tags[]"]) {
+      req.body.tags = Array.isArray(req.body["tags[]"])
+        ? req.body["tags[]"]
+        : [req.body["tags[]"]];
+      delete req.body["tags[]"];
     }
 
-    if (req.body['includes[]']) {
-      req.body.includes = Array.isArray(req.body['includes[]']) 
-        ? req.body['includes[]'] 
-        : [req.body['includes[]']];
-      delete req.body['includes[]'];
+    if (req.body["includes[]"]) {
+      req.body.includes = Array.isArray(req.body["includes[]"])
+        ? req.body["includes[]"]
+        : [req.body["includes[]"]];
+      delete req.body["includes[]"];
     }
 
-    if (req.body['requirements[]']) {
-      req.body.requirements = Array.isArray(req.body['requirements[]']) 
-        ? req.body['requirements[]'] 
-        : [req.body['requirements[]']];
-      delete req.body['requirements[]'];
+    if (req.body["requirements[]"]) {
+      req.body.requirements = Array.isArray(req.body["requirements[]"])
+        ? req.body["requirements[]"]
+        : [req.body["requirements[]"]];
+      delete req.body["requirements[]"];
     }
 
-    if (req.body['existingImages[]']) {
-      req.body.existingImages = Array.isArray(req.body['existingImages[]']) 
-        ? req.body['existingImages[]'] 
-        : [req.body['existingImages[]']];
-      delete req.body['existingImages[]'];
+    if (req.body["existingImages[]"]) {
+      req.body.existingImages = Array.isArray(req.body["existingImages[]"])
+        ? req.body["existingImages[]"]
+        : [req.body["existingImages[]"]];
+      delete req.body["existingImages[]"];
     }
 
-    if (req.body['imagesToDelete[]']) {
-      req.body.imagesToDelete = Array.isArray(req.body['imagesToDelete[]']) 
-        ? req.body['imagesToDelete[]'] 
-        : [req.body['imagesToDelete[]']];
-      delete req.body['imagesToDelete[]'];
+    if (req.body["imagesToDelete[]"]) {
+      req.body.imagesToDelete = Array.isArray(req.body["imagesToDelete[]"])
+        ? req.body["imagesToDelete[]"]
+        : [req.body["imagesToDelete[]"]];
+      delete req.body["imagesToDelete[]"];
     }
 
     // Handle JSON fields from frontend (fallback)
@@ -535,7 +572,10 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
-    if (req.body.existingImages && typeof req.body.existingImages === "string") {
+    if (
+      req.body.existingImages &&
+      typeof req.body.existingImages === "string"
+    ) {
       try {
         req.body.existingImages = JSON.parse(req.body.existingImages);
       } catch (e) {
@@ -543,7 +583,10 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
-    if (req.body.imagesToDelete && typeof req.body.imagesToDelete === "string") {
+    if (
+      req.body.imagesToDelete &&
+      typeof req.body.imagesToDelete === "string"
+    ) {
       try {
         req.body.imagesToDelete = JSON.parse(req.body.imagesToDelete);
       } catch (e) {
@@ -557,9 +600,11 @@ const updateEvent = async (req, res, next) => {
         try {
           // Delete from Cloudinary
           await cloudinary.uploader.destroy(publicId);
-          
+
           // Remove from event images array
-          event.images = event.images.filter(img => img.publicId !== publicId);
+          event.images = event.images.filter(
+            (img) => img.publicId !== publicId
+          );
         } catch (cloudinaryError) {
           console.error("Cloudinary delete error:", cloudinaryError);
         }
@@ -569,7 +614,7 @@ const updateEvent = async (req, res, next) => {
     // Handle existing images update
     if (req.body.existingImages && Array.isArray(req.body.existingImages)) {
       // Keep only the images that are in existingImages array
-      event.images = event.images.filter(img => 
+      event.images = event.images.filter((img) =>
         req.body.existingImages.includes(img.url)
       );
     }
@@ -606,18 +651,23 @@ const updateEvent = async (req, res, next) => {
           event[field] = parseFloat(req.body[field]);
         } else if (field === "ticketTypes") {
           if (Array.isArray(req.body[field])) {
-            event[field] = req.body[field].map(ticket => ({
+            event[field] = req.body[field].map((ticket) => ({
               name: ticket.name,
               price: parseFloat(ticket.price),
               capacity: parseInt(ticket.capacity),
-              availableTickets: ticket.availableTickets !== undefined 
-                ? parseInt(ticket.availableTickets) 
-                : parseInt(ticket.capacity),
+              availableTickets:
+                ticket.availableTickets !== undefined
+                  ? parseInt(ticket.availableTickets)
+                  : parseInt(ticket.capacity),
               description: ticket.description || "",
               benefits: ticket.benefits || [],
             }));
           }
-        } else if (field === "tags" || field === "includes" || field === "requirements") {
+        } else if (
+          field === "tags" ||
+          field === "includes" ||
+          field === "requirements"
+        ) {
           if (Array.isArray(req.body[field])) {
             event[field] = req.body[field];
           } else if (typeof req.body[field] === "string") {
@@ -633,7 +683,11 @@ const updateEvent = async (req, res, next) => {
     });
 
     // If capacity increased (legacy), update available tickets
-    if (req.body.capacity && req.body.capacity > event.capacity && !event.ticketTypes?.length) {
+    if (
+      req.body.capacity &&
+      req.body.capacity > event.capacity &&
+      !event.ticketTypes?.length
+    ) {
       const increase = req.body.capacity - event.capacity;
       event.availableTickets += increase;
     }
@@ -854,7 +908,11 @@ const bookEventTicket = async (req, res, next) => {
     }
 
     // Book ticket with ticket type
-    const bookingResult = await event.bookTicket(req.user.userId, ticketType, quantity);
+    const bookingResult = await event.bookTicket(
+      req.user.userId,
+      ticketType,
+      quantity
+    );
 
     res.status(200).json({
       success: true,
@@ -1093,23 +1151,29 @@ const getTicketAvailability = async (req, res, next) => {
     let availability;
 
     if (event.ticketTypes && event.ticketTypes.length > 0) {
-      availability = event.ticketTypes.map(ticket => ({
+      availability = event.ticketTypes.map((ticket) => ({
         type: ticket.name,
         price: ticket.price,
         capacity: ticket.capacity,
         available: ticket.availableTickets,
         soldOut: ticket.availableTickets === 0,
-        percentageSold: Math.round(((ticket.capacity - ticket.availableTickets) / ticket.capacity) * 100),
+        percentageSold: Math.round(
+          ((ticket.capacity - ticket.availableTickets) / ticket.capacity) * 100
+        ),
       }));
     } else {
-      availability = [{
-        type: "General",
-        price: event.price,
-        capacity: event.capacity,
-        available: event.availableTickets,
-        soldOut: event.availableTickets === 0,
-        percentageSold: Math.round(((event.capacity - event.availableTickets) / event.capacity) * 100),
-      }];
+      availability = [
+        {
+          type: "General",
+          price: event.price,
+          capacity: event.capacity,
+          available: event.availableTickets,
+          soldOut: event.availableTickets === 0,
+          percentageSold: Math.round(
+            ((event.capacity - event.availableTickets) / event.capacity) * 100
+          ),
+        },
+      ];
     }
 
     res.status(200).json({
