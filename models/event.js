@@ -152,6 +152,10 @@ const eventSchema = new mongoose.Schema({
     type: Number,
     min: [0, "Price cannot be negative"],
     default: 0,
+    required: function() {
+      // Only required if no ticket types are defined
+      return !this.ticketTypes || this.ticketTypes.length === 0;
+    },
   },
   currency: {
     type: String,
@@ -164,6 +168,10 @@ const eventSchema = new mongoose.Schema({
     validate: {
       validator: Number.isInteger,
       message: "Capacity must be a whole number",
+    },
+    required: function() {
+      // Only required if no ticket types are defined
+      return !this.ticketTypes || this.ticketTypes.length === 0;
     },
   },
   availableTickets: {

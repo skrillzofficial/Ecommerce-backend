@@ -12,6 +12,7 @@ const createEvent = async (req, res, next) => {
     const {
       title,
       description,
+      longDescription,
       category,
       date,
       time,
@@ -20,11 +21,11 @@ const createEvent = async (req, res, next) => {
       address,
       city,
       tags,
+      includes,
       requirements,
       cancellationPolicy,
       refundPolicy,
-      ticketTypes, // NEW: Array of ticket types
-      // Legacy fields (for backward compatibility)
+      ticketTypes,
       price,
       capacity,
     } = req.body;
@@ -44,11 +45,21 @@ const createEvent = async (req, res, next) => {
       return next(new ErrorResponse("Please provide all required fields", 400));
     }
 
+    // Parse ticket types if it's a string (from form data)
+    let parsedTicketTypes = ticketTypes;
+    if (typeof ticketTypes === 'string') {
+      try {
+        parsedTicketTypes = JSON.parse(ticketTypes);
+      } catch (e) {
+        console.error("Error parsing ticketTypes:", e);
+        parsedTicketTypes = null;
+      }
+    }
+
     // Validate ticket types OR legacy pricing
-    if (ticketTypes && ticketTypes.length > 0) {
-      // Validate ticket types
-      for (const ticket of ticketTypes) {
-        if (!ticket.name || !ticket.price || !ticket.capacity) {
+    if (parsedTicketTypes && Array.isArray(parsedTicketTypes) && parsedTicketTypes.length > 0) {
+      for (const ticket of parsedTicketTypes) {
+        if (!ticket.name || ticket.price === undefined || !ticket.capacity) {
           return next(new ErrorResponse("Each ticket type must have name, price, and capacity", 400));
         }
       }
@@ -108,13 +119,31 @@ const createEvent = async (req, res, next) => {
       }
     }
 
-    // Parse ticket types if it's a string (from form data)
-    let parsedTicketTypes = ticketTypes;
-    if (typeof ticketTypes === 'string') {
+    // Parse arrays from form data
+    let parsedTags = tags;
+    if (typeof tags === 'string') {
       try {
-        parsedTicketTypes = JSON.parse(ticketTypes);
+        parsedTags = JSON.parse(tags);
       } catch (e) {
-        return next(new ErrorResponse("Invalid ticket types format", 400));
+        parsedTags = tags.split(',').map(t => t.trim()).filter(Boolean);
+      }
+    }
+
+    let parsedIncludes = includes;
+    if (typeof includes === 'string') {
+      try {
+        parsedIncludes = JSON.parse(includes);
+      } catch (e) {
+        parsedIncludes = [];
+      }
+    }
+
+    let parsedRequirements = requirements;
+    if (typeof requirements === 'string') {
+      try {
+        parsedRequirements = JSON.parse(requirements);
+      } catch (e) {
+        parsedRequirements = [];
       }
     }
 
@@ -122,6 +151,7 @@ const createEvent = async (req, res, next) => {
     const eventData = {
       title,
       description,
+      longDescription: longDescription || description,
       category,
       date: new Date(date),
       time,
@@ -136,12 +166,9 @@ const createEvent = async (req, res, next) => {
         companyName: organizer.organizerInfo?.companyName || "",
       },
       images: uploadedImages,
-      tags: tags
-        ? Array.isArray(tags)
-          ? tags
-          : tags.split(",").map((t) => t.trim())
-        : [],
-      requirements,
+      tags: Array.isArray(parsedTags) ? parsedTags : [],
+      includes: Array.isArray(parsedIncludes) ? parsedIncludes : [],
+      requirements: Array.isArray(parsedRequirements) ? parsedRequirements : [],
       cancellationPolicy,
       refundPolicy: refundPolicy || "partial",
       status: "published",
@@ -149,7 +176,7 @@ const createEvent = async (req, res, next) => {
     };
 
     // Add ticket types OR legacy pricing
-    if (parsedTicketTypes && parsedTicketTypes.length > 0) {
+    if (parsedTicketTypes && Array.isArray(parsedTicketTypes) && parsedTicketTypes.length > 0) {
       eventData.ticketTypes = parsedTicketTypes.map(ticket => ({
         name: ticket.name,
         price: parseFloat(ticket.price),
@@ -158,8 +185,11 @@ const createEvent = async (req, res, next) => {
         description: ticket.description || "",
         benefits: ticket.benefits || [],
       }));
+      
+      eventData.price = 0;
+      eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + parseInt(t.capacity), 0);
+      eventData.availableTickets = eventData.capacity;
     } else {
-      // Legacy fields
       eventData.price = parseFloat(price);
       eventData.capacity = parseInt(capacity);
       eventData.availableTickets = parseInt(capacity);
@@ -380,7 +410,6 @@ const updateEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Find event and populate organizer
     let event = await Event.findById(id).populate("organizer", "_id");
 
     if (!event) {
@@ -437,12 +466,56 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
-    // Handle JSON fields from frontend
+    // Handle array fields that come as form data with [] notation
+    if (req.body['tags[]']) {
+      req.body.tags = Array.isArray(req.body['tags[]']) 
+        ? req.body['tags[]'] 
+        : [req.body['tags[]']];
+      delete req.body['tags[]'];
+    }
+
+    if (req.body['includes[]']) {
+      req.body.includes = Array.isArray(req.body['includes[]']) 
+        ? req.body['includes[]'] 
+        : [req.body['includes[]']];
+      delete req.body['includes[]'];
+    }
+
+    if (req.body['requirements[]']) {
+      req.body.requirements = Array.isArray(req.body['requirements[]']) 
+        ? req.body['requirements[]'] 
+        : [req.body['requirements[]']];
+      delete req.body['requirements[]'];
+    }
+
+    if (req.body['existingImages[]']) {
+      req.body.existingImages = Array.isArray(req.body['existingImages[]']) 
+        ? req.body['existingImages[]'] 
+        : [req.body['existingImages[]']];
+      delete req.body['existingImages[]'];
+    }
+
+    if (req.body['imagesToDelete[]']) {
+      req.body.imagesToDelete = Array.isArray(req.body['imagesToDelete[]']) 
+        ? req.body['imagesToDelete[]'] 
+        : [req.body['imagesToDelete[]']];
+      delete req.body['imagesToDelete[]'];
+    }
+
+    // Handle JSON fields from frontend (fallback)
     if (req.body.tags && typeof req.body.tags === "string") {
       try {
         req.body.tags = JSON.parse(req.body.tags);
       } catch (e) {
         console.error("Error parsing tags:", e);
+      }
+    }
+
+    if (req.body.includes && typeof req.body.includes === "string") {
+      try {
+        req.body.includes = JSON.parse(req.body.includes);
+      } catch (e) {
+        console.error("Error parsing includes:", e);
       }
     }
 
@@ -462,6 +535,45 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
+    if (req.body.existingImages && typeof req.body.existingImages === "string") {
+      try {
+        req.body.existingImages = JSON.parse(req.body.existingImages);
+      } catch (e) {
+        console.error("Error parsing existingImages:", e);
+      }
+    }
+
+    if (req.body.imagesToDelete && typeof req.body.imagesToDelete === "string") {
+      try {
+        req.body.imagesToDelete = JSON.parse(req.body.imagesToDelete);
+      } catch (e) {
+        console.error("Error parsing imagesToDelete:", e);
+      }
+    }
+
+    // Handle image deletions
+    if (req.body.imagesToDelete && Array.isArray(req.body.imagesToDelete)) {
+      for (const publicId of req.body.imagesToDelete) {
+        try {
+          // Delete from Cloudinary
+          await cloudinary.uploader.destroy(publicId);
+          
+          // Remove from event images array
+          event.images = event.images.filter(img => img.publicId !== publicId);
+        } catch (cloudinaryError) {
+          console.error("Cloudinary delete error:", cloudinaryError);
+        }
+      }
+    }
+
+    // Handle existing images update
+    if (req.body.existingImages && Array.isArray(req.body.existingImages)) {
+      // Keep only the images that are in existingImages array
+      event.images = event.images.filter(img => 
+        req.body.existingImages.includes(img.url)
+      );
+    }
+
     // Update allowed fields
     const allowedUpdates = [
       "title",
@@ -477,12 +589,13 @@ const updateEvent = async (req, res, next) => {
       "price",
       "capacity",
       "tags",
+      "includes",
       "requirements",
       "cancellationPolicy",
       "refundPolicy",
       "status",
       "isFeatured",
-      "ticketTypes", // NEW
+      "ticketTypes",
     ];
 
     allowedUpdates.forEach((field) => {
@@ -492,7 +605,6 @@ const updateEvent = async (req, res, next) => {
         } else if (field === "price" || field === "capacity") {
           event[field] = parseFloat(req.body[field]);
         } else if (field === "ticketTypes") {
-          // Update ticket types
           if (Array.isArray(req.body[field])) {
             event[field] = req.body[field].map(ticket => ({
               name: ticket.name,
@@ -505,14 +617,14 @@ const updateEvent = async (req, res, next) => {
               benefits: ticket.benefits || [],
             }));
           }
-        } else if (field === "tags" || field === "requirements") {
-          // Handle array fields
+        } else if (field === "tags" || field === "includes" || field === "requirements") {
           if (Array.isArray(req.body[field])) {
             event[field] = req.body[field];
           } else if (typeof req.body[field] === "string") {
             event[field] = req.body[field]
               .split(",")
-              .map((item) => item.trim());
+              .map((item) => item.trim())
+              .filter(Boolean);
           }
         } else {
           event[field] = req.body[field];
@@ -714,7 +826,7 @@ const getOrganizerStatistics = async (req, res, next) => {
   }
 };
 
-// @desc    Book event ticket (UPDATED)
+// @desc    Book event ticket
 // @route   POST /api/v1/events/:id/book
 // @access  Private
 const bookEventTicket = async (req, res, next) => {
@@ -833,7 +945,7 @@ const getMyBookings = async (req, res, next) => {
           images: event.images,
           organizer: event.organizer,
           status: event.status,
-          ticketTypes: event.ticketTypes, // Include ticket types
+          ticketTypes: event.ticketTypes,
         },
         booking: userBooking,
       };
@@ -965,7 +1077,7 @@ const getUpcomingEvents = async (req, res, next) => {
   }
 };
 
-// @desc    Get ticket availability by type (NEW)
+// @desc    Get ticket availability by type
 // @route   GET /api/v1/events/:id/ticket-availability
 // @access  Public
 const getTicketAvailability = async (req, res, next) => {
@@ -1029,5 +1141,5 @@ module.exports = {
   cancelEvent,
   getFeaturedEvents,
   getUpcomingEvents,
-  getTicketAvailability, // NEW
+  getTicketAvailability,
 };
