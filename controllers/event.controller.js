@@ -19,12 +19,14 @@ const createEvent = async (req, res, next) => {
       venue,
       address,
       city,
-      price,
-      capacity,
       tags,
       requirements,
       cancellationPolicy,
       refundPolicy,
+      ticketTypes, // NEW: Array of ticket types
+      // Legacy fields (for backward compatibility)
+      price,
+      capacity,
     } = req.body;
 
     // Validate required fields
@@ -37,11 +39,21 @@ const createEvent = async (req, res, next) => {
       !endTime ||
       !venue ||
       !address ||
-      !city ||
-      price === undefined ||
-      !capacity
+      !city
     ) {
       return next(new ErrorResponse("Please provide all required fields", 400));
+    }
+
+    // Validate ticket types OR legacy pricing
+    if (ticketTypes && ticketTypes.length > 0) {
+      // Validate ticket types
+      for (const ticket of ticketTypes) {
+        if (!ticket.name || !ticket.price || !ticket.capacity) {
+          return next(new ErrorResponse("Each ticket type must have name, price, and capacity", 400));
+        }
+      }
+    } else if (price === undefined || !capacity) {
+      return next(new ErrorResponse("Please provide pricing information", 400));
     }
 
     // Validate user is organizer
@@ -86,7 +98,6 @@ const createEvent = async (req, res, next) => {
             alt: title,
           });
 
-          // Delete temp file
           fs.unlink(image.tempFilePath, (err) => {
             if (err) console.error("Failed to delete temp file:", err);
           });
@@ -94,6 +105,16 @@ const createEvent = async (req, res, next) => {
           console.error("Image upload error:", uploadError);
           return next(new ErrorResponse("Failed to upload event images", 500));
         }
+      }
+    }
+
+    // Parse ticket types if it's a string (from form data)
+    let parsedTicketTypes = ticketTypes;
+    if (typeof ticketTypes === 'string') {
+      try {
+        parsedTicketTypes = JSON.parse(ticketTypes);
+      } catch (e) {
+        return next(new ErrorResponse("Invalid ticket types format", 400));
       }
     }
 
@@ -108,9 +129,6 @@ const createEvent = async (req, res, next) => {
       venue,
       address,
       city,
-      price: parseFloat(price),
-      capacity: parseInt(capacity),
-      availableTickets: parseInt(capacity),
       organizer: req.user.userId,
       organizerInfo: {
         name: `${organizer.firstName} ${organizer.lastName}`,
@@ -129,6 +147,23 @@ const createEvent = async (req, res, next) => {
       status: "published",
       isActive: true,
     };
+
+    // Add ticket types OR legacy pricing
+    if (parsedTicketTypes && parsedTicketTypes.length > 0) {
+      eventData.ticketTypes = parsedTicketTypes.map(ticket => ({
+        name: ticket.name,
+        price: parseFloat(ticket.price),
+        capacity: parseInt(ticket.capacity),
+        availableTickets: parseInt(ticket.capacity),
+        description: ticket.description || "",
+        benefits: ticket.benefits || [],
+      }));
+    } else {
+      // Legacy fields
+      eventData.price = parseFloat(price);
+      eventData.capacity = parseInt(capacity);
+      eventData.availableTickets = parseInt(capacity);
+    }
 
     // Create event
     const event = await Event.create(eventData);
@@ -198,11 +233,29 @@ const getAllEvents = async (req, res, next) => {
       query.city = city;
     }
 
-    // Filter by price range
+    // Filter by price range (handles both ticketTypes and legacy price)
     if (minPrice !== undefined || maxPrice !== undefined) {
-      query.price = {};
-      if (minPrice !== undefined) query.price.$gte = parseFloat(minPrice);
-      if (maxPrice !== undefined) query.price.$lte = parseFloat(maxPrice);
+      const priceQuery = [];
+      
+      // Check legacy price field
+      if (minPrice !== undefined || maxPrice !== undefined) {
+        const legacyPriceQuery = { price: {} };
+        if (minPrice !== undefined) legacyPriceQuery.price.$gte = parseFloat(minPrice);
+        if (maxPrice !== undefined) legacyPriceQuery.price.$lte = parseFloat(maxPrice);
+        priceQuery.push(legacyPriceQuery);
+      }
+      
+      // Check ticket types price range
+      if (minPrice !== undefined || maxPrice !== undefined) {
+        const ticketTypePriceQuery = { "ticketTypes.price": {} };
+        if (minPrice !== undefined) ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(minPrice);
+        if (maxPrice !== undefined) ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(maxPrice);
+        priceQuery.push(ticketTypePriceQuery);
+      }
+      
+      if (priceQuery.length > 0) {
+        query.$or = priceQuery;
+      }
     }
 
     // Filter by date range
@@ -334,16 +387,7 @@ const updateEvent = async (req, res, next) => {
       return next(new ErrorResponse("Event not found", 404));
     }
 
-    // DEBUG: Log user and event info
-    console.log("Update Event - Debug Info:", {
-      eventId: event._id,
-      eventOrganizer: event.organizer?._id || event.organizer,
-      currentUserId: req.user._id || req.user.id,
-      currentUserRole: req.user.role,
-      userObject: req.user,
-    });
-
-    // Check ownership - FIXED: Use req.user._id or req.user.id
+    // Check ownership
     const eventOrganizerId =
       event.organizer?._id?.toString() || event.organizer?.toString();
     const currentUserId = req.user._id?.toString() || req.user.id?.toString();
@@ -402,11 +446,11 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
-    if (req.body.includes && typeof req.body.includes === "string") {
+    if (req.body.ticketTypes && typeof req.body.ticketTypes === "string") {
       try {
-        req.body.includes = JSON.parse(req.body.includes);
+        req.body.ticketTypes = JSON.parse(req.body.ticketTypes);
       } catch (e) {
-        console.error("Error parsing includes:", e);
+        console.error("Error parsing ticketTypes:", e);
       }
     }
 
@@ -433,12 +477,12 @@ const updateEvent = async (req, res, next) => {
       "price",
       "capacity",
       "tags",
-      "includes",
       "requirements",
       "cancellationPolicy",
       "refundPolicy",
       "status",
       "isFeatured",
+      "ticketTypes", // NEW
     ];
 
     allowedUpdates.forEach((field) => {
@@ -447,11 +491,21 @@ const updateEvent = async (req, res, next) => {
           event[field] = new Date(req.body[field]);
         } else if (field === "price" || field === "capacity") {
           event[field] = parseFloat(req.body[field]);
-        } else if (
-          field === "tags" ||
-          field === "includes" ||
-          field === "requirements"
-        ) {
+        } else if (field === "ticketTypes") {
+          // Update ticket types
+          if (Array.isArray(req.body[field])) {
+            event[field] = req.body[field].map(ticket => ({
+              name: ticket.name,
+              price: parseFloat(ticket.price),
+              capacity: parseInt(ticket.capacity),
+              availableTickets: ticket.availableTickets !== undefined 
+                ? parseInt(ticket.availableTickets) 
+                : parseInt(ticket.capacity),
+              description: ticket.description || "",
+              benefits: ticket.benefits || [],
+            }));
+          }
+        } else if (field === "tags" || field === "requirements") {
           // Handle array fields
           if (Array.isArray(req.body[field])) {
             event[field] = req.body[field];
@@ -466,8 +520,8 @@ const updateEvent = async (req, res, next) => {
       }
     });
 
-    // If capacity increased, update available tickets
-    if (req.body.capacity && req.body.capacity > event.capacity) {
+    // If capacity increased (legacy), update available tickets
+    if (req.body.capacity && req.body.capacity > event.capacity && !event.ticketTypes?.length) {
       const increase = req.body.capacity - event.capacity;
       event.availableTickets += increase;
     }
@@ -660,13 +714,13 @@ const getOrganizerStatistics = async (req, res, next) => {
   }
 };
 
-// @desc    Book event ticket
+// @desc    Book event ticket (UPDATED)
 // @route   POST /api/v1/events/:id/book
 // @access  Private
 const bookEventTicket = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { quantity = 1 } = req.body;
+    const { ticketType = "Regular", quantity = 1 } = req.body;
 
     const event = await Event.findById(id);
 
@@ -678,10 +732,6 @@ const bookEventTicket = async (req, res, next) => {
       return next(new ErrorResponse("Event is not available for booking", 400));
     }
 
-    if (event.availableTickets < quantity) {
-      return next(new ErrorResponse("Not enough tickets available", 400));
-    }
-
     // Check if user already booked
     const existingBooking = event.attendees.find(
       (a) => a.user.toString() === req.user.userId && a.status === "confirmed"
@@ -691,24 +741,23 @@ const bookEventTicket = async (req, res, next) => {
       return next(new ErrorResponse("You have already booked this event", 400));
     }
 
-    // Book tickets
-    const tickets = [];
-    for (let i = 0; i < quantity; i++) {
-      const ticketId = await event.bookTicket(req.user.userId);
-      tickets.push(ticketId);
-    }
+    // Book ticket with ticket type
+    const bookingResult = await event.bookTicket(req.user.userId, ticketType, quantity);
 
     res.status(200).json({
       success: true,
       message: "Ticket(s) booked successfully",
-      tickets,
+      booking: {
+        ticketId: bookingResult.ticketId,
+        ticketType: bookingResult.ticketType || ticketType,
+        quantity: bookingResult.quantity || quantity,
+        totalPrice: bookingResult.totalPrice,
+      },
       event: {
         id: event._id,
         title: event.title,
         date: event.date,
         venue: event.venue,
-        price: event.price,
-        totalPrice: event.price * quantity,
       },
     });
   } catch (error) {
@@ -781,10 +830,10 @@ const getMyBookings = async (req, res, next) => {
           venue: event.venue,
           address: event.address,
           city: event.city,
-          price: event.price,
           images: event.images,
           organizer: event.organizer,
           status: event.status,
+          ticketTypes: event.ticketTypes, // Include ticket types
         },
         booking: userBooking,
       };
@@ -916,6 +965,54 @@ const getUpcomingEvents = async (req, res, next) => {
   }
 };
 
+// @desc    Get ticket availability by type (NEW)
+// @route   GET /api/v1/events/:id/ticket-availability
+// @access  Public
+const getTicketAvailability = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const event = await Event.findById(id);
+
+    if (!event) {
+      return next(new ErrorResponse("Event not found", 404));
+    }
+
+    let availability;
+
+    if (event.ticketTypes && event.ticketTypes.length > 0) {
+      availability = event.ticketTypes.map(ticket => ({
+        type: ticket.name,
+        price: ticket.price,
+        capacity: ticket.capacity,
+        available: ticket.availableTickets,
+        soldOut: ticket.availableTickets === 0,
+        percentageSold: Math.round(((ticket.capacity - ticket.availableTickets) / ticket.capacity) * 100),
+      }));
+    } else {
+      availability = [{
+        type: "General",
+        price: event.price,
+        capacity: event.capacity,
+        available: event.availableTickets,
+        soldOut: event.availableTickets === 0,
+        percentageSold: Math.round(((event.capacity - event.availableTickets) / event.capacity) * 100),
+      }];
+    }
+
+    res.status(200).json({
+      success: true,
+      availability,
+      totalCapacity: event.totalCapacity,
+      totalAvailable: event.totalAvailableTickets,
+      isSoldOut: event.isSoldOut,
+    });
+  } catch (error) {
+    console.error("Get ticket availability error:", error);
+    next(new ErrorResponse("Failed to fetch ticket availability", 500));
+  }
+};
+
 module.exports = {
   createEvent,
   getAllEvents,
@@ -932,4 +1029,5 @@ module.exports = {
   cancelEvent,
   getFeaturedEvents,
   getUpcomingEvents,
+  getTicketAvailability, // NEW
 };

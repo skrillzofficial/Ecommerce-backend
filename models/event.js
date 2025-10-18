@@ -112,10 +112,44 @@ const eventSchema = new mongoose.Schema({
     },
   },
 
-  // Ticket Information
+  // NEW: Ticket Types with Pricing
+  ticketTypes: [{
+    name: {
+      type: String,
+      required: true,
+      enum: ["Regular", "VIP", "VVIP"],
+    },
+    price: {
+      type: Number,
+      required: true,
+      min: [0, "Price cannot be negative"],
+    },
+    capacity: {
+      type: Number,
+      required: true,
+      min: [1, "Capacity must be at least 1"],
+      validate: {
+        validator: Number.isInteger,
+        message: "Capacity must be a whole number",
+      },
+    },
+    availableTickets: {
+      type: Number,
+      min: 0,
+    },
+    description: {
+      type: String,
+      maxlength: [500, "Description cannot exceed 500 characters"],
+    },
+    benefits: [{
+      type: String,
+      trim: true,
+    }],
+  }],
+
+  // Legacy fields (kept for backward compatibility)
   price: {
     type: Number,
-    required: [true, "Ticket price is required"],
     min: [0, "Price cannot be negative"],
     default: 0,
   },
@@ -126,7 +160,6 @@ const eventSchema = new mongoose.Schema({
   },
   capacity: {
     type: Number,
-    required: [true, "Capacity is required"],
     min: [1, "Capacity must be at least 1"],
     validate: {
       validator: Number.isInteger,
@@ -135,9 +168,6 @@ const eventSchema = new mongoose.Schema({
   },
   availableTickets: {
     type: Number,
-    default: function() {
-      return this.capacity;
-    },
     min: 0,
   },
 
@@ -147,7 +177,7 @@ const eventSchema = new mongoose.Schema({
       type: String,
       required: true,
     },
-    publicId: String, // For Cloudinary
+    publicId: String,
     alt: String,
   }],
   thumbnail: {
@@ -192,13 +222,27 @@ const eventSchema = new mongoose.Schema({
     index: true,
   },
 
-  // Attendees & Bookings
+  // Attendees & Bookings (UPDATED)
   attendees: [{
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
     ticketId: String,
+    ticketType: {
+      type: String,
+      enum: ["Regular", "VIP", "VVIP"],
+      default: "Regular",
+    },
+    quantity: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    totalPrice: {
+      type: Number,
+      required: true,
+    },
     bookingDate: {
       type: Date,
       default: Date.now,
@@ -325,8 +369,6 @@ eventSchema.index({ organizer: 1, status: 1 });
 eventSchema.index({ price: 1 });
 eventSchema.index({ createdAt: -1 });
 eventSchema.index({ isFeatured: 1, status: 1 });
-
-// Compound indexes
 eventSchema.index({ status: 1, date: 1, category: 1 });
 eventSchema.index({ city: 1, date: 1, price: 1 });
 
@@ -337,20 +379,44 @@ eventSchema.virtual("eventUrl").get(function() {
 
 // Virtual for availability
 eventSchema.virtual("isAvailable").get(function() {
-  return this.availableTickets > 0 && 
-         this.status === "published" && 
-         this.date > new Date();
+  // Check if using ticket types
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    const hasAvailableTickets = this.ticketTypes.some(tt => tt.availableTickets > 0);
+    return hasAvailableTickets && this.status === "published" && this.date > new Date();
+  }
+  // Legacy check
+  return this.availableTickets > 0 && this.status === "published" && this.date > new Date();
 });
 
 // Virtual for sold out status
 eventSchema.virtual("isSoldOut").get(function() {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    return this.ticketTypes.every(tt => tt.availableTickets === 0);
+  }
   return this.availableTickets === 0;
+});
+
+// Virtual for total capacity
+eventSchema.virtual("totalCapacity").get(function() {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    return this.ticketTypes.reduce((sum, tt) => sum + tt.capacity, 0);
+  }
+  return this.capacity || 0;
+});
+
+// Virtual for total available tickets
+eventSchema.virtual("totalAvailableTickets").get(function() {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    return this.ticketTypes.reduce((sum, tt) => sum + tt.availableTickets, 0);
+  }
+  return this.availableTickets || 0;
 });
 
 // Virtual for attendance percentage
 eventSchema.virtual("attendancePercentage").get(function() {
-  if (this.capacity === 0) return 0;
-  return Math.round((this.totalAttendees / this.capacity) * 100);
+  const totalCap = this.totalCapacity;
+  if (totalCap === 0) return 0;
+  return Math.round((this.totalAttendees / totalCap) * 100);
 });
 
 // Virtual for days until event
@@ -362,6 +428,29 @@ eventSchema.virtual("daysUntilEvent").get(function() {
   return diffDays > 0 ? diffDays : 0;
 });
 
+// Virtual for price range
+eventSchema.virtual("priceRange").get(function() {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    const prices = this.ticketTypes.map(tt => tt.price);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    return minPrice === maxPrice ? minPrice : { min: minPrice, max: maxPrice };
+  }
+  return this.price || 0;
+});
+
+// Pre-save middleware to initialize ticket types availableTickets
+eventSchema.pre("save", function(next) {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    this.ticketTypes.forEach(ticketType => {
+      if (ticketType.availableTickets === undefined) {
+        ticketType.availableTickets = ticketType.capacity;
+      }
+    });
+  }
+  next();
+});
+
 // Pre-save middleware to generate slug
 eventSchema.pre("save", function(next) {
   if (this.isModified("title") && !this.slug) {
@@ -369,8 +458,6 @@ eventSchema.pre("save", function(next) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
-    
-    // Append timestamp to ensure uniqueness
     this.slug += `-${Date.now()}`;
   }
   next();
@@ -401,36 +488,77 @@ eventSchema.pre("save", function(next) {
   next();
 });
 
-// Method to book ticket
-eventSchema.methods.bookTicket = async function(userId) {
-  if (this.availableTickets <= 0) {
-    throw new Error("Event is sold out");
+// Method to book ticket (UPDATED)
+eventSchema.methods.bookTicket = async function(userId, ticketType = "Regular", quantity = 1) {
+  // Check if using ticket types
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    const selectedTicket = this.ticketTypes.find(tt => tt.name === ticketType);
+    
+    if (!selectedTicket) {
+      throw new Error(`Ticket type ${ticketType} not found`);
+    }
+    
+    if (selectedTicket.availableTickets < quantity) {
+      throw new Error(`Not enough ${ticketType} tickets available`);
+    }
+    
+    if (this.status !== "published") {
+      throw new Error("Event is not available for booking");
+    }
+    
+    const ticketId = `TKT-${this._id.toString().slice(-6)}-${Date.now()}`;
+    const totalPrice = selectedTicket.price * quantity;
+    
+    this.attendees.push({
+      user: userId,
+      ticketId: ticketId,
+      ticketType: ticketType,
+      quantity: quantity,
+      totalPrice: totalPrice,
+      status: "confirmed",
+    });
+    
+    selectedTicket.availableTickets -= quantity;
+    this.totalAttendees += quantity;
+    this.bookings += 1;
+    this.totalRevenue += totalPrice;
+    
+    await this.save();
+    
+    return { ticketId, ticketType, quantity, totalPrice };
+  } else {
+    // Legacy booking (backward compatibility)
+    if (this.availableTickets < quantity) {
+      throw new Error("Not enough tickets available");
+    }
+    
+    if (this.status !== "published") {
+      throw new Error("Event is not available for booking");
+    }
+    
+    const ticketId = `TKT-${this._id.toString().slice(-6)}-${Date.now()}`;
+    const totalPrice = this.price * quantity;
+    
+    this.attendees.push({
+      user: userId,
+      ticketId: ticketId,
+      quantity: quantity,
+      totalPrice: totalPrice,
+      status: "confirmed",
+    });
+    
+    this.availableTickets -= quantity;
+    this.totalAttendees += quantity;
+    this.bookings += 1;
+    this.totalRevenue += totalPrice;
+    
+    await this.save();
+    
+    return { ticketId, quantity, totalPrice };
   }
-  
-  if (this.status !== "published") {
-    throw new Error("Event is not available for booking");
-  }
-  
-  // Generate unique ticket ID
-  const ticketId = `TKT-${this._id.toString().slice(-6)}-${Date.now()}`;
-  
-  this.attendees.push({
-    user: userId,
-    ticketId: ticketId,
-    status: "confirmed",
-  });
-  
-  this.availableTickets -= 1;
-  this.totalAttendees += 1;
-  this.bookings += 1;
-  this.totalRevenue += this.price;
-  
-  await this.save();
-  
-  return ticketId;
 };
 
-// Method to cancel booking
+// Method to cancel booking (UPDATED)
 eventSchema.methods.cancelBooking = async function(userId) {
   const attendeeIndex = this.attendees.findIndex(
     a => a.user.toString() === userId.toString() && a.status === "confirmed"
@@ -440,13 +568,23 @@ eventSchema.methods.cancelBooking = async function(userId) {
     throw new Error("Booking not found");
   }
   
-  this.attendees[attendeeIndex].status = "cancelled";
-  this.availableTickets += 1;
-  this.totalAttendees -= 1;
+  const attendee = this.attendees[attendeeIndex];
+  attendee.status = "cancelled";
   
-  // Handle refund based on policy
+  // Restore tickets
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    const ticketType = this.ticketTypes.find(tt => tt.name === attendee.ticketType);
+    if (ticketType) {
+      ticketType.availableTickets += attendee.quantity;
+    }
+  } else {
+    this.availableTickets += attendee.quantity;
+  }
+  
+  this.totalAttendees -= attendee.quantity;
+  
   if (this.refundPolicy !== "no-refund") {
-    this.totalRevenue -= this.price;
+    this.totalRevenue -= attendee.totalPrice;
   }
   
   await this.save();
@@ -499,7 +637,6 @@ eventSchema.methods.cancelEvent = async function(reason) {
   this.cancelledAt = new Date();
   this.isActive = false;
   
-  // Update all confirmed attendees to cancelled
   this.attendees.forEach(attendee => {
     if (attendee.status === "confirmed") {
       attendee.status = "cancelled";
@@ -507,7 +644,6 @@ eventSchema.methods.cancelEvent = async function(reason) {
   });
   
   await this.save();
-  
 };
 
 // Method to complete event

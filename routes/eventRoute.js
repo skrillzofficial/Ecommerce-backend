@@ -16,6 +16,7 @@ const {
   cancelEvent,
   getFeaturedEvents,
   getUpcomingEvents,
+  getTicketAvailability, // NEW
 } = require("../controllers/event.controller");
 
 const { protect, authorize, optionalAuth } = require("../middleware/auth");
@@ -27,8 +28,7 @@ const {
   validateQueryParams,
 } = require("../middleware/validation");
 
-//  PUBLIC ROUTES
-// These routes don't require authentication
+
 
 // Get featured events
 router.get("/featured", getFeaturedEvents);
@@ -39,28 +39,14 @@ router.get("/upcoming", getUpcomingEvents);
 // Get all events with filtering (optionalAuth allows organizers to see drafts)
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
-// GET SINGLE EVENT BY ID OR SLUG 
-// This should be publicly accessible to all users
-router.get("/:id", getEventById);
 
-// PROTECTED ROUTES (ALL USERS)
 router.use(protect); // All routes below require authentication
 
 // IMPORTANT: Specific routes MUST come before parameterized routes
 // Get user's bookings (MUST be before /:id)
 router.get("/my-bookings", validateQueryParams, getMyBookings);
 
-// Book event ticket
-router.post("/:id/book", validateBooking, bookEventTicket);
 
-// Cancel booking
-router.delete("/:id/cancel-booking", cancelBooking);
-
-// Like/Unlike event
-router.post("/:id/like", toggleLikeEvent);
-
-//  ORGANIZER ONLY ROUTES
-// These routes require organizer or superadmin role
 
 // Get organizer's events (MUST be before /:id)
 router.get(
@@ -86,7 +72,33 @@ router.post(
   createEvent
 );
 
-// Update event
+
+// Get ticket availability for an event (NEW - PUBLIC ACCESS)
+// Moving this before authentication requirement since it should be public
+router.get("/:id/ticket-availability", getTicketAvailability);
+
+// Book event ticket
+router.post("/:id/book", validateBooking, bookEventTicket);
+
+// Cancel booking
+router.delete("/:id/cancel-booking", cancelBooking);
+
+// Like/Unlike event
+router.post("/:id/like", toggleLikeEvent);
+
+// Delete event image (Organizer only)
+router.delete(
+  "/:id/images/:imageIndex",
+  authorize("organizer", "superadmin"),
+  deleteEventImage
+);
+
+// Cancel event (Organizer only)
+router.patch("/:id/cancel", authorize("organizer", "superadmin"), cancelEvent);
+
+
+
+// Update event (Organizer only)
 router.patch(
   "/:id",
   authorize("organizer", "superadmin"),
@@ -95,19 +107,10 @@ router.patch(
   updateEvent
 );
 
-// Delete event image
-router.delete(
-  "/:id/images/:imageIndex",
-  authorize("organizer", "superadmin"),
-  deleteEventImage
-);
-
-// Cancel event
-router.patch("/:id/cancel", authorize("organizer", "superadmin"), cancelEvent);
-
-// Delete event
+// Delete event (Organizer only)
 router.delete("/:id", authorize("organizer", "superadmin"), deleteEvent);
 
-
+// GET SINGLE EVENT BY ID OR SLUG 
+router.get("/:id", getEventById);
 
 module.exports = router;
