@@ -6,16 +6,10 @@ const cron = require("node-cron");
 const cloudinary = require("cloudinary").v2;
 const fileUpload = require("express-fileupload");
 const cookieParser = require("cookie-parser");
+const PORT = process.env.PORT || 4000;
 const helmet = require("helmet");
 const morgan = require("morgan");
 const http = require("http");
-const socketIo = require("socket.io");
-
-// Import socket handlers
-const { initializeLocationHandlers } = require("./sockets/location.handler");
-const { initializeTicketHandlers } = require("./sockets/ticket.handler");
-
-const PORT = process.env.PORT || 4000;
 
 // Routes
 const authRouter = require("./routes/userRoute");
@@ -35,35 +29,8 @@ const {
 // EXPRESS SERVER
 const app = express();
 
-// CREATE HTTP SERVER & SOCKET.IO 
+// CREATE HTTP SERVER 
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: [
-      "https://eventry-swart.vercel.app",
-      "http://localhost:5174",
-      "http://localhost:5173",
-    ],
-    credentials: true,
-    methods: ["GET", "POST"],
-  },
-});
-
-// Export io for use in controllers
-global.io = io;
-
-// WebSocket connection handler
-io.on('connection', (socket) => {
-  console.log('✅ New client connected:', socket.id);
-
-  // Initialize all socket handlers
-  initializeLocationHandlers(io, socket);
-  initializeTicketHandlers(io, socket);
-
-  socket.on('disconnect', () => {
-    console.log(' Client disconnected:', socket.id);
-  });
-});
 
 // SECURITY MIDDLEWARE
 app.use(helmet());
@@ -137,7 +104,6 @@ app.get("/api/v1/health", (req, res) => {
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
     environment: process.env.NODE_ENV || "development",
-    websocket: "active",
   });
 });
 
@@ -203,13 +169,12 @@ const startServer = async () => {
       cleanupOnStartup = false;
     }
 
-    // Start the HTTP server (which includes both Express and Socket.IO)
+    // Start the HTTP server 
     server.listen(PORT, () => {
       console.log(`   Server is running on port ${PORT}`);
       console.log(`   Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`   Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
       console.log(`   API Base: http://localhost:${PORT}/api/v1`);
-      console.log(`   WebSocket: Active on port ${PORT}`);
       console.log("   Cleanup scheduled for daily at 2:00 AM");
       console.log("   Server ready to accept connections");
     });
@@ -223,7 +188,6 @@ const startServer = async () => {
 process.on("SIGINT", async () => {
   console.log("Shutting down...");
   try {
-    io.close(); 
     await mongoose.connection.close();
     console.log("Database connection closed");
     console.log("Server shut down successfully");
@@ -238,7 +202,6 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   console.log("Server termination signal received...");
   try {
-    io.close(); 
     await mongoose.connection.close();
     console.log("Database connection closed");
     console.log("Server terminated successfully");
@@ -261,7 +224,6 @@ process.on("uncaughtException", (error) => {
 process.on("unhandledRejection", (error) => {
   console.error("UNHANDLED REJECTION! Shutting down...");
   console.error(error);
-  io.close();
   mongoose.connection.close().then(() => {
     process.exit(1);
   });
