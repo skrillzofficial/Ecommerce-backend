@@ -582,7 +582,7 @@ const updateProfile = async (req, res, next) => {
     const userId = req.user.userId;
 
     const user = await USER.findById(userId);
-    if (!user) {
+    if (!user) { 
       return next(new ErrorResponse("User not found", 404));
     }
 

@@ -8,6 +8,8 @@ const fileUpload = require("express-fileupload");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
 const morgan = require("morgan");
+const http = require("http");
+const socketIo = require("socket.io");
 
 const PORT = process.env.PORT || 4000;
 
@@ -29,8 +31,34 @@ const {
 // EXPRESS SERVER
 const app = express();
 
+//  CREATE HTTP SERVER & SOCKET.IO 
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: [
+      "https://eventry-swart.vercel.app",
+      "http://localhost:5174",
+      "http://localhost:5173",
+    ],
+    credentials: true,
+    methods: ["GET", "POST"],
+  },
+});
+
+// Export io for use in controllers
+global.io = io; 
+
+// WebSocket connection handler 
+io.on('connection', (socket) => {
+  console.log(' New client connected:', socket.id);
+  
+  socket.on('disconnect', () => {
+    console.log(' Client disconnected:', socket.id);
+  });
+});
+
+
 // SECURITY MIDDLEWARE
-// Helmet for security headers
 app.use(helmet());
 
 // CORS configuration
@@ -40,7 +68,6 @@ app.use(
       "https://eventry-swart.vercel.app",
       "http://localhost:5174",
       "http://localhost:5173",
-      "http://localhost:3000",
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -55,7 +82,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Cookie parser (MOVE THIS BEFORE BODY PARSER)
+// Cookie parser
 app.use(cookieParser());
 
 //  BODY PARSER MIDDLEWARE
@@ -67,7 +94,7 @@ app.use(
   fileUpload({
     useTempFiles: true,
     tempFileDir: "/tmp/",
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    limits: { fileSize: 10 * 1024 * 1024 },
     abortOnLimit: true,
     createParentPath: true,
   })
@@ -77,23 +104,21 @@ app.use(
 app.use(sanitizeInput);
 
 //  LOGGING MIDDLEWARE
-// Log requests in development mode
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
 }
 
 //  SCHEDULED TASKS
-// Cleanup unverified users daily at 2:00 AM
 cron.schedule("0 2 * * *", async () => {
   console.log("Running scheduled cleanup of unverified users...");
   await deleteExpiredUnverifiedUsers();
 });
 
-// Run cleanup once on server startup (after DB connection)
+// Run cleanup once on server startup
 let cleanupOnStartup = true;
 
 //  API ROUTES
-// Health check endpoint (before other routes)
+// Health check endpoint 
 app.get("/api/v1/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -102,6 +127,7 @@ app.get("/api/v1/health", (req, res) => {
     database:
       mongoose.connection.readyState === 1 ? "connected" : "disconnected",
     environment: process.env.NODE_ENV || "development",
+    websocket: "active", 
   });
 });
 
@@ -173,8 +199,9 @@ const startServer = async () => {
       console.log(`   Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`   Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
       console.log(`   API Base: http://localhost:${PORT}/api/v1`);
+      console.log(` WebSocket: Active on port ${PORT}`);
       console.log(" Cleanup scheduled for daily at 2:00 AM");
-      console.log(" Server ready to accept connections\n");
+      console.log(" Server ready to accept connections");
     });
   } catch (error) {
     console.error(" Error connecting to the database:", error);
@@ -186,6 +213,7 @@ const startServer = async () => {
 process.on("SIGINT", async () => {
   console.log(" Shutting down...");
   try {
+    io.close(); 
     await mongoose.connection.close();
     console.log("Database connection closed");
     console.log(" Server shut down successfully");
@@ -200,6 +228,7 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   console.log(" Server termination signal received...");
   try {
+    io.close(); 
     await mongoose.connection.close();
     console.log(" Database connection closed");
     console.log(" Server terminated successfully");
@@ -222,6 +251,7 @@ process.on("uncaughtException", (error) => {
 process.on("unhandledRejection", (error) => {
   console.error(" UNHANDLED REJECTION! Shutting down...");
   console.error(error);
+  io.close();
   mongoose.connection.close().then(() => {
     process.exit(1);
   });
@@ -230,5 +260,4 @@ process.on("unhandledRejection", (error) => {
 // Start the server
 startServer();
 
-// Export app for testing purposes
 module.exports = app;

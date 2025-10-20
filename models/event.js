@@ -113,7 +113,7 @@ const eventSchema = new mongoose.Schema(
       },
     },
 
-    // NEW: Ticket Types with Pricing
+    // Ticket Types with Pricing
     ticketTypes: [
       {
         name: {
@@ -340,7 +340,6 @@ const eventSchema = new mongoose.Schema(
       },
     ],
 
-    // SEO & Social
     slug: {
       type: String,
       unique: true,

@@ -539,7 +539,7 @@ const updateEvent = async (req, res, next) => {
       delete req.body["imagesToDelete[]"];
     }
 
-    // Handle JSON fields from frontend (fallback)
+    // Handle JSON fields from frontend 
     if (req.body.tags && typeof req.body.tags === "string") {
       try {
         req.body.tags = JSON.parse(req.body.tags);
