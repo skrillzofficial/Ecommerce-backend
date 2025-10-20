@@ -47,7 +47,12 @@ const eventSchema = new mongoose.Schema(
       required: [true, "Event date is required"],
       validate: {
         validator: function (value) {
-          return value >= new Date();
+          // Compare dates without time component
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const eventDate = new Date(value);
+          eventDate.setHours(0, 0, 0, 0);
+          return eventDate >= today;
         },
         message: "Event date cannot be in the past",
       },
@@ -100,6 +105,8 @@ const eventSchema = new mongoose.Schema(
       },
       index: true,
     },
+
+    // STATIC Coordinates (Original venue location)
     coordinates: {
       latitude: {
         type: Number,
@@ -110,6 +117,47 @@ const eventSchema = new mongoose.Schema(
         type: Number,
         min: -180,
         max: 180,
+      },
+    },
+
+    // NEW: REAL-TIME LOCATION TRACKING
+    liveLocation: {
+      isSharing: {
+        type: Boolean,
+        default: false,
+      },
+      lastUpdated: Date,
+      currentLocation: {
+        latitude: {
+          type: Number,
+          min: -90,
+          max: 90,
+          required: function() { return this.parent().isSharing; }
+        },
+        longitude: {
+          type: Number,
+          min: -180,
+          max: 180,
+          required: function() { return this.parent().isSharing; }
+        },
+        address: String,
+        accuracy: Number,
+      },
+      locationHistory: [
+        {
+          latitude: Number,
+          longitude: Number,
+          address: String,
+          timestamp: {
+            type: Date,
+            default: Date.now,
+          },
+          accuracy: Number,
+        },
+      ],
+      sharedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
       },
     },
 
@@ -158,7 +206,6 @@ const eventSchema = new mongoose.Schema(
       min: [0, "Price cannot be negative"],
       default: 0,
       required: function () {
-        // Only required if no ticket types are defined
         return !this.ticketTypes || this.ticketTypes.length === 0;
       },
     },
@@ -175,7 +222,6 @@ const eventSchema = new mongoose.Schema(
         message: "Capacity must be a whole number",
       },
       required: function () {
-        // Only required if no ticket types are defined
         return !this.ticketTypes || this.ticketTypes.length === 0;
       },
     },
@@ -237,14 +283,17 @@ const eventSchema = new mongoose.Schema(
       index: true,
     },
 
-    // Attendees & Bookings (UPDATED)
+    // Attendees & Bookings
     attendees: [
       {
         user: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "User",
         },
-        ticketId: String,
+        ticketId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Ticket",
+        },
         ticketType: {
           type: String,
           enum: ["Regular", "VIP", "VVIP"],
@@ -407,22 +456,21 @@ eventSchema.virtual("eventUrl").get(function () {
 
 // Virtual for availability
 eventSchema.virtual("isAvailable").get(function () {
-  // Check if using ticket types
+  const now = new Date();
+  const isFutureDate = this.date > now;
+  const isPublished = this.status === "published";
+
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     const hasAvailableTickets = this.ticketTypes.some(
       (tt) => tt.availableTickets > 0
     );
-    return (
-      hasAvailableTickets &&
-      this.status === "published" &&
-      this.date > new Date()
-    );
+    return hasAvailableTickets && isPublished && isFutureDate;
   }
   // Legacy check
   return (
     this.availableTickets > 0 &&
-    this.status === "published" &&
-    this.date > new Date()
+    isPublished &&
+    isFutureDate
   );
 });
 
@@ -516,26 +564,37 @@ eventSchema.pre("save", function (next) {
 // Pre-save middleware to validate end time
 eventSchema.pre("save", function (next) {
   if (this.time && this.endTime) {
-    const [startHour, startMin] = this.time.split(":").map(Number);
-    const [endHour, endMin] = this.endTime.split(":").map(Number);
+    try {
+      const [startHour, startMin] = this.time.split(":").map(Number);
+      const [endHour, endMin] = this.endTime.split(":").map(Number);
 
-    const startMinutes = startHour * 60 + startMin;
-    const endMinutes = endHour * 60 + endMin;
+      // Validate time components
+      if (isNaN(startHour) || isNaN(startMin) || isNaN(endHour) || isNaN(endMin)) {
+        return next(new Error("Invalid time format"));
+      }
 
-    if (endMinutes <= startMinutes) {
-      next(new Error("End time must be after start time"));
-      return;
+      const startMinutes = startHour * 60 + startMin;
+      const endMinutes = endHour * 60 + endMin;
+
+      if (endMinutes <= startMinutes) {
+        return next(new Error("End time must be after start time"));
+      }
+    } catch (error) {
+      return next(new Error("Invalid time format"));
     }
   }
   next();
 });
 
-// Method to book ticket (UPDATED)
+// Method to book ticket with Ticket schema integration
 eventSchema.methods.bookTicket = async function (
   userId,
+  userInfo,
   ticketType = "Regular",
   quantity = 1
 ) {
+  const Ticket = mongoose.model("Ticket");
+  
   // Check if using ticket types
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     const selectedTicket = this.ticketTypes.find(
@@ -554,18 +613,73 @@ eventSchema.methods.bookTicket = async function (
       throw new Error("Event is not available for booking");
     }
 
-    const ticketId = `TKT-${this._id.toString().slice(-6)}-${Date.now()}`;
     const totalPrice = selectedTicket.price * quantity;
 
+    // CREATE TICKET DOCUMENT AUTOMATICALLY
+    const ticket = new Ticket({
+      // Ticket Identification
+      ticketNumber: `TKT-${this._id.toString().slice(-6)}-${Date.now().toString().slice(-6)}`,
+      qrCode: `QR-${this._id}-${userId}-${Date.now()}`,
+      
+      // Event Information (from current event)
+      eventId: this._id,
+      eventName: this.title,
+      eventDate: this.date,
+      eventTime: this.time,
+      eventEndTime: this.endTime,
+      eventVenue: this.venue,
+      eventAddress: this.address,
+      eventCity: this.city,
+      eventCategory: this.category,
+      eventCoordinates: this.coordinates,
+      
+      // Ticket Holder Information (from userInfo)
+      userId: userId,
+      userName: userInfo.name,
+      userEmail: userInfo.email,
+      userPhone: userInfo.phone,
+      
+      // Ticket Details
+      ticketType: ticketType,
+      ticketPrice: selectedTicket.price,
+      quantity: quantity,
+      totalAmount: totalPrice,
+      currency: this.currency,
+      
+      // Organizer Information
+      organizerId: this.organizer,
+      organizerName: this.organizerInfo?.name || "Event Organizer",
+      organizerEmail: this.organizerInfo?.email,
+      organizerCompany: this.organizerInfo?.companyName,
+      
+      // Refund Policy from event
+      refundPolicy: this.refundPolicy,
+      
+      // Initial location history
+      locationHistory: [{
+        latitude: this.coordinates?.latitude,
+        longitude: this.coordinates?.longitude,
+        address: this.address,
+        type: "purchase",
+        source: "system",
+        timestamp: new Date()
+      }]
+    });
+
+    // Save the ticket
+    await ticket.save();
+
+    // Add to event attendees with actual Ticket document ID
     this.attendees.push({
       user: userId,
-      ticketId: ticketId,
+      ticketId: ticket._id,
       ticketType: ticketType,
       quantity: quantity,
       totalPrice: totalPrice,
       status: "confirmed",
     });
 
+    // Update event statistics
     selectedTicket.availableTickets -= quantity;
     this.totalAttendees += quantity;
     this.bookings += 1;
@@ -573,7 +687,19 @@ eventSchema.methods.bookTicket = async function (
 
     await this.save();
 
-    return { ticketId, ticketType, quantity, totalPrice };
+    return { 
+      ticketId: ticket._id, 
+      ticketNumber: ticket.ticketNumber,
+      qrCode: ticket.qrCode,
+      ticketType, 
+      quantity, 
+      totalPrice,
+      eventName: this.title,
+      eventDate: this.date,
+      eventVenue: this.venue,
+      eventTime: this.time
+    };
+
   } else {
     // Legacy booking (backward compatibility)
     if (this.availableTickets < quantity) {
@@ -584,12 +710,39 @@ eventSchema.methods.bookTicket = async function (
       throw new Error("Event is not available for booking");
     }
 
-    const ticketId = `TKT-${this._id.toString().slice(-6)}-${Date.now()}`;
     const totalPrice = this.price * quantity;
+
+    // Create ticket for legacy events too
+    const ticket = new Ticket({
+      ticketNumber: `TKT-${this._id.toString().slice(-6)}-${Date.now().toString().slice(-6)}`,
+      qrCode: `QR-${this._id}-${userId}-${Date.now()}`,
+      eventId: this._id,
+      eventName: this.title,
+      eventDate: this.date,
+      eventTime: this.time,
+      eventEndTime: this.endTime,
+      eventVenue: this.venue,
+      eventAddress: this.address,
+      eventCity: this.city,
+      eventCategory: this.category,
+      userId: userId,
+      userName: userInfo.name,
+      userEmail: userInfo.email,
+      userPhone: userInfo.phone,
+      ticketType: "Regular",
+      ticketPrice: this.price,
+      quantity: quantity,
+      totalAmount: totalPrice,
+      currency: this.currency,
+      organizerId: this.organizer,
+      organizerName: this.organizerInfo?.name || "Event Organizer",
+    });
+
+    await ticket.save();
 
     this.attendees.push({
       user: userId,
-      ticketId: ticketId,
+      ticketId: ticket._id,
       quantity: quantity,
       totalPrice: totalPrice,
       status: "confirmed",
@@ -602,47 +755,63 @@ eventSchema.methods.bookTicket = async function (
 
     await this.save();
 
-    return { ticketId, quantity, totalPrice };
+    return { 
+      ticketId: ticket._id, 
+      ticketNumber: ticket.ticketNumber,
+      quantity, 
+      totalPrice 
+    };
   }
 };
 
-// Method to cancel booking (UPDATED)
+// Method to cancel booking with Ticket integration
 eventSchema.methods.cancelBooking = async function (userId) {
-  const attendeeIndex = this.attendees.findIndex(
-    (a) => a.user.toString() === userId.toString() && a.status === "confirmed"
-  );
-
-  if (attendeeIndex === -1) {
-    throw new Error("Booking not found");
-  }
-
-  const attendee = this.attendees[attendeeIndex];
-  attendee.status = "cancelled";
-
-  // Restore tickets
-  if (this.ticketTypes && this.ticketTypes.length > 0) {
-    const ticketType = this.ticketTypes.find(
-      (tt) => tt.name === attendee.ticketType
+  try {
+    const attendeeIndex = this.attendees.findIndex(
+      (a) => a.user.toString() === userId.toString() && a.status === "confirmed"
     );
-    if (ticketType) {
-      ticketType.availableTickets += attendee.quantity;
+
+    if (attendeeIndex === -1) {
+      throw new Error("Booking not found");
     }
-  } else {
-    this.availableTickets += attendee.quantity;
+
+    const attendee = this.attendees[attendeeIndex];
+    attendee.status = "cancelled";
+
+    // Update the Ticket document status
+    const Ticket = mongoose.model("Ticket");
+    await Ticket.findByIdAndUpdate(attendee.ticketId, {
+      status: "cancelled",
+      refundStatus: "requested"
+    });
+
+    // Restore tickets
+    if (this.ticketTypes && this.ticketTypes.length > 0) {
+      const ticketType = this.ticketTypes.find(
+        (tt) => tt.name === attendee.ticketType
+      );
+      if (ticketType) {
+        ticketType.availableTickets += attendee.quantity;
+      }
+    } else {
+      this.availableTickets += attendee.quantity;
+    }
+
+    this.totalAttendees -= attendee.quantity;
+
+    if (this.refundPolicy !== "no-refund") {
+      this.totalRevenue -= attendee.totalPrice;
+    }
+
+    await this.save();
+  } catch (error) {
+    throw new Error(`Failed to cancel booking: ${error.message}`);
   }
-
-  this.totalAttendees -= attendee.quantity;
-
-  if (this.refundPolicy !== "no-refund") {
-    this.totalRevenue -= attendee.totalPrice;
-  }
-
-  await this.save();
 };
 
-// Method to check in attendee
+// Method to check in attendee with Ticket integration
 eventSchema.methods.checkInAttendee = async function (ticketId) {
-  const attendee = this.attendees.find((a) => a.ticketId === ticketId);
+  const attendee = this.attendees.find((a) => a.ticketId && a.ticketId.toString() === ticketId.toString());
 
   if (!attendee) {
     throw new Error("Invalid ticket ID");
@@ -654,6 +823,14 @@ eventSchema.methods.checkInAttendee = async function (ticketId) {
 
   attendee.checkedIn = true;
   attendee.checkedInAt = new Date();
+
+  // Update the Ticket document
+  const Ticket = mongoose.model("Ticket");
+  await Ticket.findByIdAndUpdate(ticketId, {
+    isCheckedIn: true,
+    checkedInAt: new Date(),
+    status: "used"
+  });
 
   await this.save();
 
@@ -681,11 +858,21 @@ eventSchema.methods.toggleLike = async function (userId) {
   await this.save({ validateBeforeSave: false });
 };
 
-// Method to cancel event
+// Method to cancel event with Ticket integration
 eventSchema.methods.cancelEvent = async function (reason) {
   this.status = "cancelled";
   this.cancelledAt = new Date();
   this.isActive = false;
+
+  // Update all Ticket documents for this event
+  const Ticket = mongoose.model("Ticket");
+  await Ticket.updateMany(
+    { eventId: this._id, status: "confirmed" },
+    { 
+      status: "cancelled",
+      refundStatus: "requested"
+    }
+  );
 
   this.attendees.forEach((attendee) => {
     if (attendee.status === "confirmed") {
@@ -700,6 +887,92 @@ eventSchema.methods.cancelEvent = async function (reason) {
 eventSchema.methods.completeEvent = async function () {
   this.status = "completed";
   this.completedAt = new Date();
+  
+  // Update all active tickets to expired
+  const Ticket = mongoose.model("Ticket");
+  await Ticket.updateMany(
+    { eventId: this._id, status: "confirmed" },
+    { status: "expired" }
+  );
+
+  await this.save();
+};
+
+// Method to start sharing live location
+eventSchema.methods.startLocationSharing = async function(organizerId, initialLocation) {
+  if (this.organizer.toString() !== organizerId.toString()) {
+    throw new Error('Only event organizer can share location');
+  }
+
+  this.liveLocation = {
+    isSharing: true,
+    lastUpdated: new Date(),
+    currentLocation: {
+      latitude: initialLocation.latitude,
+      longitude: initialLocation.longitude,
+      address: initialLocation.address,
+      accuracy: initialLocation.accuracy || 50
+    },
+    locationHistory: [{
+      latitude: initialLocation.latitude,
+      longitude: initialLocation.longitude,
+      address: initialLocation.address,
+      accuracy: initialLocation.accuracy || 50,
+      timestamp: new Date()
+    }],
+    sharedBy: organizerId
+  };
+
+  await this.save();
+  return this.liveLocation;
+};
+
+// Method to update live location
+eventSchema.methods.updateLiveLocation = async function(organizerId, newLocation) {
+  if (!this.liveLocation.isSharing) {
+    throw new Error('Location sharing is not active');
+  }
+
+  if (this.organizer.toString() !== organizerId.toString()) {
+    throw new Error('Only event organizer can update location');
+  }
+
+  // Add to history (keep last 50 locations)
+  this.liveLocation.locationHistory.unshift({
+    latitude: newLocation.latitude,
+    longitude: newLocation.longitude,
+    address: newLocation.address,
+    accuracy: newLocation.accuracy || 50,
+    timestamp: new Date()
+  });
+
+  // Keep only last 50 location points
+  if (this.liveLocation.locationHistory.length > 50) {
+    this.liveLocation.locationHistory = this.liveLocation.locationHistory.slice(0, 50);
+  }
+
+  // Update current location
+  this.liveLocation.currentLocation = {
+    latitude: newLocation.latitude,
+    longitude: newLocation.longitude,
+    address: newLocation.address,
+    accuracy: newLocation.accuracy || 50
+  };
+  this.liveLocation.lastUpdated = new Date();
+
+  await this.save();
+  return this.liveLocation;
+};
+
+// Method to stop sharing location
+eventSchema.methods.stopLocationSharing = async function(organizerId) {
+  if (this.organizer.toString() !== organizerId.toString()) {
+    throw new Error('Only event organizer can stop location sharing');
+  }
+
+  this.liveLocation.isSharing = false;
+  this.liveLocation.lastUpdated = new Date();
+
   await this.save();
 };
 
@@ -772,7 +1045,7 @@ eventSchema.statics.getStatistics = async function (organizerId) {
   const stats = await this.aggregate([
     {
       $match: {
-        organizer: mongoose.Types.ObjectId(organizerId),
+        organizer: new mongoose.Types.ObjectId(organizerId),
         status: { $ne: "draft" },
       },
     },

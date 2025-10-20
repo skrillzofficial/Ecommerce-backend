@@ -39,7 +39,9 @@ const validateImages = (req, res, next) => {
     const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp"];
     if (!allowedExtensions.includes(ext)) {
       errors.push(
-        `Image ${index + 1}: Invalid file extension. Use .jpg, .jpeg, .png, or .webp`
+        `Image ${
+          index + 1
+        }: Invalid file extension. Use .jpg, .jpeg, .png, or .webp`
       );
     }
   });
@@ -61,7 +63,9 @@ const validateProfilePicture = (req, res, next) => {
 
   // Check file size (5MB max for profile pictures)
   if (image.size > 5 * 1024 * 1024) {
-    return next(new ErrorResponse("Profile picture must be less than 5MB", 400));
+    return next(
+      new ErrorResponse("Profile picture must be less than 5MB", 400)
+    );
   }
 
   // Check MIME type
@@ -91,7 +95,7 @@ const validateProfilePicture = (req, res, next) => {
 const cleanupTempFiles = (err, req, res, next) => {
   if (req.files) {
     const deleteFile = (file) => {
-      if (file.tempFilePath) {
+      if (file.tempFilePath && fs.existsSync(file.tempFilePath)) {
         fs.unlink(file.tempFilePath, (unlinkErr) => {
           if (unlinkErr) {
             console.error("Failed to delete temp file:", unlinkErr);
@@ -115,5 +119,5 @@ const cleanupTempFiles = (err, req, res, next) => {
 module.exports = {
   validateImages,
   validateProfilePicture,
-  cleanupTempFiles
+  cleanupTempFiles,
 };

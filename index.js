@@ -11,6 +11,10 @@ const morgan = require("morgan");
 const http = require("http");
 const socketIo = require("socket.io");
 
+// Import socket handlers
+const { initializeLocationHandlers } = require("./sockets/location.handler");
+const { initializeTicketHandlers } = require("./sockets/ticket.handler");
+
 const PORT = process.env.PORT || 4000;
 
 // Routes
@@ -31,7 +35,7 @@ const {
 // EXPRESS SERVER
 const app = express();
 
-//  CREATE HTTP SERVER & SOCKET.IO 
+// CREATE HTTP SERVER & SOCKET.IO 
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -46,17 +50,20 @@ const io = socketIo(server, {
 });
 
 // Export io for use in controllers
-global.io = io; 
+global.io = io;
 
-// WebSocket connection handler 
+// WebSocket connection handler
 io.on('connection', (socket) => {
-  console.log(' New client connected:', socket.id);
-  
+  console.log('✅ New client connected:', socket.id);
+
+  // Initialize all socket handlers
+  initializeLocationHandlers(io, socket);
+  initializeTicketHandlers(io, socket);
+
   socket.on('disconnect', () => {
     console.log(' Client disconnected:', socket.id);
   });
 });
-
 
 // SECURITY MIDDLEWARE
 app.use(helmet());
@@ -85,11 +92,11 @@ cloudinary.config({
 // Cookie parser
 app.use(cookieParser());
 
-//  BODY PARSER MIDDLEWARE
+// BODY PARSER MIDDLEWARE
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-//  FILE UPLOAD MIDDLEWARE
+// FILE UPLOAD MIDDLEWARE
 app.use(
   fileUpload({
     useTempFiles: true,
@@ -103,31 +110,34 @@ app.use(
 // INPUT SANITIZATION
 app.use(sanitizeInput);
 
-//  LOGGING MIDDLEWARE
+// LOGGING MIDDLEWARE
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
 }
 
-//  SCHEDULED TASKS
+// SCHEDULED TASKS
 cron.schedule("0 2 * * *", async () => {
-  console.log("Running scheduled cleanup of unverified users...");
-  await deleteExpiredUnverifiedUsers();
+  console.log(" Running scheduled cleanup of unverified users...");
+  try {
+    await deleteExpiredUnverifiedUsers();
+  } catch (error) {
+    console.error("Cleanup error:", error);
+  }
 });
 
 // Run cleanup once on server startup
 let cleanupOnStartup = true;
 
-//  API ROUTES
+// API ROUTES
 // Health check endpoint 
 app.get("/api/v1/health", (req, res) => {
   res.status(200).json({
     success: true,
     message: "Server is healthy",
     timestamp: new Date().toISOString(),
-    database:
-      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
     environment: process.env.NODE_ENV || "development",
-    websocket: "active", 
+    websocket: "active",
   });
 });
 
@@ -160,7 +170,7 @@ app.use("/api/v1/", authRouter);
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/admin", superAdminRoutes);
 
-//  ERROR HANDLING
+// ERROR HANDLING
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({
@@ -176,7 +186,7 @@ app.use(cleanupTempFiles);
 // Global error handler
 app.use(errorHandler);
 
-//  DATABASE CONNECTION & SERVER START
+// DATABASE CONNECTION & SERVER START
 const startServer = async () => {
   try {
     // Connect to MongoDB
@@ -188,53 +198,53 @@ const startServer = async () => {
 
     // Run cleanup once on startup after DB is connected
     if (cleanupOnStartup) {
-      console.log(" Running initial cleanup on server startup...");
+      console.log("Running initial cleanup on server startup...");
       await deleteExpiredUnverifiedUsers();
       cleanupOnStartup = false;
     }
 
-    // Start Express server
-    app.listen(PORT, () => {
+    // Start the HTTP server (which includes both Express and Socket.IO)
+    server.listen(PORT, () => {
       console.log(`   Server is running on port ${PORT}`);
       console.log(`   Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`   Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
       console.log(`   API Base: http://localhost:${PORT}/api/v1`);
-      console.log(` WebSocket: Active on port ${PORT}`);
-      console.log(" Cleanup scheduled for daily at 2:00 AM");
-      console.log(" Server ready to accept connections");
+      console.log(`   WebSocket: Active on port ${PORT}`);
+      console.log("   Cleanup scheduled for daily at 2:00 AM");
+      console.log("   Server ready to accept connections");
     });
   } catch (error) {
-    console.error(" Error connecting to the database:", error);
+    console.error("Error connecting to the database:", error);
     process.exit(1);
   }
 };
 
-//  GRACEFUL SHUTDOWN
+// GRACEFUL SHUTDOWN
 process.on("SIGINT", async () => {
-  console.log(" Shutting down...");
+  console.log("Shutting down...");
   try {
     io.close(); 
     await mongoose.connection.close();
     console.log("Database connection closed");
-    console.log(" Server shut down successfully");
+    console.log("Server shut down successfully");
     process.exit(0);
   } catch (error) {
-    console.error(" Error during shutdown:", error);
+    console.error("Error during shutdown:", error);
     process.exit(1);
   }
 });
 
 // Handle SIGTERM (server termination)
 process.on("SIGTERM", async () => {
-  console.log(" Server termination signal received...");
+  console.log("Server termination signal received...");
   try {
     io.close(); 
     await mongoose.connection.close();
-    console.log(" Database connection closed");
-    console.log(" Server terminated successfully");
+    console.log("Database connection closed");
+    console.log("Server terminated successfully");
     process.exit(0);
   } catch (error) {
-    console.error(" Error during shutdown:", error);
+    console.error("Error during shutdown:", error);
     process.exit(1);
   }
 });
@@ -249,7 +259,7 @@ process.on("uncaughtException", (error) => {
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (error) => {
-  console.error(" UNHANDLED REJECTION! Shutting down...");
+  console.error("UNHANDLED REJECTION! Shutting down...");
   console.error(error);
   io.close();
   mongoose.connection.close().then(() => {

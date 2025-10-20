@@ -91,27 +91,48 @@ const validateEventCreation = (req, res, next) => {
     
     if (isNaN(eventDate.getTime())) {
       errors.push("Invalid date format");
-    } else if (eventDate < today) {
-      errors.push("Event date must be in the future");
+    } else {
+      eventDate.setHours(0, 0, 0, 0);
+      if (eventDate < today) {
+        errors.push("Event date must be in the future");
+      }
     }
   }
 
   // Time validation
-  if (!time || !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
+  if (!time || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
     errors.push("Valid time is required (HH:MM format)");
   }
-  if (!endTime || !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(endTime)) {
+  if (!endTime || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
     errors.push("Valid end time is required (HH:MM format)");
+  }
+
+  // Validate time order if both are provided
+  if (time && endTime && /^([01]\d|2[0-3]):([0-5]\d)$/.test(time) && /^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
+    const [startHour, startMin] = time.split(":").map(Number);
+    const [endHour, endMin] = endTime.split(":").map(Number);
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    
+    if (endMinutes <= startMinutes) {
+      errors.push("End time must be after start time");
+    }
   }
 
   // Venue validation
   if (!venue || venue.trim().length < 3) {
     errors.push("Venue must be at least 3 characters long");
   }
+  if (venue && venue.length > 200) {
+    errors.push("Venue must not exceed 200 characters");
+  }
 
   // Address validation
   if (!address || address.trim().length < 5) {
     errors.push("Address must be at least 5 characters long");
+  }
+  if (address && address.length > 500) {
+    errors.push("Address must not exceed 500 characters");
   }
 
   // City validation 
@@ -192,6 +213,8 @@ const validateEventUpdate = (req, res, next) => {
   const category = getValue(req.body, 'category');
   const city = getValue(req.body, 'city');
   const date = getValue(req.body, 'date');
+  const time = getValue(req.body, 'time');
+  const endTime = getValue(req.body, 'endTime');
   const price = getValue(req.body, 'price');
   const capacity = getValue(req.body, 'capacity');
 
@@ -268,8 +291,32 @@ const validateEventUpdate = (req, res, next) => {
     
     if (isNaN(eventDate.getTime())) {
       errors.push("Invalid date format");
-    } else if (eventDate < today) {
-      errors.push("Event date must be in the future");
+    } else {
+      eventDate.setHours(0, 0, 0, 0);
+      if (eventDate < today) {
+        errors.push("Event date must be in the future");
+      }
+    }
+  }
+
+  // Time validation (if provided)
+  if (time !== undefined && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
+    errors.push("Valid time is required (HH:MM format)");
+  }
+
+  if (endTime !== undefined && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
+    errors.push("Valid end time is required (HH:MM format)");
+  }
+
+  // Validate time order if both are provided
+  if (time && endTime && /^([01]\d|2[0-3]):([0-5]\d)$/.test(time) && /^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
+    const [startHour, startMin] = time.split(":").map(Number);
+    const [endHour, endMin] = endTime.split(":").map(Number);
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    
+    if (endMinutes <= startMinutes) {
+      errors.push("End time must be after start time");
     }
   }
 
@@ -298,18 +345,26 @@ const validateEventUpdate = (req, res, next) => {
 
 // Validate booking data
 const validateBooking = (req, res, next) => {
-  const { quantity } = req.body;
+  const { quantity, ticketType } = req.body;
+
+  const errors = [];
 
   if (quantity !== undefined) {
     const qty = parseInt(quantity);
     if (isNaN(qty) || qty < 1) {
-      return next(new ErrorResponse("Quantity must be at least 1", 400));
+      errors.push("Quantity must be at least 1");
     }
     if (qty > 10) {
-      return next(
-        new ErrorResponse("Cannot book more than 10 tickets at once", 400)
-      );
+      errors.push("Cannot book more than 10 tickets at once");
     }
+  }
+
+  if (ticketType && !["Regular", "VIP", "VVIP"].includes(ticketType)) {
+    errors.push("Ticket type must be Regular, VIP, or VVIP");
+  }
+
+  if (errors.length > 0) {
+    return next(new ErrorResponse(errors.join(", "), 400));
   }
 
   next();
@@ -319,8 +374,8 @@ const validateBooking = (req, res, next) => {
 const validateObjectId = (req, res, next) => {
   const { id } = req.params;
 
-  if (!id.match(/^[0-9a-fA-F]{24}$/)) {
-    return next();
+  if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+    return next(new ErrorResponse("Invalid ID format", 400));
   }
 
   next();
@@ -405,6 +460,13 @@ const sanitizeInput = (req, res, next) => {
     }
     if (typeof value === 'string') {
       return sanitizeString(value);
+    }
+    if (value && typeof value === 'object') {
+      const sanitized = {};
+      for (const key in value) {
+        sanitized[key] = sanitizeValue(value[key]);
+      }
+      return sanitized;
     }
     return value;
   };
