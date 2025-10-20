@@ -24,6 +24,14 @@ const initializeLocationHandlers = (io, socket) => {
         return;
       }
 
+      // Check if user is the organizer
+      if (event.organizerId.toString() !== userId.toString()) {
+        socket.emit('location-error', { 
+          message: 'Only event organizer can share location' 
+        });
+        return;
+      }
+
       // Use the model method to start location sharing
       const locationData = await event.startLocationSharing(userId, {
         latitude: parseFloat(latitude),
@@ -32,8 +40,8 @@ const initializeLocationHandlers = (io, socket) => {
         accuracy: accuracy || 50
       });
 
-      // Broadcast to all connected clients
-      io.emit('event-location-update', {
+      // Broadcast to all connected clients in the event room
+      io.to(`event-${eventId}`).emit('event-location-update', {
         eventId: event._id,
         eventName: event.title,
         latitude: locationData.currentLocation.latitude,
@@ -81,6 +89,14 @@ const initializeLocationHandlers = (io, socket) => {
         return;
       }
 
+      // Check if user is the organizer
+      if (event.organizerId.toString() !== userId.toString()) {
+        socket.emit('location-error', { 
+          message: 'Only event organizer can update location' 
+        });
+        return;
+      }
+
       // Use model method to update location
       const updatedLocation = await event.updateLiveLocation(userId, {
         latitude: parseFloat(latitude),
@@ -89,8 +105,8 @@ const initializeLocationHandlers = (io, socket) => {
         accuracy: accuracy || 50
       });
 
-      // Broadcast update to all clients
-      io.emit('event-location-update', {
+      // Broadcast update to all clients in the event room
+      io.to(`event-${eventId}`).emit('event-location-update', {
         eventId: event._id,
         eventName: event.title,
         latitude: updatedLocation.currentLocation.latitude,
@@ -102,7 +118,7 @@ const initializeLocationHandlers = (io, socket) => {
         organizerId: userId
       });
 
-      console.log(` Event location updated: "${event.title}"`);
+      console.log(`Event location updated: "${event.title}"`);
 
     } catch (error) {
       console.error('Error updating event location:', error);
@@ -132,11 +148,19 @@ const initializeLocationHandlers = (io, socket) => {
         return;
       }
 
+      // Check if user is the organizer
+      if (event.organizerId.toString() !== userId.toString()) {
+        socket.emit('location-error', { 
+          message: 'Only event organizer can stop location sharing' 
+        });
+        return;
+      }
+
       // Use model method to stop sharing
       await event.stopLocationSharing(userId);
 
-      // Notify all clients
-      io.emit('event-location-ended', {
+      // Notify all clients in the event room
+      io.to(`event-${eventId}`).emit('event-location-ended', {
         eventId: event._id,
         eventName: event.title,
         message: 'Live location sharing has ended',
@@ -144,7 +168,7 @@ const initializeLocationHandlers = (io, socket) => {
         organizerId: userId
       });
 
-      console.log(` Live location sharing stopped for event: "${event.title}"`);
+      console.log(`Live location sharing stopped for event: "${event.title}"`);
 
       socket.emit('location-sharing-stopped', {
         eventId: event._id,
@@ -197,10 +221,17 @@ const initializeLocationHandlers = (io, socket) => {
       // Get live location using model method
       const liveLocation = event.getLiveLocation();
       
-      if (liveLocation) {
+      if (liveLocation && liveLocation.isActive) {
         socket.emit('current-event-location', {
-          ...liveLocation,
-          eventName: event.title
+          eventId: event._id,
+          eventName: event.title,
+          latitude: liveLocation.currentLocation.latitude,
+          longitude: liveLocation.currentLocation.longitude,
+          address: liveLocation.currentLocation.address,
+          accuracy: liveLocation.currentLocation.accuracy,
+          lastUpdated: liveLocation.lastUpdated,
+          isActive: true,
+          organizerId: liveLocation.organizerId
         });
       } else {
         socket.emit('location-not-available', { 
@@ -252,9 +283,26 @@ const initializeLocationHandlers = (io, socket) => {
       }
 
       // Join room for this event's location updates
+      socket.join(`event-${eventId}`);
       socket.join(`event-location-${eventId}`);
       
-      console.log(` User ${userId} subscribed to location updates for event ${eventId}`);
+      console.log(`User ${userId} subscribed to location updates for event ${eventId}`);
+
+      // Send current location if available
+      const event = await Event.findById(eventId);
+      if (event && event.liveLocation && event.liveLocation.isActive) {
+        socket.emit('event-location-update', {
+          eventId: event._id,
+          eventName: event.title,
+          latitude: event.liveLocation.currentLocation.latitude,
+          longitude: event.liveLocation.currentLocation.longitude,
+          address: event.liveLocation.currentLocation.address,
+          accuracy: event.liveLocation.currentLocation.accuracy,
+          lastUpdated: event.liveLocation.lastUpdated,
+          isActive: true,
+          organizerId: event.liveLocation.organizerId
+        });
+      }
 
       socket.emit('subscription-success', {
         eventId,
@@ -273,13 +321,32 @@ const initializeLocationHandlers = (io, socket) => {
   const unsubscribeFromLocation = (data) => {
     const { eventId } = data;
     socket.leave(`event-location-${eventId}`);
+    socket.leave(`event-${eventId}`);
     
-    console.log(` User unsubscribed from location updates for event ${eventId}`);
+    console.log(`User unsubscribed from location updates for event ${eventId}`);
     
     socket.emit('unsubscribed', {
       eventId,
       message: 'Unsubscribed from location updates'
     });
+  };
+
+  // Join event room for general updates
+  const joinEvent = (data) => {
+    const { eventId } = data;
+    if (eventId) {
+      socket.join(`event-${eventId}`);
+      console.log(`User joined event room: ${eventId}`);
+    }
+  };
+
+  // Leave event room
+  const leaveEvent = (data) => {
+    const { eventId } = data;
+    if (eventId) {
+      socket.leave(`event-${eventId}`);
+      console.log(`User left event room: ${eventId}`);
+    }
   };
 
   // Register event handlers
@@ -289,6 +356,8 @@ const initializeLocationHandlers = (io, socket) => {
   socket.on('get-event-location', getEventLocation);
   socket.on('subscribe-to-location', subscribeToLocation);
   socket.on('unsubscribe-from-location', unsubscribeFromLocation);
+  socket.on('joinEvent', joinEvent);
+  socket.on('leaveEvent', leaveEvent);
 };
 
 module.exports = { initializeLocationHandlers };
