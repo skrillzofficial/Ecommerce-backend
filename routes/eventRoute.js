@@ -39,6 +39,9 @@ router.get("/upcoming", getUpcomingEvents);
 // Get all events with filtering (optionalAuth allows organizers to see drafts)
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
+// GET SINGLE EVENT BY ID OR SLUG 
+router.get("/:id", getEventById);
+
 
 router.use(protect); // All routes below require authentication
 
@@ -110,7 +113,6 @@ router.patch(
 // Delete event (Organizer only)
 router.delete("/:id", authorize("organizer", "superadmin"), deleteEvent);
 
-// GET SINGLE EVENT BY ID OR SLUG 
-router.get("/:id", getEventById);
+
 
 module.exports = router;

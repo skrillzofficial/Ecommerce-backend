@@ -7,11 +7,12 @@ const ticketSchema = new mongoose.Schema(
       type: String,
       required: [true, "Ticket number is required"],
       unique: true,
-      index: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
     qrCode: {
       type: String,
       required: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
     barcode: {
       type: String,
@@ -22,7 +23,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
       required: [true, "Event ID is required"],
-      index: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
     eventName: {
       type: String,
@@ -91,7 +92,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "User ID is required"],
-      index: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
     userName: {
       type: String,
@@ -151,7 +152,7 @@ const ticketSchema = new mongoose.Schema(
         message: "{VALUE} is not a valid ticket status",
       },
       default: "confirmed",
-      index: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
 
     // Validation Information (for real-time validation)
@@ -232,7 +233,7 @@ const ticketSchema = new mongoose.Schema(
     },
     transactionId: {
       type: String,
-      index: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
 
     // Organizer Information (from Event schema)
@@ -240,7 +241,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
+      // REMOVED: index: true (will be defined in schema.index() below)
     },
     organizerName: {
       type: String,
@@ -357,7 +358,7 @@ const ticketSchema = new mongoose.Schema(
     // Timestamps
     expiresAt: {
       type: Date,
-      index: { expireAfterSeconds: 0 },
+      // REMOVED: index: { expireAfterSeconds: 0 } (will be defined in schema.index() below)
     },
   },
   {
@@ -367,19 +368,29 @@ const ticketSchema = new mongoose.Schema(
   }
 );
 
-// Indexes for Performance
-ticketSchema.index({ eventId: 1, userId: 1 });
+// ✅ FIXED: Indexes defined ONLY ONCE here - no duplicates
 ticketSchema.index({ ticketNumber: 1 });
 ticketSchema.index({ qrCode: 1 });
+ticketSchema.index({ eventId: 1 });
+ticketSchema.index({ userId: 1 });
+ticketSchema.index({ status: 1 });
+ticketSchema.index({ transactionId: 1 });
+ticketSchema.index({ organizerId: 1 });
+ticketSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Compound indexes
+ticketSchema.index({ eventId: 1, userId: 1 });
 ticketSchema.index({ status: 1, eventDate: 1 });
 ticketSchema.index({ userId: 1, status: 1 });
 ticketSchema.index({ eventId: 1, status: 1 });
 ticketSchema.index({ userEmail: 1, eventId: 1 });
+ticketSchema.index({ organizerId: 1, status: 1 });
+ticketSchema.index({ ticketType: 1, status: 1 });
+
+// Additional performance indexes
 ticketSchema.index({ purchaseDate: -1 });
 ticketSchema.index({ checkedInAt: -1 });
-ticketSchema.index({ organizerId: 1, status: 1 });
 ticketSchema.index({ "locationHistory.timestamp": -1 });
-ticketSchema.index({ ticketType: 1, status: 1 });
 
 // Virtual Fields
 ticketSchema.virtual("isActive").get(function () {
@@ -627,7 +638,7 @@ ticketSchema.statics.findByUser = function (userId, options = {}) {
 ticketSchema.statics.getEventStats = async function (eventId) {
   const stats = await this.aggregate([
     {
-      $match: { eventId: mongoose.Types.ObjectId(eventId) },
+      $match: { eventId: new mongoose.Types.ObjectId(eventId) },
     },
     {
       $group: {
@@ -641,7 +652,7 @@ ticketSchema.statics.getEventStats = async function (eventId) {
 
   const ticketTypes = await this.aggregate([
     {
-      $match: { eventId: mongoose.Types.ObjectId(eventId) },
+      $match: { eventId: new mongoose.Types.ObjectId(eventId) },
     },
     {
       $group: {
