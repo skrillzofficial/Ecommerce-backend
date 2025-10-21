@@ -3,6 +3,7 @@ const User = require("../models/user");
 const ErrorResponse = require("../utils/errorResponse");
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
+const { sendBookingEmail } = require("../utils/sendEmail");
 
 // @desc    Create new event
 // @route   POST /api/v1/events
@@ -886,7 +887,7 @@ const getOrganizerStatistics = async (req, res, next) => {
 const bookEventTicket = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { ticketType = "Regular", quantity = 1 } = req.body;
+    const { ticketType = "Regular", quantity = 1, userInfo } = req.body;
 
     const event = await Event.findById(id);
 
@@ -907,18 +908,76 @@ const bookEventTicket = async (req, res, next) => {
       return next(new ErrorResponse("You have already booked this event", 400));
     }
 
+    // Get user info for booking
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    // Prepare user info for booking
+    const bookingUserInfo = {
+      name: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      phone: user.phone || "",
+    };
+
     // Book ticket with ticket type
     const bookingResult = await event.bookTicket(
       req.user.userId,
+      bookingUserInfo,
       ticketType,
       quantity
     );
+
+    // Format event date for email
+    const eventDate = new Date(event.date).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    // Prepare ticket details for email
+    const ticketDetails = `
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 5px 0;">${bookingResult.ticketType} x ${bookingResult.quantity}</td>
+          <td style="padding: 5px 0; text-align: right;">₦${(bookingResult.totalPrice / bookingResult.quantity).toLocaleString()}</td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 0; border-bottom: 1px solid #e0e0e0;">Subtotal</td>
+          <td style="padding: 5px 0; text-align: right; border-bottom: 1px solid #e0e0e0;">₦${bookingResult.totalPrice.toLocaleString()}</td>
+        </tr>
+      </table>
+    `;
+
+    // Send booking confirmation email
+    try {
+      await sendBookingEmail({
+        fullName: bookingUserInfo.name,
+        email: bookingUserInfo.email,
+        eventName: event.title,
+        eventDate: eventDate,
+        eventTime: event.time,
+        eventVenue: event.venue,
+        eventAddress: event.address,
+        bookingId: bookingResult.ticketId.toString(),
+        ticketDetails: ticketDetails,
+        totalAmount: `₦${bookingResult.totalPrice.toLocaleString()}`,
+        clientUrl: `${process.env.FRONTEND_URL}/bookings/${bookingResult.ticketId}`
+      });
+    } catch (emailError) {
+      console.error("Failed to send booking email:", emailError);
+      // Don't fail the booking if email fails
+    }
 
     res.status(200).json({
       success: true,
       message: "Ticket(s) booked successfully",
       booking: {
         ticketId: bookingResult.ticketId,
+        ticketNumber: bookingResult.ticketNumber,
+        qrCode: bookingResult.qrCode,
         ticketType: bookingResult.ticketType || ticketType,
         quantity: bookingResult.quantity || quantity,
         totalPrice: bookingResult.totalPrice,
