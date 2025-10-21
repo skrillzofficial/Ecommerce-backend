@@ -16,7 +16,7 @@ const {
   cancelEvent,
   getFeaturedEvents,
   getUpcomingEvents,
-  getTicketAvailability, // NEW
+  getTicketAvailability,
 } = require("../controllers/event.controller");
 
 const { protect, authorize, optionalAuth } = require("../middleware/auth");
@@ -29,6 +29,8 @@ const {
 } = require("../middleware/validation");
 
 
+// PUBLIC ROUTES (No authentication required)
+
 
 // Get featured events
 router.get("/featured", getFeaturedEvents);
@@ -36,22 +38,18 @@ router.get("/featured", getFeaturedEvents);
 // Get upcoming events
 router.get("/upcoming", getUpcomingEvents);
 
-// Get all events with filtering (optionalAuth allows organizers to see drafts)
+// Get all events with filtering
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
-// GET SINGLE EVENT BY ID OR SLUG 
-router.get("/:id", getEventById);
 
+// PROTECTED ROUTES (Authentication required)
 
-router.use(protect); // All routes below require authentication
+router.use(protect);
 
-// IMPORTANT: Specific routes MUST come before parameterized routes
-// Get user's bookings (MUST be before /:id)
+// User's bookings (MUST be before /:id)
 router.get("/my-bookings", validateQueryParams, getMyBookings);
 
-
-
-// Get organizer's events (MUST be before /:id)
+// Organizer's events (MUST be before /:id)
 router.get(
   "/organizer/my-events",
   authorize("organizer", "superadmin"),
@@ -59,7 +57,7 @@ router.get(
   getOrganizerEvents
 );
 
-// Get organizer statistics (MUST be before /:id)
+// Organizer statistics (MUST be before /:id)
 router.get(
   "/organizer/statistics",
   authorize("organizer", "superadmin"),
@@ -76,8 +74,10 @@ router.post(
 );
 
 
-// Get ticket availability for an event (NEW - PUBLIC ACCESS)
-// Moving this before authentication requirement since it should be public
+// ROUTES WITH :id PARAMETER (MUST BE LAST)
+
+
+// Get ticket availability (public info, but after protect)
 router.get("/:id/ticket-availability", getTicketAvailability);
 
 // Book event ticket
@@ -99,8 +99,6 @@ router.delete(
 // Cancel event (Organizer only)
 router.patch("/:id/cancel", authorize("organizer", "superadmin"), cancelEvent);
 
-
-
 // Update event (Organizer only)
 router.patch(
   "/:id",
@@ -113,6 +111,7 @@ router.patch(
 // Delete event (Organizer only)
 router.delete("/:id", authorize("organizer", "superadmin"), deleteEvent);
 
-
+// GET SINGLE EVENT BY ID OR SLUG (MUST BE LAST!)
+router.get("/:id", getEventById);
 
 module.exports = router;
