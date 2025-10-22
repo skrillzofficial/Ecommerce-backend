@@ -1,4 +1,4 @@
-const PaymentTemplate = (fullName, eventName, paymentId, paymentDate, amount, paymentMethod, bookingId, clientUrl) => {
+const createPaymentTemplate = (fullName, eventName, paymentId, paymentDate, amount, paymentMethod, bookingId, clientUrl) => {
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -127,4 +127,4 @@ const PaymentTemplate = (fullName, eventName, paymentId, paymentDate, amount, pa
 `;
 };
 
-module.exports = { PaymentTemplate };
+module.exports = { createPaymentTemplate };

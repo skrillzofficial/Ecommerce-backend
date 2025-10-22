@@ -1,4 +1,4 @@
-const BookingTemplate = (fullName, eventName, eventDate, eventTime, eventVenue, eventAddress, bookingId, ticketDetails, totalAmount, clientUrl) => {
+const createBookingTemplate = (fullName, eventName, eventDate, eventTime, eventVenue, eventAddress, bookingId, ticketDetails, totalAmount, clientUrl) => {
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -112,7 +112,7 @@ const BookingTemplate = (fullName, eventName, eventDate, eventTime, eventVenue, 
           "
         >
           <p style="margin: 0; font-size: 14px;">
-            <strong>✅ Booking Confirmed</strong><br>
+            <strong> Booking Confirmed</strong><br>
             Your tickets will be emailed to you separately. Please bring a valid ID to the event.
           </p>
         </div>
@@ -137,4 +137,4 @@ const BookingTemplate = (fullName, eventName, eventDate, eventTime, eventVenue, 
 `;
 };
 
-module.exports = { BookingTemplate };
+module.exports = { createBookingTemplate };

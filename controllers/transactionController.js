@@ -136,7 +136,7 @@ const initializeTransaction = async (req, res) => {
     // Initialize Paystack payment
     const paystackResponse = await initializePayment({
       email: transaction.email,
-      amount: finalAmount * 100, 
+      amount: finalAmount * 1, 
       reference: reference,
       metadata: {
         transactionId: transaction._id,
@@ -267,7 +267,6 @@ const verifyTransaction = async (req, res) => {
         });
       } catch (emailError) {
         console.error("Failed to send payment email:", emailError);
-        // Don't fail the transaction if email fails
       }
 
       // Send booking confirmation email with ticket details
@@ -529,7 +528,7 @@ const requestRefund = async (req, res) => {
 // @access  Private (Admin/Organizer)
 const processRefund = async (req, res) => {
   try {
-    const { action, rejectionReason } = req.body; // action: 'approve' or 'reject'
+    const { action, rejectionReason } = req.body;
     const transaction = await Transaction.findById(req.params.id)
       .populate('eventId');
 
