@@ -13,49 +13,65 @@ const protect = async (req, res, next) => {
       req.headers.authorization.startsWith("Bearer")
     ) {
       token = req.headers.authorization.split(" ")[1];
+      console.log("🔐 Token found in Authorization header");
     }
     // Check for token in cookies
     else if (req.cookies.token) {
       token = req.cookies.token;
+      console.log("🔐 Token found in cookies");
     }
 
     // Make sure token exists
     if (!token) {
-      return next(new ErrorResponse("Not authorized to access this route", 401));
+      console.log("❌ No token provided");
+      return next(
+        new ErrorResponse("Not authorized to access this route", 401)
+      );
     }
-
+    console.log("🔐 Token length:", token.length);
+    console.log("🔐 Token sample:", token.substring(0, 20) + "...");
     try {
       // Verify token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      console.log("✅ Token verified successfully");
+      console.log("🔐 Decoded token payload:", decoded);
 
       // Get user from token
       const user = await User.findById(decoded.userId).select("-password");
 
       if (!user) {
+        console.error("❌ No valid user ID found in token:", decoded);
         return next(new ErrorResponse("User not found", 404));
       }
-
+      console.log("🔐 User ID from token:", userId);
       // Check if user is active
       if (!user.isActive) {
+        console.log("❌ User account inactive:", user.email);
         return next(new ErrorResponse("Account has been deactivated", 403));
       }
 
       //  Attach user with multiple ID formats for compatibility
       req.user = {
-        _id: user._id,       
-        id: user._id,         
-        userId: user._id,     
+        _id: user._id,
+        id: user._id,
+        userId: user._id,
         email: user.email,
         role: user.role,
         userName: user.userName,
       };
-
+      console.log("✅ User attached to request:", req.user.email);
       next();
     } catch (error) {
       if (error.name === "TokenExpiredError") {
-        return next(new ErrorResponse("Token expired, please login again", 401));
+        console.log("❌ Token expired");
+        return next(
+          new ErrorResponse("Token expired, please login again", 401)
+        );
       }
-      return next(new ErrorResponse("Not authorized to access this route", 401));
+       console.error("❌ Token verification error:", error.message);
+      return next(
+        new ErrorResponse("Not authorized to access this route", 401)
+      );
     }
   } catch (error) {
     console.error("Auth middleware error:", error);
@@ -178,10 +194,7 @@ const rateLimit = (maxRequests = 100, windowMs = 15 * 60 * 1000) => {
 
     if (recentRequests.length >= maxRequests) {
       return next(
-        new ErrorResponse(
-          `Too many requests. Please try again later.`,
-          429
-        )
+        new ErrorResponse(`Too many requests. Please try again later.`, 429)
       );
     }
 
@@ -203,5 +216,5 @@ module.exports = {
   authorize,
   optionalAuth,
   checkOwnership,
-  rateLimit
+  rateLimit,
 };

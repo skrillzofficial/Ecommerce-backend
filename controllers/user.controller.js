@@ -133,7 +133,7 @@ const handleRegister = async (req, res, next) => {
         });
       } else {
         console.warn(
-          "⚠️ Email failed to send, but user created. Advising resend."
+          " Email failed to send, but user created. Advising resend."
         );
         res.status(201).json({
           success: true,
@@ -561,9 +561,10 @@ const handleGoogleAuth = async (req, res, next) => {
 
 const getCurrentUser = async (req, res, next) => {
   try {
-    const user = await USER.findById(req.user.userId);
+    const user = await USER.findById(req.user.userId || req.user._id || req.user.id);
 
     if (!user) {
+      console.log("❌ No user ID found in request");
       return next(new ErrorResponse("User not found", 404));
     }
 
