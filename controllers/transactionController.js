@@ -5,6 +5,7 @@ const User = require('../models/user');
 const { initializePayment, verifyPayment } = require('../service/paystackService');
 const { sendPaymentEmail, sendBookingEmail } = require('../utils/sendEmail');
 const crypto = require('crypto');
+const Paystack = require('../service/paystackService');
 
 // Helper functions for webhook
 async function handleSuccessfulCharge(data) {
@@ -135,7 +136,7 @@ const initializeTransaction = async (req, res) => {
     // Initialize Paystack payment
     const paystackResponse = await initializePayment({
       email: transaction.email,
-      amount: finalAmount * 100, // Amount in kobo
+      amount: finalAmount * 100, 
       reference: reference,
       metadata: {
         transactionId: transaction._id,

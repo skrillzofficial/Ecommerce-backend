@@ -201,7 +201,7 @@ const startServer = async () => {
       console.log(" Eventry API Server Started Successfully");
       console.log(`Server URL: http://localhost:${PORT}`);
       console.log(` API Base: http://localhost:${PORT}/api/v1`);
-      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`Environment: ${process.env.NODE_ENV || "production"}`);
       console.log(`Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
       console.log(` Paystack Mode: ${process.env.PAYSTACK_SECRET_KEY?.startsWith('sk_live') ? '🔴 LIVE' : '🟢 TEST'}`);
       console.log(`Cleanup scheduled: Daily at 2:00 AM`);

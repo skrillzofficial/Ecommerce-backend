@@ -7,12 +7,12 @@ const ticketSchema = new mongoose.Schema(
       type: String,
       required: [true, "Ticket number is required"],
       unique: true,
-      // REMOVED: index: true (will be defined in schema.index() below)
+
     },
     qrCode: {
       type: String,
       required: true,
-      // REMOVED: index: true (will be defined in schema.index() below)
+      
     },
     barcode: {
       type: String,
@@ -23,7 +23,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
       required: [true, "Event ID is required"],
-      // REMOVED: index: true (will be defined in schema.index() below)
+
     },
     eventName: {
       type: String,
@@ -92,7 +92,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "User ID is required"],
-      // REMOVED: index: true (will be defined in schema.index() below)
+
     },
     userName: {
       type: String,
@@ -152,7 +152,7 @@ const ticketSchema = new mongoose.Schema(
         message: "{VALUE} is not a valid ticket status",
       },
       default: "confirmed",
-      // REMOVED: index: true (will be defined in schema.index() below)
+      
     },
 
     // Validation Information (for real-time validation)
@@ -233,7 +233,7 @@ const ticketSchema = new mongoose.Schema(
     },
     transactionId: {
       type: String,
-      // REMOVED: index: true (will be defined in schema.index() below)
+      
     },
 
     // Organizer Information (from Event schema)
@@ -241,7 +241,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      // REMOVED: index: true (will be defined in schema.index() below)
+
     },
     organizerName: {
       type: String,
