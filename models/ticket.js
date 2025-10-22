@@ -187,13 +187,13 @@ const ticketSchema = new mongoose.Schema(
       {
         latitude: {
           type: Number,
-          required: true,
+          required: false,
           min: -90,
           max: 90,
         },
         longitude: {
           type: Number,
-          required: true,
+          required: false,
           min: -180,
           max: 180,
         },
@@ -368,7 +368,7 @@ const ticketSchema = new mongoose.Schema(
   }
 );
 
-// ✅ FIXED: Indexes defined ONLY ONCE here - no duplicates
+// Indexes defined ONLY ONCE here - no duplicates
 ticketSchema.index({ ticketNumber: 1 });
 ticketSchema.index({ qrCode: 1 });
 ticketSchema.index({ eventId: 1 });
