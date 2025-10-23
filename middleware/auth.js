@@ -43,7 +43,7 @@ const protect = async (req, res, next) => {
         console.error("❌ No valid user ID found in token:", decoded);
         return next(new ErrorResponse("User not found", 404));
       }
-      console.log("🔐 User ID from token:", userId);
+      console.log("🔐 User ID from token:",  decoded.userId);
       // Check if user is active
       if (!user.isActive) {
         console.log("❌ User account inactive:", user.email);

@@ -28,9 +28,9 @@ const {
   validateQueryParams,
 } = require("../middleware/validation");
 
-
+// ===========================================
 // PUBLIC ROUTES (No authentication required)
-
+// ===========================================
 
 // Get featured events
 router.get("/featured", getFeaturedEvents);
@@ -41,17 +41,17 @@ router.get("/upcoming", getUpcomingEvents);
 // Get all events with filtering
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
-
+// ===========================================
 // PROTECTED ROUTES (Authentication required)
-
-router.use(protect);
+// ===========================================
 
 // User's bookings (MUST be before /:id)
-router.get("/my-bookings", validateQueryParams, getMyBookings);
+router.get("/my-bookings", protect, validateQueryParams, getMyBookings);
 
 // Organizer's events (MUST be before /:id)
 router.get(
   "/organizer/my-events",
+  protect,
   authorize("organizer", "superadmin"),
   validateQueryParams,
   getOrganizerEvents
@@ -60,6 +60,7 @@ router.get(
 // Organizer statistics (MUST be before /:id)
 router.get(
   "/organizer/statistics",
+  protect,
   authorize("organizer", "superadmin"),
   getOrganizerStatistics
 );
@@ -67,41 +68,52 @@ router.get(
 // Create new event
 router.post(
   "/create",
+  protect,
   authorize("organizer", "superadmin"),
   validateImages,
   validateEventCreation,
   createEvent
 );
 
+// ===========================================
+// ROUTES WITH :id PARAMETER
+// ===========================================
 
-// ROUTES WITH :id PARAMETER (MUST BE LAST)
-
-
-// Get ticket availability (public info, but after protect)
+// Get ticket availability (public)
 router.get("/:id/ticket-availability", getTicketAvailability);
 
-// Book event ticket
-router.post("/:id/book", validateBooking, bookEventTicket);
+// Get single event by ID (PUBLIC - no auth needed)
+router.get("/:id", getEventById);
 
-// Cancel booking
-router.delete("/:id/cancel-booking", cancelBooking);
+// Book event ticket (PROTECTED)
+router.post("/:id/book", protect, validateBooking, bookEventTicket);
 
-// Like/Unlike event
-router.post("/:id/like", toggleLikeEvent);
+// Cancel booking (PROTECTED)
+router.delete("/:id/cancel-booking", protect, cancelBooking);
+
+// Like/Unlike event (PROTECTED)
+router.post("/:id/like", protect, toggleLikeEvent);
 
 // Delete event image (Organizer only)
 router.delete(
   "/:id/images/:imageIndex",
+  protect,
   authorize("organizer", "superadmin"),
   deleteEventImage
 );
 
 // Cancel event (Organizer only)
-router.patch("/:id/cancel", authorize("organizer", "superadmin"), cancelEvent);
+router.patch(
+  "/:id/cancel",
+  protect,
+  authorize("organizer", "superadmin"),
+  cancelEvent
+);
 
 // Update event (Organizer only)
 router.patch(
   "/:id",
+  protect,
   authorize("organizer", "superadmin"),
   validateImages,
   validateEventUpdate,
@@ -109,9 +121,11 @@ router.patch(
 );
 
 // Delete event (Organizer only)
-router.delete("/:id", authorize("organizer", "superadmin"), deleteEvent);
-
-// GET SINGLE EVENT BY ID OR SLUG (MUST BE LAST!)
-router.get("/:id", getEventById);
+router.delete(
+  "/:id",
+  protect,
+  authorize("organizer", "superadmin"),
+  deleteEvent
+);
 
 module.exports = router;
