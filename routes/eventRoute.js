@@ -28,9 +28,9 @@ const {
   validateQueryParams,
 } = require("../middleware/validation");
 
-// ===========================================
+
 // PUBLIC ROUTES (No authentication required)
-// ===========================================
+
 
 // Get featured events
 router.get("/featured", getFeaturedEvents);
@@ -41,9 +41,9 @@ router.get("/upcoming", getUpcomingEvents);
 // Get all events with filtering
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
-// ===========================================
+
 // PROTECTED ROUTES (Authentication required)
-// ===========================================
+
 
 // User's bookings (MUST be before /:id)
 router.get("/my-bookings", protect, validateQueryParams, getMyBookings);
@@ -75,9 +75,9 @@ router.post(
   createEvent
 );
 
-// ===========================================
+
 // ROUTES WITH :id PARAMETER
-// ===========================================
+
 
 // Get ticket availability (public)
 router.get("/:id/ticket-availability", getTicketAvailability);

@@ -1,4 +1,3 @@
-// routes/auth.js
 const express = require("express");
 const {
   handleRegister,
@@ -25,7 +24,7 @@ const router = express.Router();
 // Public routes
 router.post("/register", handleRegister);
 router.post("/login", handleLogin);
-router.post("/google", handleGoogleAuth);
+router.post("/auth/google", handleGoogleAuth);
 router.get("/verify-email", verifyEmail);
 router.post("/resend-verification", resendVerificationEmail);
 router.post("/forgot-password", forgotPassword);

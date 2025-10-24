@@ -564,7 +564,7 @@ const getCurrentUser = async (req, res, next) => {
     const user = await USER.findById(req.user.userId || req.user._id || req.user.id);
 
     if (!user) {
-      console.log("❌ No user ID found in request");
+      console.log(" No user ID found in request");
       return next(new ErrorResponse("User not found", 404));
     }
 

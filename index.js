@@ -88,7 +88,7 @@ if (process.env.NODE_ENV === "development") {
 
 // SCHEDULED TASKS
 cron.schedule("0 2 * * *", async () => {
-  console.log("⏰ Running scheduled cleanup of unverified users...");
+  console.log(" Running scheduled cleanup of unverified users...");
   try {
     await deleteExpiredUnverifiedUsers();
   } catch (error) {
