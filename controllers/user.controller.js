@@ -8,6 +8,9 @@ const { sendWelcomeEmail, sendResetEmail, sendResendVerificationEmail } = requir
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 
+// Import Notification Service
+const NotificationService = require("../service/notificationService");
+
 const deleteExpiredUnverifiedUsers = async () => {
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -25,6 +28,31 @@ const deleteExpiredUnverifiedUsers = async () => {
   }
 };
 
+// Helper function to get client IP and location
+const getClientInfo = (req) => {
+  const ipAddress = req.ip || 
+                   req.connection.remoteAddress || 
+                   req.socket.remoteAddress ||
+                   (req.connection.socket ? req.connection.socket.remoteAddress : null);
+  
+  const userAgent = req.get('User-Agent') || 'Unknown';
+  
+  // Simple device detection
+  let device = 'Unknown Device';
+  if (userAgent.includes('Mobile')) {
+    if (userAgent.includes('Android')) device = 'Android Mobile';
+    else if (userAgent.includes('iPhone')) device = 'iPhone';
+    else if (userAgent.includes('iPad')) device = 'iPad';
+    else device = 'Mobile Device';
+  } else if (userAgent.includes('Mac')) device = 'Mac';
+  else if (userAgent.includes('Windows')) device = 'Windows PC';
+  else if (userAgent.includes('Linux')) device = 'Linux PC';
+  
+  // For location, you might want to use a geoIP service in production
+  const location = 'Unknown';
+  
+  return { ipAddress, userAgent, device, location };
+};
 
 const handleRegister = async (req, res, next) => {
   const { userName, email, password, userType } = req.body;
@@ -80,33 +108,7 @@ const handleRegister = async (req, res, next) => {
     let verificationToken;
     try {
       verificationToken = user.createEmailVerificationToken();
-
-      console.log(" Token created in memory:");
-      console.log(
-        "   emailVerificationToken:",
-        user.emailVerificationToken
-          ? user.emailVerificationToken.substring(0, 20)
-          : "EMPTY"
-      );
-      console.log(
-        "   emailVerificationExpires:",
-        user.emailVerificationExpires
-      );
-
       await user.save({ validateBeforeSave: false });
-
-      const savedUser = await USER.findById(user._id);
-      console.log(" After save - re-fetched from DB:");
-      console.log(
-        "   emailVerificationToken:",
-        savedUser.emailVerificationToken
-          ? savedUser.emailVerificationToken.substring(0, 20)
-          : "NOT IN DB"
-      );
-      console.log(
-        "   emailVerificationExpires:",
-        savedUser.emailVerificationExpires
-      );
     } catch (tokenError) {
       console.error(" Token creation failed:", tokenError);
       return next(
@@ -126,6 +128,18 @@ const handleRegister = async (req, res, next) => {
 
       if (emailSent) {
         console.log(" Registration successful, email sent");
+        
+        // Create welcome notification
+        try {
+          await NotificationService.createSystemNotification(user._id, {
+            title: '🎉 Welcome to Eventry!',
+            message: `Welcome ${user.firstName}! Your account has been created successfully. Please verify your email to get started.`,
+            actionRequired: true
+          });
+        } catch (notificationError) {
+          console.error('Failed to create welcome notification:', notificationError);
+        }
+        
         res.status(201).json({
           success: true,
           message:
@@ -167,7 +181,6 @@ const handleRegister = async (req, res, next) => {
     next(new ErrorResponse("Registration failed. Please try again.", 500));
   }
 };
-
 
 const verifyEmail = async (req, res, next) => {
   try {
@@ -246,6 +259,17 @@ const verifyEmail = async (req, res, next) => {
 
     console.log(" Email verified successfully for:", user.email);
 
+    // Create email verification success notification
+    try {
+      await NotificationService.createSystemNotification(user._id, {
+        title: '✅ Email Verified Successfully!',
+        message: 'Your email has been verified. Welcome to Eventry!',
+        priority: 'medium'
+      });
+    } catch (notificationError) {
+      console.error('Failed to create verification notification:', notificationError);
+    }
+
     const jwtToken = jwt.sign(
       {
         userId: user._id,
@@ -272,7 +296,6 @@ const verifyEmail = async (req, res, next) => {
     });
   }
 };
-
 
 const resendVerificationEmail = async (req, res, next) => {
   try {
@@ -357,7 +380,6 @@ const resendVerificationEmail = async (req, res, next) => {
   }
 };
 
-
 const handleLogin = async (req, res, next) => {
   const { email, password, userType } = req.body;
 
@@ -410,9 +432,9 @@ const handleLogin = async (req, res, next) => {
       return next(new ErrorResponse("Invalid email or password", 401));
     }
 
-    user.lastLogin = new Date();
-    user.loginCount += 1;
-    await user.save();
+    // Record login with client info for notifications
+    const clientInfo = getClientInfo(req);
+    const loginResult = await user.recordLogin(clientInfo);
 
     const token = jwt.sign(
       {
@@ -430,12 +452,14 @@ const handleLogin = async (req, res, next) => {
       message: "Login successful",
       token,
       user: user.getProfile(),
+      // Include security info for frontend
+      securityAlert: loginResult.isSuspicious ? 
+        "New device/location detected. Please verify this login." : null
     });
   } catch (error) {
     next(new ErrorResponse("Login failed. Please try again.", 500));
   }
 };
-
 
 const handleGoogleAuth = async (req, res, next) => {
   const { token, userType } = req.body;
@@ -491,9 +515,9 @@ const handleGoogleAuth = async (req, res, next) => {
         );
       }
 
-      user.lastLogin = new Date();
-      user.loginCount += 1;
-      await user.save();
+      // Record login for Google auth too
+      const clientInfo = getClientInfo(req);
+      await user.recordLogin(clientInfo);
     } else {
       const baseUsername = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "");
       let userName = baseUsername.substring(0, 15);
@@ -521,6 +545,17 @@ const handleGoogleAuth = async (req, res, next) => {
       };
 
       user = await USER.create(userData);
+      
+      // Create welcome notification for Google signup
+      try {
+        await NotificationService.createSystemNotification(user._id, {
+          title: '🎉 Welcome to Eventry!',
+          message: `Welcome ${user.firstName}! Your account has been created with Google.`,
+          priority: 'medium'
+        });
+      } catch (notificationError) {
+        console.error('Failed to create welcome notification:', notificationError);
+      }
     }
 
     const jwtToken = jwt.sign(
@@ -558,7 +593,6 @@ const handleGoogleAuth = async (req, res, next) => {
   }
 };
 
-
 const getCurrentUser = async (req, res, next) => {
   try {
     const user = await USER.findById(req.user.userId || req.user._id || req.user.id);
@@ -586,6 +620,11 @@ const updateProfile = async (req, res, next) => {
     if (!user) { 
       return next(new ErrorResponse("User not found", 404));
     }
+
+    // Store old values for comparison
+    const oldUserName = user.userName;
+    const oldFirstName = user.firstName;
+    const oldLastName = user.lastName;
 
     if (userName && userName !== user.userName) {
       const existingUser = await USER.findOne({ userName });
@@ -631,6 +670,24 @@ const updateProfile = async (req, res, next) => {
 
     await user.save();
 
+    // Create profile update notification
+    try {
+      let updateMessage = 'Your profile has been updated.';
+      
+      // More specific messages based on what changed
+      if (userName && userName !== oldUserName) {
+        updateMessage = `Username updated from "${oldUserName}" to "${userName}"`;
+      } else if (firstName && firstName !== oldFirstName) {
+        updateMessage = `Name updated to ${firstName} ${lastName || user.lastName}`;
+      } else if (req.files?.profilePicture) {
+        updateMessage = 'Profile picture updated successfully';
+      }
+      
+      await NotificationService.createProfileUpdateNotification(user._id, updateMessage);
+    } catch (notificationError) {
+      console.error('Failed to create profile update notification:', notificationError);
+    }
+
     res.status(200).json({
       success: true,
       message: "Profile updated successfully",
@@ -640,7 +697,6 @@ const updateProfile = async (req, res, next) => {
     next(new ErrorResponse("Failed to update profile", 500));
   }
 };
-
 
 const forgotPassword = async (req, res, next) => {
   try {
@@ -687,7 +743,6 @@ const forgotPassword = async (req, res, next) => {
   }
 };
 
-
 const resetPassword = async (req, res, next) => {
   try {
     const { token } = req.query;
@@ -719,6 +774,18 @@ const resetPassword = async (req, res, next) => {
     user.passwordResetExpires = undefined;
     await user.save();
 
+    // Create security alert for password reset
+    try {
+      const clientInfo = getClientInfo(req);
+      await NotificationService.createSecurityAlertNotification(user._id, {
+        alertType: 'Password Reset',
+        description: `Your password was reset from ${clientInfo.device} (IP: ${clientInfo.ipAddress}).`,
+        severity: 'high'
+      });
+    } catch (notificationError) {
+      console.error('Failed to create security notification:', notificationError);
+    }
+
     const jwtToken = jwt.sign(
       {
         userId: user._id,
@@ -740,7 +807,6 @@ const resetPassword = async (req, res, next) => {
     next(new ErrorResponse("Password reset failed", 500));
   }
 };
-
 
 const changePassword = async (req, res, next) => {
   try {
@@ -772,6 +838,18 @@ const changePassword = async (req, res, next) => {
     user.password = newPassword;
     await user.save();
 
+    // Create security alert for password change
+    try {
+      const clientInfo = getClientInfo(req);
+      await NotificationService.createSecurityAlertNotification(user._id, {
+        alertType: 'Password Changed',
+        description: `Your password was changed from ${clientInfo.device} (IP: ${clientInfo.ipAddress}).`,
+        severity: 'high'
+      });
+    } catch (notificationError) {
+      console.error('Failed to create security notification:', notificationError);
+    }
+
     res.status(200).json({
       success: true,
       message: "Password changed successfully!",
@@ -780,7 +858,6 @@ const changePassword = async (req, res, next) => {
     next(new ErrorResponse("Failed to change password", 500));
   }
 };
-
 
 const updatePreferences = async (req, res, next) => {
   try {
@@ -795,6 +872,17 @@ const updatePreferences = async (req, res, next) => {
     if (preferences) {
       user.preferences = { ...user.preferences, ...preferences };
       await user.save();
+      
+      // Create notification for preference changes
+      try {
+        await NotificationService.createSystemNotification(user._id, {
+          title: '⚙️ Preferences Updated',
+          message: 'Your notification preferences have been updated successfully.',
+          priority: 'low'
+        });
+      } catch (notificationError) {
+        console.error('Failed to create preferences notification:', notificationError);
+      }
     }
 
     res.status(200).json({
@@ -807,7 +895,6 @@ const updatePreferences = async (req, res, next) => {
   }
 };
 
-
 const logout = async (req, res, next) => {
   try {
     res.status(200).json({
@@ -818,7 +905,6 @@ const logout = async (req, res, next) => {
     next(new ErrorResponse("Logout failed", 500));
   }
 };
-
 
 const checkUsernameAvailability = async (req, res, next) => {
   try {
@@ -854,7 +940,6 @@ const checkUsernameAvailability = async (req, res, next) => {
   }
 };
 
-
 const checkEmailAvailability = async (req, res, next) => {
   try {
     const { email } = req.query;
@@ -880,7 +965,6 @@ const checkEmailAvailability = async (req, res, next) => {
     next(new ErrorResponse("Failed to check email availability", 500));
   }
 };
-
 
 const deleteAccount = async (req, res, next) => {
   try {
@@ -914,6 +998,18 @@ const deleteAccount = async (req, res, next) => {
       }
     }
 
+    // Create security alert before deleting account
+    try {
+      const clientInfo = getClientInfo(req);
+      await NotificationService.createSecurityAlertNotification(user._id, {
+        alertType: 'Account Deleted',
+        description: `Your account was deleted from ${clientInfo.device} (IP: ${clientInfo.ipAddress}).`,
+        severity: 'critical'
+      });
+    } catch (notificationError) {
+      console.error('Failed to create account deletion notification:', notificationError);
+    }
+
     await USER.findByIdAndDelete(userId);
 
     res.status(200).json({
@@ -924,7 +1020,6 @@ const deleteAccount = async (req, res, next) => {
     next(new ErrorResponse("Failed to delete account", 500));
   }
 };
-
 
 const getUserProfile = async (req, res, next) => {
   try {

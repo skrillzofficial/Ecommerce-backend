@@ -6,6 +6,9 @@ const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 const { sendBookingEmail } = require("../utils/sendEmail");
 
+// Import Notification Service
+const NotificationService = require("../service/notificationService");
+
 // @desc    Create new event
 // @route   POST /api/v1/events
 // @access  Private (Organizer only)
@@ -120,7 +123,7 @@ const createEvent = async (req, res, next) => {
             alt: title,
           });
 
-          // ✅ FIXED: Better error handling for temp file deletion
+          // Better error handling for temp file deletion
           if (image.tempFilePath && fs.existsSync(image.tempFilePath)) {
             fs.unlink(image.tempFilePath, (err) => {
               if (err && err.code !== "ENOENT") {
@@ -144,6 +147,7 @@ const createEvent = async (req, res, next) => {
         }
       }
     }
+
     // Parse arrays from form data
     let parsedTags = tags;
     if (typeof tags === "string") {
@@ -233,6 +237,21 @@ const createEvent = async (req, res, next) => {
     // Create event
     const event = await Event.create(eventData);
 
+    // Create event creation notification for organizer
+    try {
+      await NotificationService.createSystemNotification(req.user.userId, {
+        title: '🎉 Event Created Successfully!',
+        message: `Your event "${event.title}" has been created and is now live.`,
+        priority: 'medium',
+        data: {
+          eventId: event._id,
+          eventTitle: event.title
+        }
+      });
+    } catch (notificationError) {
+      console.error('Failed to create event creation notification:', notificationError);
+    }
+
     res.status(201).json({
       success: true,
       message: "Event created successfully",
@@ -268,10 +287,10 @@ const getAllEvents = async (req, res, next) => {
       page = 1,
       limit = 12,
       sort = "date",
-      isVoiceSearch = false, // NEW: Flag to identify voice search
+      isVoiceSearch = false,
     } = req.query;
 
-    // NEW: Parse voice search query if flagged
+    // Parse voice search query if flagged
     if (isVoiceSearch === 'true' && search) {
       console.log('Voice search detected:', search);
       const voiceParams = parseVoiceQuery(search);
@@ -404,7 +423,7 @@ const getAllEvents = async (req, res, next) => {
       totalPages: Math.ceil(total / limitNum),
       currentPage: pageNum,
       events,
-      // NEW: Include parsed parameters for debugging
+      // Include parsed parameters for debugging
       ...(isVoiceSearch === 'true' && {
         voiceSearchParams: {
           originalQuery: req.query.search,
@@ -432,14 +451,14 @@ const getPastEvents = async (req, res, next) => {
       city,
       page = 1,
       limit = 12,
-      sort = "-date", // Most recent past events first
+      sort = "-date",
     } = req.query;
 
     // Build query for past events
     const query = {
       isActive: true,
       status: "published",
-      date: { $lt: new Date() }, // Events with dates in the past
+      date: { $lt: new Date() },
     };
 
     // Search by text
@@ -461,10 +480,10 @@ const getPastEvents = async (req, res, next) => {
     let sortOption = {};
     switch (sort) {
       case "date":
-        sortOption = { date: 1 }; 
+        sortOption = { date: 1 };
         break;
       case "-date":
-        sortOption = { date: -1 }; 
+        sortOption = { date: -1 };
         break;
       case "popular":
         sortOption = { views: -1, totalLikes: -1 };
@@ -500,13 +519,14 @@ const getPastEvents = async (req, res, next) => {
       total,
       totalPages: Math.ceil(total / limitNum),
       currentPage: pageNum,
-      data: events, 
+      data: events,
     });
   } catch (error) {
     console.error("Get past events error:", error);
     next(new ErrorResponse("Failed to fetch past events", 500));
   }
 };
+
 // @desc    Get single event by ID or slug
 // @route   GET /api/v1/events/:id
 // @access  Public
@@ -1041,6 +1061,26 @@ const bookEventTicket = async (req, res, next) => {
       quantity
     );
 
+    // Create ticket purchase notification
+    try {
+      await NotificationService.createTicketPurchaseNotification(
+        req.user.userId,
+        {
+          _id: bookingResult.ticketId,
+          quantity: bookingResult.quantity,
+          totalAmount: bookingResult.totalPrice,
+          ticketType: bookingResult.ticketType
+        },
+        {
+          _id: event._id,
+          title: event.title,
+          date: event.date
+        }
+      );
+    } catch (notificationError) {
+      console.error('Failed to create ticket purchase notification:', notificationError);
+    }
+
     // Format event date for email
     const eventDate = new Date(event.date).toLocaleDateString("en-US", {
       weekday: "long",
@@ -1084,7 +1124,6 @@ const bookEventTicket = async (req, res, next) => {
       });
     } catch (emailError) {
       console.error("Failed to send booking email:", emailError);
-      // Don't fail the booking if email fails
     }
 
     res.status(200).json({
@@ -1125,6 +1164,17 @@ const cancelBooking = async (req, res, next) => {
     }
 
     await event.cancelBooking(req.user.userId);
+
+    // Create booking cancellation notification
+    try {
+      await NotificationService.createSystemNotification(req.user.userId, {
+        title: '❌ Booking Cancelled',
+        message: `Your booking for "${event.title}" has been cancelled successfully.`,
+        priority: 'medium'
+      });
+    } catch (notificationError) {
+      console.error('Failed to create cancellation notification:', notificationError);
+    }
 
     res.status(200).json({
       success: true,
@@ -1334,7 +1384,6 @@ const parseVoiceSearch = async (req, res, next) => {
     next(new ErrorResponse("Failed to parse voice search", 500));
   }
 };
-
 
 // @desc    Get ticket availability by type
 // @route   GET /api/v1/events/:id/ticket-availability

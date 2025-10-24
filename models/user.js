@@ -89,6 +89,23 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  
+  // NEW: Enhanced login tracking for notifications
+  loginHistory: [{
+    ipAddress: String,
+    userAgent: String,
+    device: String,
+    location: String,
+    loginTime: {
+      type: Date,
+      default: Date.now
+    },
+    isSuccessful: {
+      type: Boolean,
+      default: true
+    }
+  }],
+  
   organizerInfo: {
     companyName: {
       type: String,
@@ -123,13 +140,36 @@ const userSchema = new mongoose.Schema({
     verificationNotes: String,
     verifiedAt: Date,
   },
+  
+  // UPDATED: Enhanced notification preferences
   preferences: {
     emailNotifications: { type: Boolean, default: true },
     pushNotifications: { type: Boolean, default: true },
     newsletter: { type: Boolean, default: true },
     eventReminders: { type: Boolean, default: true },
     marketingEmails: { type: Boolean, default: false },
+    
+    // NEW: Granular notification preferences
+    notifications: {
+      email: {
+        ticketPurchases: { type: Boolean, default: true },
+        eventReminders: { type: Boolean, default: true },
+        loginAlerts: { type: Boolean, default: true },
+        securityAlerts: { type: Boolean, default: true },
+        promotional: { type: Boolean, default: false },
+        eventUpdates: { type: Boolean, default: true }
+      },
+      push: {
+        ticketPurchases: { type: Boolean, default: true },
+        eventReminders: { type: Boolean, default: true },
+        loginAlerts: { type: Boolean, default: true },
+        securityAlerts: { type: Boolean, default: true },
+        promotional: { type: Boolean, default: false },
+        eventUpdates: { type: Boolean, default: true }
+      }
+    }
   },
+  
   deletedAt: Date,
 }, {
   timestamps: true,
@@ -152,6 +192,9 @@ userSchema.index({ emailVerificationToken: 1 });
 userSchema.index({ passwordResetToken: 1 });
 userSchema.index({ createdAt: 1 });
 userSchema.index({ isVerified: 1, status: 1 });
+
+// NEW: Index for login history queries
+userSchema.index({ "loginHistory.loginTime": -1 });
 
 // Compound indexes
 userSchema.index({ email: 1, status: 1 });
@@ -267,6 +310,88 @@ userSchema.methods.verifyEmail = function() {
   return this.save();
 };
 
+// NEW: Method to record login and create notification
+userSchema.methods.recordLogin = async function(loginData) {
+  const { ipAddress, userAgent, device, location } = loginData;
+  
+  // Update login count and last login
+  this.loginCount += 1;
+  this.lastLogin = new Date();
+  
+  // Add to login history
+  this.loginHistory.unshift({
+    ipAddress,
+    userAgent,
+    device: device || this._detectDevice(userAgent),
+    location: location || 'Unknown',
+    loginTime: new Date()
+  });
+  
+  // Keep only last 10 logins
+  if (this.loginHistory.length > 10) {
+    this.loginHistory = this.loginHistory.slice(0, 10);
+  }
+  
+  await this.save();
+  
+  // Check if this is a suspicious login
+  const isSuspicious = await this._checkSuspiciousLogin(loginData);
+  
+  // Create login notification if user has enabled login alerts
+  if (this.preferences.notifications?.push?.loginAlerts || 
+      this.preferences.notifications?.email?.loginAlerts) {
+    
+    const Notification = require('./notification');
+    await Notification.createLoginNotification(this._id, {
+      ipAddress,
+      device: device || this._detectDevice(userAgent),
+      location: location || 'Unknown',
+      isSuspicious
+    });
+  }
+  
+  return { isSuspicious };
+};
+
+// NEW: Helper method to detect device from user agent
+userSchema.methods._detectDevice = function(userAgent) {
+  if (!userAgent) return 'Unknown Device';
+  
+  if (userAgent.includes('Mobile')) {
+    if (userAgent.includes('Android')) return 'Android Mobile';
+    if (userAgent.includes('iPhone')) return 'iPhone';
+    if (userAgent.includes('iPad')) return 'iPad';
+    return 'Mobile Device';
+  }
+  
+  if (userAgent.includes('Mac')) return 'Mac';
+  if (userAgent.includes('Windows')) return 'Windows PC';
+  if (userAgent.includes('Linux')) return 'Linux PC';
+  
+  return 'Desktop';
+};
+
+// NEW: Method to check for suspicious login
+userSchema.methods._checkSuspiciousLogin = async function(currentLogin) {
+  if (this.loginHistory.length < 2) {
+    return false; // Not enough history to determine
+  }
+  
+  const recentLogins = this.loginHistory.slice(1, 4); // Last 3 logins (excluding current)
+  const commonLocations = new Set(recentLogins.map(login => login.location));
+  const commonDevices = new Set(recentLogins.map(login => login.device));
+  
+  const currentDevice = currentLogin.device || this._detectDevice(currentLogin.userAgent);
+  const currentLocation = currentLogin.location || 'Unknown';
+  
+  // If current login is from new location AND new device, mark as suspicious
+  if (!commonLocations.has(currentLocation) && !commonDevices.has(currentDevice)) {
+    return true;
+  }
+  
+  return false;
+};
+
 // Method to mark as deleted (soft delete)
 userSchema.methods.softDelete = function() {
   this.status = "deleted";
@@ -333,6 +458,8 @@ userSchema.methods.getProfile = function() {
     status: this.status,
     lastLogin: this.lastLogin,
     loginCount: this.loginCount,
+    // NEW: Include recent login history (last 3)
+    recentLogins: this.loginHistory.slice(0, 3),
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };
@@ -347,6 +474,8 @@ userSchema.methods.getDetailedProfile = function() {
     emailVerificationToken: this.emailVerificationToken ? "***" : undefined,
     passwordResetToken: this.passwordResetToken ? "***" : undefined,
     deletedAt: this.deletedAt,
+    // NEW: Include full login history for admin
+    loginHistory: this.loginHistory,
   };
 };
 
@@ -391,7 +520,8 @@ userSchema.statics.getUserStats = async function() {
           $sum: {
             $cond: [{ $ne: ["$googleId", null] }, 1, 0]
           }
-        }
+        },
+        avgLoginCount: { $avg: "$loginCount" }
       }
     }
   ]);
