@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   createEvent,
   getAllEvents,
+  getPastEvents,
   getEventById,
   updateEvent,
   deleteEvent,
@@ -41,6 +42,8 @@ router.get("/upcoming", getUpcomingEvents);
 // Get all events with filtering
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
+// Get past events
+router.get('/events/past', optionalAuth, validateQueryParams, getPastEvents);
 
 // PROTECTED ROUTES (Authentication required)
 

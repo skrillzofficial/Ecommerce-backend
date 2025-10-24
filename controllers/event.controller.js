@@ -394,7 +394,92 @@ const getAllEvents = async (req, res, next) => {
     next(new ErrorResponse("Failed to fetch events", 500));
   }
 };
+// @desc    Get past events
+// @route   GET /api/v1/events/past
+// @access  Public
+const getPastEvents = async (req, res, next) => {
+  try {
+    const {
+      search,
+      category,
+      city,
+      page = 1,
+      limit = 12,
+      sort = "-date", // Most recent past events first
+    } = req.query;
 
+    // Build query for past events
+    const query = {
+      isActive: true,
+      status: "published",
+      date: { $lt: new Date() }, // Events with dates in the past
+    };
+
+    // Search by text
+    if (search) {
+      query.$text = { $search: search };
+    }
+
+    // Filter by category
+    if (category) {
+      query.category = category;
+    }
+
+    // Filter by city
+    if (city) {
+      query.city = city;
+    }
+
+    // Sorting
+    let sortOption = {};
+    switch (sort) {
+      case "date":
+        sortOption = { date: 1 }; 
+        break;
+      case "-date":
+        sortOption = { date: -1 }; 
+        break;
+      case "popular":
+        sortOption = { views: -1, totalLikes: -1 };
+        break;
+      case "attendees":
+        sortOption = { totalAttendees: -1 };
+        break;
+      default:
+        sortOption = { date: -1 };
+    }
+
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Execute query
+    const events = await Event.find(query)
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limitNum)
+      .populate(
+        "organizer",
+        "firstName lastName userName profilePicture organizerInfo"
+      );
+
+    // Get total count for pagination
+    const total = await Event.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+      data: events, 
+    });
+  } catch (error) {
+    console.error("Get past events error:", error);
+    next(new ErrorResponse("Failed to fetch past events", 500));
+  }
+};
 // @desc    Get single event by ID or slug
 // @route   GET /api/v1/events/:id
 // @access  Public
@@ -540,7 +625,7 @@ const updateEvent = async (req, res, next) => {
       delete req.body["imagesToDelete[]"];
     }
 
-    // Handle JSON fields from frontend 
+    // Handle JSON fields from frontend
     if (req.body.tags && typeof req.body.tags === "string") {
       try {
         req.body.tags = JSON.parse(req.body.tags);
@@ -930,19 +1015,23 @@ const bookEventTicket = async (req, res, next) => {
     );
 
     // Format event date for email
-    const eventDate = new Date(event.date).toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
+    const eventDate = new Date(event.date).toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
     });
 
     // Prepare ticket details for email
     const ticketDetails = `
       <table style="width: 100%; border-collapse: collapse;">
         <tr>
-          <td style="padding: 5px 0;">${bookingResult.ticketType} x ${bookingResult.quantity}</td>
-          <td style="padding: 5px 0; text-align: right;">₦${(bookingResult.totalPrice / bookingResult.quantity).toLocaleString()}</td>
+          <td style="padding: 5px 0;">${bookingResult.ticketType} x ${
+      bookingResult.quantity
+    }</td>
+          <td style="padding: 5px 0; text-align: right;">₦${(
+            bookingResult.totalPrice / bookingResult.quantity
+          ).toLocaleString()}</td>
         </tr>
         <tr>
           <td style="padding: 5px 0; border-bottom: 1px solid #e0e0e0;">Subtotal</td>
@@ -964,7 +1053,7 @@ const bookEventTicket = async (req, res, next) => {
         bookingId: bookingResult.ticketId.toString(),
         ticketDetails: ticketDetails,
         totalAmount: `₦${bookingResult.totalPrice.toLocaleString()}`,
-        clientUrl: `${process.env.FRONTEND_URL}/bookings/${bookingResult.ticketId}`
+        clientUrl: `${process.env.FRONTEND_URL}/bookings/${bookingResult.ticketId}`,
       });
     } catch (emailError) {
       console.error("Failed to send booking email:", emailError);
@@ -1251,6 +1340,7 @@ const getTicketAvailability = async (req, res, next) => {
 module.exports = {
   createEvent,
   getAllEvents,
+  getPastEvents,
   getEventById,
   updateEvent,
   deleteEvent,
