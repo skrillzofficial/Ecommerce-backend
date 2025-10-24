@@ -17,6 +17,7 @@ const {
   cancelEvent,
   getFeaturedEvents,
   getUpcomingEvents,
+  parseVoiceSearch,
   getTicketAvailability,
 } = require("../controllers/event.controller");
 
@@ -29,9 +30,7 @@ const {
   validateQueryParams,
 } = require("../middleware/validation");
 
-
 // PUBLIC ROUTES (No authentication required)
-
 
 // Get featured events
 router.get("/featured", getFeaturedEvents);
@@ -43,10 +42,9 @@ router.get("/upcoming", getUpcomingEvents);
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
 // Get past events
-router.get('/past', optionalAuth, validateQueryParams, getPastEvents);
+router.get("/past", optionalAuth, validateQueryParams, getPastEvents);
 
 // PROTECTED ROUTES (Authentication required)
-
 
 // User's bookings (MUST be before /:id)
 router.get("/my-bookings", protect, validateQueryParams, getMyBookings);
@@ -77,10 +75,10 @@ router.post(
   validateEventCreation,
   createEvent
 );
-
+// NEW: Voice search parsing endpoint (optional)
+router.post("/voice-search", parseVoiceSearch);
 
 // ROUTES WITH :id PARAMETER
-
 
 // Get ticket availability (public)
 router.get("/:id/ticket-availability", getTicketAvailability);

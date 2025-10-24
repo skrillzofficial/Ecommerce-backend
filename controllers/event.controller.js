@@ -1,6 +1,7 @@
 const Event = require("../models/event");
 const User = require("../models/user");
 const ErrorResponse = require("../utils/errorResponse");
+const { parseVoiceQuery } = require("../utils/voiceSearchParser");
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 const { sendBookingEmail } = require("../utils/sendEmail");
@@ -254,7 +255,7 @@ const createEvent = async (req, res, next) => {
 // @access  Public
 const getAllEvents = async (req, res, next) => {
   try {
-    const {
+    let {
       search,
       category,
       city,
@@ -267,7 +268,24 @@ const getAllEvents = async (req, res, next) => {
       page = 1,
       limit = 12,
       sort = "date",
+      isVoiceSearch = false, // NEW: Flag to identify voice search
     } = req.query;
+
+    // NEW: Parse voice search query if flagged
+    if (isVoiceSearch === 'true' && search) {
+      console.log('Voice search detected:', search);
+      const voiceParams = parseVoiceQuery(search);
+      console.log('Parsed voice parameters:', voiceParams);
+      
+      // Merge voice-parsed parameters (voice params take priority)
+      search = voiceParams.search || search;
+      category = voiceParams.category || category;
+      city = voiceParams.city || city;
+      minPrice = voiceParams.minPrice || minPrice;
+      maxPrice = voiceParams.maxPrice || maxPrice;
+      startDate = voiceParams.startDate || startDate;
+      endDate = voiceParams.endDate || endDate;
+    }
 
     // Build query
     const query = {
@@ -297,11 +315,10 @@ const getAllEvents = async (req, res, next) => {
       query.city = city;
     }
 
-    // Filter by price range (handles both ticketTypes and legacy price)
+    // Filter by price range
     if (minPrice !== undefined || maxPrice !== undefined) {
       const priceQuery = [];
 
-      // Check legacy price field
       if (minPrice !== undefined || maxPrice !== undefined) {
         const legacyPriceQuery = { price: {} };
         if (minPrice !== undefined)
@@ -311,7 +328,6 @@ const getAllEvents = async (req, res, next) => {
         priceQuery.push(legacyPriceQuery);
       }
 
-      // Check ticket types price range
       if (minPrice !== undefined || maxPrice !== undefined) {
         const ticketTypePriceQuery = { "ticketTypes.price": {} };
         if (minPrice !== undefined)
@@ -388,12 +404,23 @@ const getAllEvents = async (req, res, next) => {
       totalPages: Math.ceil(total / limitNum),
       currentPage: pageNum,
       events,
+      // NEW: Include parsed parameters for debugging
+      ...(isVoiceSearch === 'true' && {
+        voiceSearchParams: {
+          originalQuery: req.query.search,
+          parsedCategory: category,
+          parsedCity: city,
+          parsedPriceRange: { min: minPrice, max: maxPrice },
+          parsedDateRange: { start: startDate, end: endDate },
+        }
+      })
     });
   } catch (error) {
     console.error("Get all events error:", error);
     next(new ErrorResponse("Failed to fetch events", 500));
   }
 };
+
 // @desc    Get past events
 // @route   GET /api/v1/events/past
 // @access  Public
@@ -1283,6 +1310,32 @@ const getUpcomingEvents = async (req, res, next) => {
   }
 };
 
+// @desc    Parse voice search query
+// @route   POST /api/v1/events/voice-search
+// @access  Public
+const parseVoiceSearch = async (req, res, next) => {
+  try {
+    const { query } = req.body;
+    
+    if (!query) {
+      return next(new ErrorResponse("Please provide a voice search query", 400));
+    }
+    
+    const parsedParams = parseVoiceQuery(query);
+    
+    res.status(200).json({
+      success: true,
+      originalQuery: query,
+      parsedParameters: parsedParams,
+      message: "Voice query parsed successfully"
+    });
+  } catch (error) {
+    console.error("Parse voice search error:", error);
+    next(new ErrorResponse("Failed to parse voice search", 500));
+  }
+};
+
+
 // @desc    Get ticket availability by type
 // @route   GET /api/v1/events/:id/ticket-availability
 // @access  Public
@@ -1354,5 +1407,6 @@ module.exports = {
   cancelEvent,
   getFeaturedEvents,
   getUpcomingEvents,
+  parseVoiceSearch,
   getTicketAvailability,
 };
