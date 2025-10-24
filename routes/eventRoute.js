@@ -43,7 +43,7 @@ router.get("/upcoming", getUpcomingEvents);
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
 // Get past events
-router.get('/events/past', optionalAuth, validateQueryParams, getPastEvents);
+router.get('/past', optionalAuth, validateQueryParams, getPastEvents);
 
 // PROTECTED ROUTES (Authentication required)
 
