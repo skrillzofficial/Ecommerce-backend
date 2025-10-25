@@ -585,7 +585,11 @@ eventSchema.virtual("priceRange").get(function () {
   return this.price || 0;
 });
 
-// Pre-save middleware to initialize ticket types availableTickets
+// ===================================
+// PRE-SAVE MIDDLEWARE
+// ===================================
+
+// 1. Initialize ticket types availableTickets
 eventSchema.pre("save", function (next) {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     this.ticketTypes.forEach((ticketType) => {
@@ -597,19 +601,42 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// Pre-save middleware to generate slug (only for published events)
-eventSchema.pre("save", function (next) {
-  if (this.isModified("title") && !this.slug && this.status === 'published') {
-    this.slug = this.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    this.slug += `-${Date.now()}`;
+// 2. FIXED: Generate slug for ALL events (not just published)
+eventSchema.pre("save", async function (next) {
+  // Generate slug if it doesn't exist yet
+  if (!this.slug) {
+    try {
+      // Create base slug from title
+      const baseSlug = this.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      
+      // Use existing _id if available, otherwise create a temporary unique ID
+      const uniqueId = this._id 
+        ? this._id.toString().slice(-6) 
+        : Date.now().toString().slice(-6) + Math.random().toString(36).slice(2, 5);
+      
+      let slug = `${baseSlug}-${uniqueId}`;
+      
+      // Ensure slug uniqueness by checking database
+      let counter = 1;
+      while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
+        slug = `${baseSlug}-${uniqueId}-${counter}`;
+        counter++;
+      }
+      
+      this.slug = slug;
+    } catch (error) {
+      console.error("Error generating slug:", error);
+      // Fallback: generate a completely random slug to prevent save failures
+      this.slug = `event-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    }
   }
   next();
 });
 
-// Pre-save middleware to set publishedAt
+// 3. Set publishedAt timestamp
 eventSchema.pre("save", function (next) {
   if (
     this.isModified("status") &&
@@ -621,7 +648,7 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// Pre-save middleware to validate end time (skip for drafts)
+// 4. Validate end time (skip for drafts)
 eventSchema.pre("save", function (next) {
   if (this.status === 'draft') {
     return next();
@@ -649,6 +676,33 @@ eventSchema.pre("save", function (next) {
   }
   next();
 });
+
+// ===================================
+// INSTANCE METHODS
+// ===================================
+
+// Method to regenerate slug manually
+eventSchema.methods.regenerateSlug = async function() {
+  const baseSlug = this.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  
+  const uniqueId = this._id.toString().slice(-6);
+  let slug = `${baseSlug}-${uniqueId}`;
+  
+  // Check for duplicates
+  let counter = 1;
+  while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
+    slug = `${baseSlug}-${uniqueId}-${counter}`;
+    counter++;
+  }
+  
+  this.slug = slug;
+  await this.save({ validateBeforeSave: false });
+  
+  return this.slug;
+};
 
 // Method to book ticket with Ticket schema integration
 eventSchema.methods.bookTicket = async function (
@@ -1040,6 +1094,7 @@ eventSchema.methods.stopLocationSharing = async function(organizerId) {
   await this.save();
 };
 
+
 // Static method to find upcoming events
 eventSchema.statics.findUpcoming = function (limit = 10) {
   return this.find({
@@ -1145,6 +1200,10 @@ eventSchema.statics.getStatistics = async function (organizerId) {
     }
   );
 };
+
+// ===================================
+// QUERY HELPERS
+// ===================================
 
 // Query helper for active events
 eventSchema.query.active = function () {
