@@ -9,7 +9,7 @@ const { sendBookingEmail } = require("../utils/sendEmail");
 // Import Notification Service
 const NotificationService = require("../service/notificationService");
 
-// @desc    Create new event
+// @desc    Create new event (supports both draft and published)
 // @route   POST /api/v1/events
 // @access  Private (Organizer only)
 const createEvent = async (req, res, next) => {
@@ -33,21 +33,44 @@ const createEvent = async (req, res, next) => {
       ticketTypes,
       price,
       capacity,
+      status = "draft", // Default to draft
     } = req.body;
 
-    // Validate required fields
-    if (
-      !title ||
-      !description ||
-      !category ||
-      !date ||
-      !time ||
-      !endTime ||
-      !venue ||
-      !address ||
-      !city
-    ) {
-      return next(new ErrorResponse("Please provide all required fields", 400));
+    // Validate required field (only title is required for both draft and published)
+    if (!title) {
+      return next(new ErrorResponse("Event title is required", 400));
+    }
+
+    // Validate user is organizer
+    if (req.user.role !== "organizer") {
+      return next(new ErrorResponse("Only organizers can create events", 403));
+    }
+
+    // If status is "published", validate all required fields
+    if (status === "published") {
+      if (
+        !description ||
+        !category ||
+        !date ||
+        !time ||
+        !endTime ||
+        !venue ||
+        !address ||
+        !city
+      ) {
+        return next(
+          new ErrorResponse(
+            "All required fields must be filled to publish event",
+            400
+          )
+        );
+      }
+    }
+
+    // Get organizer info
+    const organizer = await User.findById(req.user.userId);
+    if (!organizer) {
+      return next(new ErrorResponse("Organizer not found", 404));
     }
 
     // Parse ticket types if it's a string (from form data)
@@ -61,35 +84,28 @@ const createEvent = async (req, res, next) => {
       }
     }
 
-    // Validate ticket types OR legacy pricing
-    if (
-      parsedTicketTypes &&
-      Array.isArray(parsedTicketTypes) &&
-      parsedTicketTypes.length > 0
-    ) {
-      for (const ticket of parsedTicketTypes) {
-        if (!ticket.name || ticket.price === undefined || !ticket.capacity) {
-          return next(
-            new ErrorResponse(
-              "Each ticket type must have name, price, and capacity",
-              400
-            )
-          );
+    // Validate ticket types OR legacy pricing (only for published events)
+    if (status === "published") {
+      if (
+        parsedTicketTypes &&
+        Array.isArray(parsedTicketTypes) &&
+        parsedTicketTypes.length > 0
+      ) {
+        for (const ticket of parsedTicketTypes) {
+          if (!ticket.name || ticket.price === undefined || !ticket.capacity) {
+            return next(
+              new ErrorResponse(
+                "Each ticket type must have name, price, and capacity",
+                400
+              )
+            );
+          }
         }
+      } else if (price === undefined || !capacity) {
+        return next(
+          new ErrorResponse("Please provide pricing information to publish", 400)
+        );
       }
-    } else if (price === undefined || !capacity) {
-      return next(new ErrorResponse("Please provide pricing information", 400));
-    }
-
-    // Validate user is organizer
-    if (req.user.role !== "organizer") {
-      return next(new ErrorResponse("Only organizers can create events", 403));
-    }
-
-    // Get organizer info
-    const organizer = await User.findById(req.user.userId);
-    if (!organizer) {
-      return next(new ErrorResponse("Organizer not found", 404));
     }
 
     // Handle image uploads
@@ -182,15 +198,6 @@ const createEvent = async (req, res, next) => {
     // Create event data
     const eventData = {
       title,
-      description,
-      longDescription: longDescription || description,
-      category,
-      date: new Date(date),
-      time,
-      endTime,
-      venue,
-      address,
-      city,
       organizer: req.user.userId,
       organizerInfo: {
         name: `${organizer.firstName} ${organizer.lastName}`,
@@ -201,11 +208,23 @@ const createEvent = async (req, res, next) => {
       tags: Array.isArray(parsedTags) ? parsedTags : [],
       includes: Array.isArray(parsedIncludes) ? parsedIncludes : [],
       requirements: Array.isArray(parsedRequirements) ? parsedRequirements : [],
-      cancellationPolicy,
-      refundPolicy: refundPolicy || "partial",
-      status: "published",
+      status: status, // Use the provided status (draft or published)
       isActive: true,
     };
+
+    // Add optional fields if provided
+    if (description) eventData.description = description;
+    if (longDescription)
+      eventData.longDescription = longDescription || description;
+    if (category) eventData.category = category;
+    if (date) eventData.date = new Date(date);
+    if (time) eventData.time = time;
+    if (endTime) eventData.endTime = endTime;
+    if (venue) eventData.venue = venue;
+    if (address) eventData.address = address;
+    if (city) eventData.city = city;
+    if (cancellationPolicy) eventData.cancellationPolicy = cancellationPolicy;
+    if (refundPolicy) eventData.refundPolicy = refundPolicy;
 
     // Add ticket types OR legacy pricing
     if (
@@ -228,7 +247,7 @@ const createEvent = async (req, res, next) => {
         0
       );
       eventData.availableTickets = eventData.capacity;
-    } else {
+    } else if (price !== undefined && capacity) {
       eventData.price = parseFloat(price);
       eventData.capacity = parseInt(capacity);
       eventData.availableTickets = parseInt(capacity);
@@ -237,24 +256,41 @@ const createEvent = async (req, res, next) => {
     // Create event
     const event = await Event.create(eventData);
 
-    // Create event creation notification for organizer
+    // Create notification based on status
     try {
-      await NotificationService.createSystemNotification(req.user.userId, {
-        title: '🎉 Event Created Successfully!',
-        message: `Your event "${event.title}" has been created and is now live.`,
-        priority: 'medium',
-        data: {
-          eventId: event._id,
-          eventTitle: event.title
-        }
-      });
+      if (status === "published") {
+        await NotificationService.createSystemNotification(req.user.userId, {
+          title: "🎉 Event Published Successfully!",
+          message: `Your event "${event.title}" is now live and visible to everyone.`,
+          priority: "medium",
+          data: {
+            eventId: event._id,
+            eventTitle: event.title,
+          },
+        });
+      } else {
+        await NotificationService.createSystemNotification(req.user.userId, {
+          title: "📝 Event Saved as Draft",
+          message: `Your event "${event.title}" has been saved. You can edit and publish it later.`,
+          priority: "low",
+          data: {
+            eventId: event._id,
+            eventTitle: event.title,
+          },
+        });
+      }
     } catch (notificationError) {
-      console.error('Failed to create event creation notification:', notificationError);
+      console.error("Failed to create event notification:", notificationError);
     }
+
+    const successMessage =
+      status === "published"
+        ? "Event published successfully"
+        : "Event saved as draft";
 
     res.status(201).json({
       success: true,
-      message: "Event created successfully",
+      message: successMessage,
       event: event,
     });
   } catch (error) {
@@ -268,6 +304,7 @@ const createEvent = async (req, res, next) => {
     next(new ErrorResponse("Failed to create event", 500));
   }
 };
+
 
 // @desc    Get all events with filtering and pagination
 // @route   GET /api/v1/events
@@ -291,11 +328,11 @@ const getAllEvents = async (req, res, next) => {
     } = req.query;
 
     // Parse voice search query if flagged
-    if (isVoiceSearch === 'true' && search) {
-      console.log('Voice search detected:', search);
+    if (isVoiceSearch === "true" && search) {
+      console.log("Voice search detected:", search);
       const voiceParams = parseVoiceQuery(search);
-      console.log('Parsed voice parameters:', voiceParams);
-      
+      console.log("Parsed voice parameters:", voiceParams);
+
       // Merge voice-parsed parameters (voice params take priority)
       search = voiceParams.search || search;
       category = voiceParams.category || category;
@@ -311,12 +348,17 @@ const getAllEvents = async (req, res, next) => {
       isActive: true,
     };
 
-    // Only show published events to non-organizers
+    // Only show published events to non-organizers or public users
     if (!req.user || req.user.role !== "organizer") {
       query.status = "published";
       query.date = { $gte: new Date() };
     } else if (status) {
+      // Organizers can filter by status
       query.status = status;
+    } else {
+      // By default, show published events for organizers too in public view
+      query.status = "published";
+      query.date = { $gte: new Date() };
     }
 
     // Search by text
@@ -424,15 +466,15 @@ const getAllEvents = async (req, res, next) => {
       currentPage: pageNum,
       events,
       // Include parsed parameters for debugging
-      ...(isVoiceSearch === 'true' && {
+      ...(isVoiceSearch === "true" && {
         voiceSearchParams: {
           originalQuery: req.query.search,
           parsedCategory: category,
           parsedCity: city,
           parsedPriceRange: { min: minPrice, max: maxPrice },
           parsedDateRange: { start: startDate, end: endDate },
-        }
-      })
+        },
+      }),
     });
   } catch (error) {
     console.error("Get all events error:", error);
@@ -955,7 +997,7 @@ const deleteEvent = async (req, res, next) => {
   }
 };
 
-// @desc    Get organizer's events
+// @desc    Get organizer's events (including drafts)
 // @route   GET /api/v1/events/organizer/my-events
 // @access  Private (Organizer only)
 const getOrganizerEvents = async (req, res, next) => {
@@ -982,6 +1024,18 @@ const getOrganizerEvents = async (req, res, next) => {
 
     const total = await Event.countDocuments(query);
 
+    // Get counts by status for organizer dashboard
+    const draftCount = await Event.countDocuments({
+      organizer: req.user.userId,
+      status: "draft",
+      isActive: true,
+    });
+    const publishedCount = await Event.countDocuments({
+      organizer: req.user.userId,
+      status: "published",
+      isActive: true,
+    });
+
     res.status(200).json({
       success: true,
       count: events.length,
@@ -989,12 +1043,17 @@ const getOrganizerEvents = async (req, res, next) => {
       totalPages: Math.ceil(total / limitNum),
       currentPage: pageNum,
       events,
+      statusCounts: {
+        draft: draftCount,
+        published: publishedCount,
+      },
     });
   } catch (error) {
     console.error("Get organizer events error:", error);
     next(new ErrorResponse("Failed to fetch organizer events", 500));
   }
 };
+
 
 // @desc    Get organizer statistics
 // @route   GET /api/v1/events/organizer/statistics

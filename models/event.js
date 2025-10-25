@@ -13,14 +13,21 @@ const eventSchema = new mongoose.Schema(
     },
     description: {
       type: String,
-      required: [true, "Description is required"],
       trim: true,
       minlength: [50, "Description must be at least 50 characters"],
       maxlength: [5000, "Description cannot exceed 5000 characters"],
+      required: function() {
+        // Only required if status is published
+        return this.status === 'published';
+      }
+    },
+    longDescription: {
+      type: String,
+      trim: true,
+      maxlength: [10000, "Long description cannot exceed 10000 characters"],
     },
     category: {
       type: String,
-      required: [true, "Category is required"],
       enum: {
         values: [
           "Technology",
@@ -34,9 +41,13 @@ const eventSchema = new mongoose.Schema(
           "Sports",
           "Entertainment",
           "Networking",
+          "Lifestyle",
           "Other",
         ],
         message: "{VALUE} is not a valid category",
+      },
+      required: function() {
+        return this.status === 'published';
       },
       index: true,
     },
@@ -44,9 +55,14 @@ const eventSchema = new mongoose.Schema(
     // Date & Time
     date: {
       type: Date,
-      required: [true, "Event date is required"],
+      required: function() {
+        return this.status === 'published';
+      },
       validate: {
         validator: function (value) {
+          // Skip validation for drafts
+          if (this.status === 'draft') return true;
+          
           // Compare dates without time component
           const today = new Date();
           today.setHours(0, 0, 0, 0);
@@ -60,48 +76,82 @@ const eventSchema = new mongoose.Schema(
     },
     time: {
       type: String,
-      required: [true, "Start time is required"],
+      required: function() {
+        return this.status === 'published';
+      },
       match: [/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid time format (HH:MM)"],
     },
     endTime: {
       type: String,
-      required: [true, "End time is required"],
+      required: function() {
+        return this.status === 'published';
+      },
       match: [/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid time format (HH:MM)"],
     },
 
     // Location
     venue: {
       type: String,
-      required: [true, "Venue name is required"],
       trim: true,
       maxlength: [200, "Venue name cannot exceed 200 characters"],
+      required: function() {
+        return this.status === 'published';
+      },
     },
     address: {
       type: String,
-      required: [true, "Address is required"],
       trim: true,
       maxlength: [500, "Address cannot exceed 500 characters"],
+      required: function() {
+        return this.status === 'published';
+      },
     },
     city: {
       type: String,
-      required: [true, "City is required"],
       enum: {
         values: [
-          "Lagos",
-          "Abuja",
-          "Ibadan",
-          "Port Harcourt",
-          "Kano",
-          "Benin",
+          "Abia",
+          "Adamawa",
+          "Akwa Ibom",
+          "Anambra",
+          "Bauchi",
+          "Bayelsa",
+          "Benue",
+          "Borno",
+          "Cross River",
+          "Delta",
+          "Ebonyi",
+          "Edo",
+          "Ekiti",
           "Enugu",
+          "FCT (Abuja)",
+          "Gombe",
+          "Imo",
+          "Jigawa",
           "Kaduna",
-          "Owerri",
-          "Jos",
-          "Calabar",
-          "Abeokuta",
-          "Other",
+          "Kano",
+          "Katsina",
+          "Kebbi",
+          "Kogi",
+          "Kwara",
+          "Lagos",
+          "Nasarawa",
+          "Niger",
+          "Ogun",
+          "Ondo",
+          "Osun",
+          "Oyo",
+          "Plateau",
+          "Rivers",
+          "Sokoto",
+          "Taraba",
+          "Yobe",
+          "Zamfara",
         ],
-        message: "{VALUE} is not a supported city",
+        message: "{VALUE} is not a supported state",
+      },
+      required: function() {
+        return this.status === 'published';
       },
       index: true,
     },
@@ -206,7 +256,8 @@ const eventSchema = new mongoose.Schema(
       min: [0, "Price cannot be negative"],
       default: 0,
       required: function () {
-        return !this.ticketTypes || this.ticketTypes.length === 0;
+        // Only required for published events without ticket types
+        return this.status === 'published' && (!this.ticketTypes || this.ticketTypes.length === 0);
       },
     },
     currency: {
@@ -222,7 +273,8 @@ const eventSchema = new mongoose.Schema(
         message: "Capacity must be a whole number",
       },
       required: function () {
-        return !this.ticketTypes || this.ticketTypes.length === 0;
+        // Only required for published events without ticket types
+        return this.status === 'published' && (!this.ticketTypes || this.ticketTypes.length === 0);
       },
     },
     availableTickets: {
@@ -269,7 +321,7 @@ const eventSchema = new mongoose.Schema(
         values: ["draft", "published", "cancelled", "completed", "postponed"],
         message: "{VALUE} is not a valid status",
       },
-      default: "published",
+      default: "draft",
       index: true,
     },
     isActive: {
@@ -368,6 +420,13 @@ const eventSchema = new mongoose.Schema(
         lowercase: true,
       },
     ],
+    includes: [
+      {
+        type: String,
+        trim: true,
+        maxlength: [200, "Each include cannot exceed 200 characters"],
+      },
+    ],
     requirements: [
       {
         type: String,
@@ -392,6 +451,7 @@ const eventSchema = new mongoose.Schema(
     slug: {
       type: String,
       unique: true,
+      sparse: true, // Allows null values to not violate unique constraint
       lowercase: true,
       trim: true,
     },
@@ -537,9 +597,9 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// Pre-save middleware to generate slug
+// Pre-save middleware to generate slug (only for published events)
 eventSchema.pre("save", function (next) {
-  if (this.isModified("title") && !this.slug) {
+  if (this.isModified("title") && !this.slug && this.status === 'published') {
     this.slug = this.title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
@@ -561,8 +621,12 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// Pre-save middleware to validate end time
+// Pre-save middleware to validate end time (skip for drafts)
 eventSchema.pre("save", function (next) {
+  if (this.status === 'draft') {
+    return next();
+  }
+  
   if (this.time && this.endTime) {
     try {
       const [startHour, startMin] = this.time.split(":").map(Number);
