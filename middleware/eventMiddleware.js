@@ -4,8 +4,8 @@ const ErrorResponse = require("../utils/errorResponse");
 const eventMiddleware = {
   // Pre-save middleware for events
   preSave: function(next) {
-    // Generate slug if not provided
-    if (this.isModified("title") && !this.slug) {
+    // Generate slug ONLY if publishing (not for drafts)
+    if (this.isModified("title") && !this.slug && this.status === "published") {
       this.slug = this.title
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
@@ -17,8 +17,8 @@ const eventMiddleware = {
       this.publishedAt = new Date();
     }
 
-    // Validate end time
-    if (this.time && this.endTime) {
+    // Validate end time (SKIP FOR DRAFTS)
+    if (this.status !== 'draft' && this.time && this.endTime) {
       try {
         const [startHour, startMin] = this.time.split(":").map(Number);
         const [endHour, endMin] = this.endTime.split(":").map(Number);
@@ -65,7 +65,11 @@ const eventMiddleware = {
         return next(new ErrorResponse("Event not found", 404));
       }
 
-      if (event.organizer.toString() !== req.user.id) {
+      // Check if user is the organizer
+      const eventOrganizerId = event.organizer._id?.toString() || event.organizer.toString();
+      const currentUserId = req.user._id?.toString() || req.user.id?.toString() || req.user.userId?.toString();
+
+      if (eventOrganizerId !== currentUserId && req.user.role !== 'superadmin') {
         return next(new ErrorResponse("Not authorized to access this event", 403));
       }
 
@@ -76,7 +80,7 @@ const eventMiddleware = {
     }
   },
 
-  // Validate event is published
+  // Validate event is published (for booking operations)
   validatePublished: (req, res, next) => {
     if (req.event.status !== "published") {
       return next(new ErrorResponse("Event is not available for booking", 400));
@@ -84,8 +88,13 @@ const eventMiddleware = {
     next();
   },
 
-  // Validate event date is in future
+  // Validate event date is in future (skip for drafts in editing)
   validateFutureEvent: (req, res, next) => {
+    // Skip validation for draft events
+    if (req.event.status === 'draft') {
+      return next();
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const eventDate = new Date(req.event.date);
@@ -119,6 +128,71 @@ const eventMiddleware = {
     next();
   },
 
+  // Validate event can be published (all required fields present)
+  validateCanPublish: async (req, res, next) => {
+    try {
+      const event = req.event || await Event.findById(req.params.id);
+      
+      if (!event) {
+        return next(new ErrorResponse("Event not found", 404));
+      }
+
+      // If not trying to publish, skip validation
+      if (req.body.status !== 'published') {
+        return next();
+      }
+
+      const errors = [];
+
+      // Check all required fields for publishing
+      if (!event.description && !req.body.description) {
+        errors.push("Description is required to publish");
+      }
+      if (!event.category && !req.body.category) {
+        errors.push("Category is required to publish");
+      }
+      if (!event.date && !req.body.date) {
+        errors.push("Event date is required to publish");
+      }
+      if (!event.time && !req.body.time) {
+        errors.push("Start time is required to publish");
+      }
+      if (!event.endTime && !req.body.endTime) {
+        errors.push("End time is required to publish");
+      }
+      if (!event.venue && !req.body.venue) {
+        errors.push("Venue is required to publish");
+      }
+      if (!event.address && !req.body.address) {
+        errors.push("Address is required to publish");
+      }
+      if (!event.city && !req.body.city) {
+        errors.push("City/State is required to publish");
+      }
+
+      // Check pricing
+      const hasTicketTypes = event.ticketTypes?.length > 0 || 
+                           (req.body.ticketTypes && JSON.parse(req.body.ticketTypes || '[]').length > 0);
+      
+      if (!hasTicketTypes) {
+        if ((!event.price && !req.body.price) || (!event.capacity && !req.body.capacity)) {
+          errors.push("Price and capacity are required to publish");
+        }
+      }
+
+      if (errors.length > 0) {
+        return next(new ErrorResponse(
+          `Cannot publish event: ${errors.join(", ")}`,
+          400
+        ));
+      }
+
+      next();
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // Add virtual fields to response
   addVirtualFields: (req, res, next) => {
     const originalJson = res.json;
@@ -136,7 +210,8 @@ const eventMiddleware = {
             totalAvailableTickets: eventMiddleware.getTotalAvailableTickets(event),
             attendancePercentage: eventMiddleware.getAttendancePercentage(event),
             daysUntilEvent: eventMiddleware.getDaysUntilEvent(event),
-            priceRange: eventMiddleware.getPriceRange(event)
+            priceRange: eventMiddleware.getPriceRange(event),
+            isDraft: event.status === 'draft'
           }));
         } else if (data.data.toObject) {
           // Handle single event
@@ -150,7 +225,8 @@ const eventMiddleware = {
             totalAvailableTickets: eventMiddleware.getTotalAvailableTickets(event),
             attendancePercentage: eventMiddleware.getAttendancePercentage(event),
             daysUntilEvent: eventMiddleware.getDaysUntilEvent(event),
-            priceRange: eventMiddleware.getPriceRange(event)
+            priceRange: eventMiddleware.getPriceRange(event),
+            isDraft: event.status === 'draft'
           };
         }
       }
@@ -159,8 +235,13 @@ const eventMiddleware = {
     next();
   },
 
-  // Check if event is available
+  // Check if event is available (drafts are never available)
   isEventAvailable: (event) => {
+    // Drafts are never available for booking
+    if (event.status === 'draft') {
+      return false;
+    }
+
     const now = new Date();
     const isFutureDate = new Date(event.date) > now;
     const isPublished = event.status === "published";
@@ -176,6 +257,11 @@ const eventMiddleware = {
 
   // Check if event is sold out
   isEventSoldOut: (event) => {
+    // Drafts can't be sold out
+    if (event.status === 'draft') {
+      return false;
+    }
+
     if (event.ticketTypes && event.ticketTypes.length > 0) {
       return event.ticketTypes.every((tt) => tt.availableTickets === 0);
     }
@@ -207,6 +293,11 @@ const eventMiddleware = {
 
   // Get days until event
   getDaysUntilEvent: (event) => {
+    // Return null for drafts without dates
+    if (!event.date) {
+      return null;
+    }
+
     const now = new Date();
     const eventDate = new Date(event.date);
     const diffTime = eventDate - now;
@@ -223,6 +314,30 @@ const eventMiddleware = {
       return minPrice === maxPrice ? minPrice : { min: minPrice, max: maxPrice };
     }
     return event.price || 0;
+  },
+
+  // Check if event is editable (only drafts and future published events)
+  isEventEditable: (event) => {
+    if (event.status === 'draft') {
+      return true;
+    }
+
+    if (event.status === 'published') {
+      const now = new Date();
+      const eventDate = new Date(event.date);
+      return eventDate > now;
+    }
+
+    return false;
+  },
+
+  // Filter out drafts for public queries
+  filterPublicEvents: (req, res, next) => {
+    // If user is not authenticated or not an organizer, filter drafts
+    if (!req.user || req.user.role !== 'organizer') {
+      req.query.status = 'published';
+    }
+    next();
   }
 };
 

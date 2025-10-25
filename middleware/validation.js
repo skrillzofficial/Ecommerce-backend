@@ -26,7 +26,65 @@ const parseArray = (value) => {
   return [];
 };
 
-// Validate event creation data
+// Updated valid categories (added Lifestyle)
+const VALID_CATEGORIES = [
+  "Technology",
+  "Business",
+  "Marketing",
+  "Arts",
+  "Health",
+  "Education",
+  "Music",
+  "Food",
+  "Sports",
+  "Entertainment",
+  "Networking",
+  "Lifestyle", // NEW
+  "Other"
+];
+
+// Updated valid states (all 36 Nigerian states + FCT)
+const VALID_STATES = [
+  "Abia",
+  "Adamawa",
+  "Akwa Ibom",
+  "Anambra",
+  "Bauchi",
+  "Bayelsa",
+  "Benue",
+  "Borno",
+  "Cross River",
+  "Delta",
+  "Ebonyi",
+  "Edo",
+  "Ekiti",
+  "Enugu",
+  "FCT (Abuja)",
+  "Gombe",
+  "Imo",
+  "Jigawa",
+  "Kaduna",
+  "Kano",
+  "Katsina",
+  "Kebbi",
+  "Kogi",
+  "Kwara",
+  "Lagos",
+  "Nasarawa",
+  "Niger",
+  "Ogun",
+  "Ondo",
+  "Osun",
+  "Oyo",
+  "Plateau",
+  "Rivers",
+  "Sokoto",
+  "Taraba",
+  "Yobe",
+  "Zamfara"
+];
+
+// Validate event creation data (UPDATED FOR DRAFT SUPPORT)
 const validateEventCreation = (req, res, next) => {
   const {
     title,
@@ -40,11 +98,13 @@ const validateEventCreation = (req, res, next) => {
     city,
     price,
     capacity,
+    status = "draft", // Default to draft
   } = req.body;
 
   const errors = [];
+  const isPublishing = status === "published";
 
-  // Title validation
+  // Title validation (ALWAYS REQUIRED)
   if (!title || title.trim().length < 5) {
     errors.push("Title must be at least 5 characters long");
   }
@@ -52,146 +112,164 @@ const validateEventCreation = (req, res, next) => {
     errors.push("Title must not exceed 200 characters");
   }
 
-  // Description validation
-  if (!description || description.trim().length < 50) {
-    errors.push("Description must be at least 50 characters long");
-  }
-  if (description && description.length > 5000) {
-    errors.push("Description must not exceed 5000 characters");
-  }
+  // ===== CONDITIONAL VALIDATION FOR PUBLISHED EVENTS =====
+  if (isPublishing) {
+    // Description validation
+    if (!description || description.trim().length < 50) {
+      errors.push("Description must be at least 50 characters long to publish");
+    }
+    if (description && description.length > 5000) {
+      errors.push("Description must not exceed 5000 characters");
+    }
 
-  // Category validation 
-  const validCategories = [
-    "Technology",
-    "Business",
-    "Marketing",
-    "Arts",
-    "Health",
-    "Education",
-    "Music",
-    "Food",
-    "Sports",
-    "Entertainment",
-    "Networking",
-    "Other"
-  ];
-  if (!category || !validCategories.includes(category)) {
-    errors.push(
-      `Category must be one of: ${validCategories.join(", ")}`
-    );
-  }
+    // Category validation 
+    if (!category || !VALID_CATEGORIES.includes(category)) {
+      errors.push(
+        `Category is required to publish. Must be one of: ${VALID_CATEGORIES.join(", ")}`
+      );
+    }
 
-  // Date validation
-  if (!date) {
-    errors.push("Event date is required");
-  } else {
-    const eventDate = new Date(date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    if (isNaN(eventDate.getTime())) {
-      errors.push("Invalid date format");
+    // Date validation
+    if (!date) {
+      errors.push("Event date is required to publish");
     } else {
-      eventDate.setHours(0, 0, 0, 0);
-      if (eventDate < today) {
-        errors.push("Event date must be in the future");
+      const eventDate = new Date(date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      if (isNaN(eventDate.getTime())) {
+        errors.push("Invalid date format");
+      } else {
+        eventDate.setHours(0, 0, 0, 0);
+        if (eventDate < today) {
+          errors.push("Event date must be in the future");
+        }
       }
     }
-  }
 
-  // Time validation
-  if (!time || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
-    errors.push("Valid time is required (HH:MM format)");
-  }
-  if (!endTime || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
-    errors.push("Valid end time is required (HH:MM format)");
-  }
+    // Time validation
+    if (!time || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
+      errors.push("Valid start time is required to publish (HH:MM format)");
+    }
+    if (!endTime || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
+      errors.push("Valid end time is required to publish (HH:MM format)");
+    }
 
-  // Validate time order if both are provided
-  if (time && endTime && /^([01]\d|2[0-3]):([0-5]\d)$/.test(time) && /^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
-    const [startHour, startMin] = time.split(":").map(Number);
-    const [endHour, endMin] = endTime.split(":").map(Number);
-    const startMinutes = startHour * 60 + startMin;
-    const endMinutes = endHour * 60 + endMin;
+    // Validate time order if both are provided
+    if (time && endTime && /^([01]\d|2[0-3]):([0-5]\d)$/.test(time) && /^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
+      const [startHour, startMin] = time.split(":").map(Number);
+      const [endHour, endMin] = endTime.split(":").map(Number);
+      const startMinutes = startHour * 60 + startMin;
+      const endMinutes = endHour * 60 + endMin;
+      
+      if (endMinutes <= startMinutes) {
+        errors.push("End time must be after start time");
+      }
+    }
+
+    // Venue validation
+    if (!venue || venue.trim().length < 3) {
+      errors.push("Venue must be at least 3 characters long to publish");
+    }
+    if (venue && venue.length > 200) {
+      errors.push("Venue must not exceed 200 characters");
+    }
+
+    // Address validation
+    if (!address || address.trim().length < 5) {
+      errors.push("Address must be at least 5 characters long to publish");
+    }
+    if (address && address.length > 500) {
+      errors.push("Address must not exceed 500 characters");
+    }
+
+    // City/State validation 
+    if (!city || !VALID_STATES.includes(city)) {
+      errors.push(`State is required to publish. Must be one of: ${VALID_STATES.join(", ")}`);
+    }
+
+    // Price validation - ONLY if ticketTypes is not provided
+    const ticketTypes = req.body.ticketTypes;
+    let hasTicketTypes = false;
     
-    if (endMinutes <= startMinutes) {
-      errors.push("End time must be after start time");
+    if (ticketTypes) {
+      try {
+        const parsed = typeof ticketTypes === 'string' ? JSON.parse(ticketTypes) : ticketTypes;
+        hasTicketTypes = Array.isArray(parsed) && parsed.length > 0;
+      } catch (e) {
+        // Not valid ticket types
+      }
     }
-  }
 
-  // Venue validation
-  if (!venue || venue.trim().length < 3) {
-    errors.push("Venue must be at least 3 characters long");
-  }
-  if (venue && venue.length > 200) {
-    errors.push("Venue must not exceed 200 characters");
-  }
+    if (!hasTicketTypes) {
+      // Only validate price/capacity if no ticket types
+      if (price === undefined || price === null || price === '') {
+        errors.push("Price is required to publish");
+      } else {
+        const priceNum = parseFloat(price);
+        if (isNaN(priceNum) || priceNum < 0) {
+          errors.push("Price must be a non-negative number");
+        }
+        if (priceNum > 10000000) {
+          errors.push("Price seems unreasonably high");
+        }
+      }
 
-  // Address validation
-  if (!address || address.trim().length < 5) {
-    errors.push("Address must be at least 5 characters long");
-  }
-  if (address && address.length > 500) {
-    errors.push("Address must not exceed 500 characters");
-  }
-
-  // City validation 
-  const validCities = [
-    "Lagos",
-    "Abuja",
-    "Ibadan",
-    "Port Harcourt",
-    "Kano",
-    "Benin",
-    "Enugu",
-    "Kaduna",
-    "Owerri",
-    "Jos",
-    "Calabar",
-    "Abeokuta",
-    "Other"
-  ];
-  if (!city || !validCities.includes(city)) {
-    errors.push(`City must be one of: ${validCities.join(", ")}`);
-  }
-
-  // Price validation - ONLY if ticketTypes is not provided
-  const ticketTypes = req.body.ticketTypes;
-  let hasTicketTypes = false;
-  
-  if (ticketTypes) {
-    try {
-      const parsed = typeof ticketTypes === 'string' ? JSON.parse(ticketTypes) : ticketTypes;
-      hasTicketTypes = Array.isArray(parsed) && parsed.length > 0;
-    } catch (e) {
-      // Not valid ticket types
+      // Capacity validation
+      if (!capacity || capacity === '') {
+        errors.push("Capacity is required to publish");
+      } else {
+        const capacityNum = parseInt(capacity);
+        if (isNaN(capacityNum) || capacityNum < 1) {
+          errors.push("Capacity must be at least 1");
+        }
+        if (capacityNum > 100000) {
+          errors.push("Capacity seems unreasonably high");
+        }
+      }
     }
-  }
+  } else {
+    // ===== OPTIONAL VALIDATION FOR DRAFTS =====
+    // Only validate format if fields are provided
+    
+    if (description && description.length > 5000) {
+      errors.push("Description must not exceed 5000 characters");
+    }
 
-  if (!hasTicketTypes) {
-    // Only validate price/capacity if no ticket types
-    if (price === undefined || price === null || price === '') {
-      errors.push("Price is required");
-    } else {
+    if (category && !VALID_CATEGORIES.includes(category)) {
+      errors.push(`Category must be one of: ${VALID_CATEGORIES.join(", ")}`);
+    }
+
+    if (city && !VALID_STATES.includes(city)) {
+      errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
+    }
+
+    if (date) {
+      const eventDate = new Date(date);
+      if (isNaN(eventDate.getTime())) {
+        errors.push("Invalid date format");
+      }
+    }
+
+    if (time && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
+      errors.push("Invalid time format (HH:MM)");
+    }
+
+    if (endTime && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
+      errors.push("Invalid end time format (HH:MM)");
+    }
+
+    if (price !== undefined && price !== null && price !== '') {
       const priceNum = parseFloat(price);
       if (isNaN(priceNum) || priceNum < 0) {
         errors.push("Price must be a non-negative number");
       }
-      if (priceNum > 10000000) {
-        errors.push("Price seems unreasonably high");
-      }
     }
 
-    // Capacity validation
-    if (!capacity || capacity === '') {
-      errors.push("Capacity is required");
-    } else {
+    if (capacity !== undefined && capacity !== '') {
       const capacityNum = parseInt(capacity);
       if (isNaN(capacityNum) || capacityNum < 1) {
         errors.push("Capacity must be at least 1");
-      }
-      if (capacityNum > 100000) {
-        errors.push("Capacity seems unreasonably high");
       }
     }
   }
@@ -203,7 +281,7 @@ const validateEventCreation = (req, res, next) => {
   next();
 };
 
-// Validate event update data
+// Validate event update data (UPDATED FOR STATES AND CATEGORY)
 const validateEventUpdate = (req, res, next) => {
   const errors = [];
 
@@ -217,6 +295,10 @@ const validateEventUpdate = (req, res, next) => {
   const endTime = getValue(req.body, 'endTime');
   const price = getValue(req.body, 'price');
   const capacity = getValue(req.body, 'capacity');
+  const status = getValue(req.body, 'status');
+
+  // If updating to published status, validate all required fields
+  const isPublishing = status === 'published';
 
   // Title validation (if provided)
   if (title !== undefined) {
@@ -230,7 +312,9 @@ const validateEventUpdate = (req, res, next) => {
 
   // Description validation (if provided)
   if (description !== undefined) {
-    if (description.trim().length < 50) {
+    if (isPublishing && description.trim().length < 50) {
+      errors.push("Description must be at least 50 characters long to publish");
+    } else if (description.trim().length > 0 && description.trim().length < 50) {
       errors.push("Description must be at least 50 characters long");
     }
     if (description.length > 5000) {
@@ -240,46 +324,17 @@ const validateEventUpdate = (req, res, next) => {
 
   // Category validation (if provided)
   if (category !== undefined) {
-    const validCategories = [
-      "Technology",
-      "Business",
-      "Marketing",
-      "Arts",
-      "Health",
-      "Education",
-      "Music",
-      "Food",
-      "Sports",
-      "Entertainment",
-      "Networking",
-      "Other"
-    ];
-    if (!validCategories.includes(category)) {
+    if (!VALID_CATEGORIES.includes(category)) {
       errors.push(
-        `Category must be one of: ${validCategories.join(", ")}`
+        `Category must be one of: ${VALID_CATEGORIES.join(", ")}`
       );
     }
   }
 
-  // City validation (if provided)
+  // City/State validation (if provided)
   if (city !== undefined) {
-    const validCities = [
-      "Lagos",
-      "Abuja",
-      "Ibadan",
-      "Port Harcourt",
-      "Kano",
-      "Benin",
-      "Enugu",
-      "Kaduna",
-      "Owerri",
-      "Jos",
-      "Calabar",
-      "Abeokuta",
-      "Other"
-    ];
-    if (!validCities.includes(city)) {
-      errors.push(`City must be one of: ${validCities.join(", ")}`);
+    if (!VALID_STATES.includes(city)) {
+      errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
     }
   }
 
@@ -291,7 +346,8 @@ const validateEventUpdate = (req, res, next) => {
     
     if (isNaN(eventDate.getTime())) {
       errors.push("Invalid date format");
-    } else {
+    } else if (status !== 'draft') {
+      // Only validate future date if not a draft
       eventDate.setHours(0, 0, 0, 0);
       if (eventDate < today) {
         errors.push("Event date must be in the future");
@@ -436,6 +492,16 @@ const validateQueryParams = (req, res, next) => {
     if (!validSorts.includes(req.query.sort)) {
       errors.push(
         `Sort must be one of: ${validSorts.join(", ")}`
+      );
+    }
+  }
+
+  // Status validation (for organizers viewing their events)
+  if (req.query.status) {
+    const validStatuses = ["draft", "published", "cancelled", "completed", "postponed"];
+    if (!validStatuses.includes(req.query.status)) {
+      errors.push(
+        `Status must be one of: ${validStatuses.join(", ")}`
       );
     }
   }
@@ -649,5 +715,7 @@ module.exports = {
   validateRegistration,
   validateLogin,
   validatePasswordUpdate,
-  validatePasswordReset
+  validatePasswordReset,
+  VALID_CATEGORIES, // Export for reference
+  VALID_STATES, // Export for reference
 };
