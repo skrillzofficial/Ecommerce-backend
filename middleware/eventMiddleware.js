@@ -2,75 +2,30 @@ const Event = require("../models/event");
 const ErrorResponse = require("../utils/errorResponse");
 
 const eventMiddleware = {
-  // Pre-save middleware for events
-  preSave: function(next) {
-    // Generate slug ONLY if publishing (not for drafts)
-    if (this.isModified("title") && !this.slug && this.status === "published") {
-      this.slug = this.title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "") + `-${Date.now()}`;
-    }
-
-    // Set publishedAt if publishing
-    if (this.isModified("status") && this.status === "published" && !this.publishedAt) {
-      this.publishedAt = new Date();
-    }
-
-    // Validate end time (SKIP FOR DRAFTS)
-    if (this.status !== 'draft' && this.time && this.endTime) {
-      try {
-        const [startHour, startMin] = this.time.split(":").map(Number);
-        const [endHour, endMin] = this.endTime.split(":").map(Number);
-
-        // Validate time components
-        if (isNaN(startHour) || isNaN(startMin) || isNaN(endHour) || isNaN(endMin)) {
-          return next(new Error("Invalid time format"));
-        }
-
-        const startMinutes = startHour * 60 + startMin;
-        const endMinutes = endHour * 60 + endMin;
-
-        if (endMinutes <= startMinutes) {
-          return next(new Error("End time must be after start time"));
-        }
-      } catch (error) {
-        return next(new Error("Invalid time format"));
-      }
-    }
-
-    // Initialize ticket types availableTickets
-    if (this.ticketTypes && this.ticketTypes.length > 0) {
-      this.ticketTypes.forEach((ticketType) => {
-        if (ticketType.availableTickets === undefined) {
-          ticketType.availableTickets = ticketType.capacity;
-        }
-      });
-    }
-
-    // Set default thumbnail
-    if (!this.thumbnail && this.images && this.images.length > 0) {
-      this.thumbnail = this.images[0].url;
-    }
-
-    next();
-  },
-
   // Validate event ownership
   validateOwnership: async (req, res, next) => {
     try {
       const event = await Event.findById(req.params.id);
-      
+
       if (!event) {
         return next(new ErrorResponse("Event not found", 404));
       }
 
       // Check if user is the organizer
-      const eventOrganizerId = event.organizer._id?.toString() || event.organizer.toString();
-      const currentUserId = req.user._id?.toString() || req.user.id?.toString() || req.user.userId?.toString();
+      const eventOrganizerId =
+        event.organizer._id?.toString() || event.organizer.toString();
+      const currentUserId =
+        req.user._id?.toString() ||
+        req.user.id?.toString() ||
+        req.user.userId?.toString();
 
-      if (eventOrganizerId !== currentUserId && req.user.role !== 'superadmin') {
-        return next(new ErrorResponse("Not authorized to access this event", 403));
+      if (
+        eventOrganizerId !== currentUserId &&
+        req.user.role !== "superadmin"
+      ) {
+        return next(
+          new ErrorResponse("Not authorized to access this event", 403)
+        );
       }
 
       req.event = event;
@@ -91,7 +46,7 @@ const eventMiddleware = {
   // Validate event date is in future (skip for drafts in editing)
   validateFutureEvent: (req, res, next) => {
     // Skip validation for draft events
-    if (req.event.status === 'draft') {
+    if (req.event.status === "draft") {
       return next();
     }
 
@@ -99,7 +54,7 @@ const eventMiddleware = {
     today.setHours(0, 0, 0, 0);
     const eventDate = new Date(req.event.date);
     eventDate.setHours(0, 0, 0, 0);
-    
+
     if (eventDate < today) {
       return next(new ErrorResponse("Event has already passed", 400));
     }
@@ -112,14 +67,20 @@ const eventMiddleware = {
     const event = req.event;
 
     if (event.ticketTypes && event.ticketTypes.length > 0) {
-      const selectedTicket = event.ticketTypes.find(tt => tt.name === ticketType);
-      
+      const selectedTicket = event.ticketTypes.find(
+        (tt) => tt.name === ticketType
+      );
+
       if (!selectedTicket) {
-        return next(new ErrorResponse(`Ticket type '${ticketType}' not found`, 400));
+        return next(
+          new ErrorResponse(`Ticket type '${ticketType}' not found`, 400)
+        );
       }
-      
+
       if (selectedTicket.availableTickets < quantity) {
-        return next(new ErrorResponse(`Not enough ${ticketType} tickets available`, 400));
+        return next(
+          new ErrorResponse(`Not enough ${ticketType} tickets available`, 400)
+        );
       }
     } else if (event.availableTickets < quantity) {
       return next(new ErrorResponse("Not enough tickets available", 400));
@@ -131,14 +92,14 @@ const eventMiddleware = {
   // Validate event can be published (all required fields present)
   validateCanPublish: async (req, res, next) => {
     try {
-      const event = req.event || await Event.findById(req.params.id);
-      
+      const event = req.event || (await Event.findById(req.params.id));
+
       if (!event) {
         return next(new ErrorResponse("Event not found", 404));
       }
 
       // If not trying to publish, skip validation
-      if (req.body.status !== 'published') {
+      if (req.body.status !== "published") {
         return next();
       }
 
@@ -171,20 +132,24 @@ const eventMiddleware = {
       }
 
       // Check pricing
-      const hasTicketTypes = event.ticketTypes?.length > 0 || 
-                           (req.body.ticketTypes && JSON.parse(req.body.ticketTypes || '[]').length > 0);
-      
+      const hasTicketTypes =
+        event.ticketTypes?.length > 0 ||
+        (req.body.ticketTypes &&
+          JSON.parse(req.body.ticketTypes || "[]").length > 0);
+
       if (!hasTicketTypes) {
-        if ((!event.price && !req.body.price) || (!event.capacity && !req.body.capacity)) {
+        if (
+          (!event.price && !req.body.price) ||
+          (!event.capacity && !req.body.capacity)
+        ) {
           errors.push("Price and capacity are required to publish");
         }
       }
 
       if (errors.length > 0) {
-        return next(new ErrorResponse(
-          `Cannot publish event: ${errors.join(", ")}`,
-          400
-        ));
+        return next(
+          new ErrorResponse(`Cannot publish event: ${errors.join(", ")}`, 400)
+        );
       }
 
       next();
@@ -196,22 +161,24 @@ const eventMiddleware = {
   // Add virtual fields to response
   addVirtualFields: (req, res, next) => {
     const originalJson = res.json;
-    
-    res.json = function(data) {
+
+    res.json = function (data) {
       if (data.success && data.data) {
         if (Array.isArray(data.data)) {
           // Handle array of events
-          data.data = data.data.map(event => ({
-            ...event.toObject ? event.toObject() : event,
+          data.data = data.data.map((event) => ({
+            ...(event.toObject ? event.toObject() : event),
             eventUrl: `/event/${event.slug || event._id}`,
             isAvailable: eventMiddleware.isEventAvailable(event),
             isSoldOut: eventMiddleware.isEventSoldOut(event),
             totalCapacity: eventMiddleware.getTotalCapacity(event),
-            totalAvailableTickets: eventMiddleware.getTotalAvailableTickets(event),
-            attendancePercentage: eventMiddleware.getAttendancePercentage(event),
+            totalAvailableTickets:
+              eventMiddleware.getTotalAvailableTickets(event),
+            attendancePercentage:
+              eventMiddleware.getAttendancePercentage(event),
             daysUntilEvent: eventMiddleware.getDaysUntilEvent(event),
             priceRange: eventMiddleware.getPriceRange(event),
-            isDraft: event.status === 'draft'
+            isDraft: event.status === "draft",
           }));
         } else if (data.data.toObject) {
           // Handle single event
@@ -222,11 +189,13 @@ const eventMiddleware = {
             isAvailable: eventMiddleware.isEventAvailable(event),
             isSoldOut: eventMiddleware.isEventSoldOut(event),
             totalCapacity: eventMiddleware.getTotalCapacity(event),
-            totalAvailableTickets: eventMiddleware.getTotalAvailableTickets(event),
-            attendancePercentage: eventMiddleware.getAttendancePercentage(event),
+            totalAvailableTickets:
+              eventMiddleware.getTotalAvailableTickets(event),
+            attendancePercentage:
+              eventMiddleware.getAttendancePercentage(event),
             daysUntilEvent: eventMiddleware.getDaysUntilEvent(event),
             priceRange: eventMiddleware.getPriceRange(event),
-            isDraft: event.status === 'draft'
+            isDraft: event.status === "draft",
           };
         }
       }
@@ -238,7 +207,7 @@ const eventMiddleware = {
   // Check if event is available (drafts are never available)
   isEventAvailable: (event) => {
     // Drafts are never available for booking
-    if (event.status === 'draft') {
+    if (event.status === "draft") {
       return false;
     }
 
@@ -258,7 +227,7 @@ const eventMiddleware = {
   // Check if event is sold out
   isEventSoldOut: (event) => {
     // Drafts can't be sold out
-    if (event.status === 'draft') {
+    if (event.status === "draft") {
       return false;
     }
 
@@ -279,7 +248,10 @@ const eventMiddleware = {
   // Get total available tickets
   getTotalAvailableTickets: (event) => {
     if (event.ticketTypes && event.ticketTypes.length > 0) {
-      return event.ticketTypes.reduce((sum, tt) => sum + tt.availableTickets, 0);
+      return event.ticketTypes.reduce(
+        (sum, tt) => sum + tt.availableTickets,
+        0
+      );
     }
     return event.availableTickets || 0;
   },
@@ -311,18 +283,20 @@ const eventMiddleware = {
       const prices = event.ticketTypes.map((tt) => tt.price);
       const minPrice = Math.min(...prices);
       const maxPrice = Math.max(...prices);
-      return minPrice === maxPrice ? minPrice : { min: minPrice, max: maxPrice };
+      return minPrice === maxPrice
+        ? minPrice
+        : { min: minPrice, max: maxPrice };
     }
     return event.price || 0;
   },
 
   // Check if event is editable (only drafts and future published events)
   isEventEditable: (event) => {
-    if (event.status === 'draft') {
+    if (event.status === "draft") {
       return true;
     }
 
-    if (event.status === 'published') {
+    if (event.status === "published") {
       const now = new Date();
       const eventDate = new Date(event.date);
       return eventDate > now;
@@ -334,11 +308,11 @@ const eventMiddleware = {
   // Filter out drafts for public queries
   filterPublicEvents: (req, res, next) => {
     // If user is not authenticated or not an organizer, filter drafts
-    if (!req.user || req.user.role !== 'organizer') {
-      req.query.status = 'published';
+    if (!req.user || req.user.role !== "organizer") {
+      req.query.status = "published";
     }
     next();
-  }
+  },
 };
 
 module.exports = eventMiddleware;

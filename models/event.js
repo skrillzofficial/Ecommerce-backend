@@ -586,10 +586,19 @@ eventSchema.virtual("priceRange").get(function () {
 });
 
 // ===================================
-// PRE-SAVE MIDDLEWARE
+// PRE-SAVE MIDDLEWARE - FIXED
 // ===================================
 
-// 1. Initialize ticket types availableTickets
+// 1. EMERGENCY FIX: Ensure slug is NEVER null (FIRST - most important)
+eventSchema.pre("save", function (next) {
+  // Ensure slug is NEVER null before any other operations
+  if (!this.slug || this.slug === null || this.slug === '') {
+    this.slug = `emergency-fix-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  }
+  next();
+});
+
+// 2. Initialize ticket types availableTickets
 eventSchema.pre("save", function (next) {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     this.ticketTypes.forEach((ticketType) => {
@@ -601,11 +610,11 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// 2. FIXED: Generate slug for ALL events (not just published)
+// 3. FIXED: Generate proper slug for ALL events (including drafts)
 eventSchema.pre("save", async function (next) {
-  // Generate slug if it doesn't exist yet
-  if (!this.slug) {
-    try {
+  try {
+    // Only generate proper slug if current slug is the emergency one
+    if (this.slug && this.slug.startsWith('emergency-fix-')) {
       // Create base slug from title
       const baseSlug = this.title
         .toLowerCase()
@@ -620,23 +629,34 @@ eventSchema.pre("save", async function (next) {
       let slug = `${baseSlug}-${uniqueId}`;
       
       // Ensure slug uniqueness by checking database
+      const Event = this.constructor;
       let counter = 1;
-      while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
+      let existingEvent = await Event.findOne({ slug, _id: { $ne: this._id } });
+      
+      while (existingEvent) {
         slug = `${baseSlug}-${uniqueId}-${counter}`;
+        existingEvent = await Event.findOne({ slug, _id: { $ne: this._id } });
         counter++;
+        
+        // Safety break to prevent infinite loops
+        if (counter > 50) {
+          slug = `event-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          break;
+        }
       }
       
       this.slug = slug;
-    } catch (error) {
-      console.error("Error generating slug:", error);
-      // Fallback: generate a completely random slug to prevent save failures
-      this.slug = `event-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      console.log(`🔄 Generated slug: ${this.slug} for "${this.title}"`);
     }
+    next();
+  } catch (error) {
+    console.error("❌ Error generating slug:", error);
+    // Keep the emergency slug if generation fails - NEVER go back to null
+    next();
   }
-  next();
 });
 
-// 3. Set publishedAt timestamp
+// 4. Set publishedAt timestamp
 eventSchema.pre("save", function (next) {
   if (
     this.isModified("status") &&
@@ -648,7 +668,7 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// 4. Validate end time (skip for drafts)
+// 5. Validate end time (skip for drafts)
 eventSchema.pre("save", function (next) {
   if (this.status === 'draft') {
     return next();
@@ -1094,7 +1114,6 @@ eventSchema.methods.stopLocationSharing = async function(organizerId) {
   await this.save();
 };
 
-
 // Static method to find upcoming events
 eventSchema.statics.findUpcoming = function (limit = 10) {
   return this.find({
@@ -1201,9 +1220,6 @@ eventSchema.statics.getStatistics = async function (organizerId) {
   );
 };
 
-// ===================================
-// QUERY HELPERS
-// ===================================
 
 // Query helper for active events
 eventSchema.query.active = function () {
