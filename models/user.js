@@ -32,6 +32,29 @@ const userSchema = new mongoose.Schema({
     trim: true,
     match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Please provide a valid email address"],
   },
+   phone: {
+    type: String,
+    trim: true,
+    match: [/^\+?[\d\s\-\(\)]{10,}$/, "Please provide a valid phone number"],
+  },
+  
+  location: {
+    type: String,
+    trim: true,
+    maxlength: [100, "Location cannot be more than 100 characters"],
+  },
+  
+  profilePicture: {
+    type: String,
+    default: "",
+  },
+  
+  bio: {
+    type: String,
+    default: "",
+    trim: true,
+    maxlength: [500, "Bio cannot be more than 500 characters"],
+  },
   password: {
     type: String,
     required: function() {
@@ -52,12 +75,6 @@ const userSchema = new mongoose.Schema({
   profilePicture: {
     type: String,
     default: "",
-  },
-  bio: {
-    type: String,
-    default: "",
-    trim: true,
-    maxlength: [500, "Bio cannot be more than 500 characters"],
   },
   isVerified: {
     type: Boolean,

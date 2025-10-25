@@ -17,6 +17,7 @@ const {
   deleteAccount,
   getUserProfile,
 } = require("../controllers/user.controller");
+const { validateProfilePicture, cleanupTempFiles } = require("../middleware/fileUpload");
 const { protect } = require("../middleware/auth");
 
 const router = express.Router();
@@ -35,7 +36,13 @@ router.get("/profile/:userId", getUserProfile);
 
 // Protected routes
 router.get("/me", protect, getCurrentUser);
-router.patch("/profile", protect, updateProfile);
+router.patch(
+  "/profile",
+  protect,
+  validateProfilePicture, 
+  updateProfile,
+  cleanupTempFiles 
+);
 router.patch("/preferences", protect, updatePreferences);
 router.patch("/change-password", protect, changePassword);
 router.post("/logout", protect, logout);

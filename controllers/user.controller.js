@@ -4,7 +4,11 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const ErrorResponse = require("../utils/errorResponse");
 const { OAuth2Client } = require("google-auth-library");
-const { sendWelcomeEmail, sendResetEmail, sendResendVerificationEmail } = require("../utils/sendEmail");
+const {
+  sendWelcomeEmail,
+  sendResetEmail,
+  sendResendVerificationEmail,
+} = require("../utils/sendEmail");
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
 
@@ -14,14 +18,16 @@ const NotificationService = require("../service/notificationService");
 const deleteExpiredUnverifiedUsers = async () => {
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    
+
     const result = await USER.deleteMany({
       isVerified: false,
-      createdAt: { $lt: sevenDaysAgo }
+      createdAt: { $lt: sevenDaysAgo },
     });
 
     if (result.deletedCount > 0) {
-      console.log(` Cleanup: Deleted ${result.deletedCount} unverified users older than 7 days`);
+      console.log(
+        ` Cleanup: Deleted ${result.deletedCount} unverified users older than 7 days`
+      );
     }
   } catch (error) {
     console.error(" Cleanup error:", error);
@@ -30,27 +36,28 @@ const deleteExpiredUnverifiedUsers = async () => {
 
 // Helper function to get client IP and location
 const getClientInfo = (req) => {
-  const ipAddress = req.ip || 
-                   req.connection.remoteAddress || 
-                   req.socket.remoteAddress ||
-                   (req.connection.socket ? req.connection.socket.remoteAddress : null);
-  
-  const userAgent = req.get('User-Agent') || 'Unknown';
-  
+  const ipAddress =
+    req.ip ||
+    req.connection.remoteAddress ||
+    req.socket.remoteAddress ||
+    (req.connection.socket ? req.connection.socket.remoteAddress : null);
+
+  const userAgent = req.get("User-Agent") || "Unknown";
+
   // Simple device detection
-  let device = 'Unknown Device';
-  if (userAgent.includes('Mobile')) {
-    if (userAgent.includes('Android')) device = 'Android Mobile';
-    else if (userAgent.includes('iPhone')) device = 'iPhone';
-    else if (userAgent.includes('iPad')) device = 'iPad';
-    else device = 'Mobile Device';
-  } else if (userAgent.includes('Mac')) device = 'Mac';
-  else if (userAgent.includes('Windows')) device = 'Windows PC';
-  else if (userAgent.includes('Linux')) device = 'Linux PC';
-  
+  let device = "Unknown Device";
+  if (userAgent.includes("Mobile")) {
+    if (userAgent.includes("Android")) device = "Android Mobile";
+    else if (userAgent.includes("iPhone")) device = "iPhone";
+    else if (userAgent.includes("iPad")) device = "iPad";
+    else device = "Mobile Device";
+  } else if (userAgent.includes("Mac")) device = "Mac";
+  else if (userAgent.includes("Windows")) device = "Windows PC";
+  else if (userAgent.includes("Linux")) device = "Linux PC";
+
   // For location, you might want to use a geoIP service in production
-  const location = 'Unknown';
-  
+  const location = "Unknown";
+
   return { ipAddress, userAgent, device, location };
 };
 
@@ -128,18 +135,21 @@ const handleRegister = async (req, res, next) => {
 
       if (emailSent) {
         console.log(" Registration successful, email sent");
-        
+
         // Create welcome notification
         try {
           await NotificationService.createSystemNotification(user._id, {
-            title: '🎉 Welcome to Eventry!',
+            title: "🎉 Welcome to Eventry!",
             message: `Welcome ${user.firstName}! Your account has been created successfully. Please verify your email to get started.`,
-            actionRequired: true
+            actionRequired: true,
           });
         } catch (notificationError) {
-          console.error('Failed to create welcome notification:', notificationError);
+          console.error(
+            "Failed to create welcome notification:",
+            notificationError
+          );
         }
-        
+
         res.status(201).json({
           success: true,
           message:
@@ -205,7 +215,7 @@ const verifyEmail = async (req, res, next) => {
 
     if (userWithToken && userWithToken.isVerified) {
       console.log(" User already verified, allowing login");
-      
+
       const jwtToken = jwt.sign(
         {
           userId: userWithToken._id,
@@ -232,7 +242,7 @@ const verifyEmail = async (req, res, next) => {
 
     if (!user) {
       console.log(" No valid user found with matching token");
-      
+
       const expiredUser = await USER.findOne({
         emailVerificationToken: hashedToken,
       });
@@ -262,12 +272,15 @@ const verifyEmail = async (req, res, next) => {
     // Create email verification success notification
     try {
       await NotificationService.createSystemNotification(user._id, {
-        title: '✅ Email Verified Successfully!',
-        message: 'Your email has been verified. Welcome to Eventry!',
-        priority: 'medium'
+        title: "✅ Email Verified Successfully!",
+        message: "Your email has been verified. Welcome to Eventry!",
+        priority: "medium",
       });
     } catch (notificationError) {
-      console.error('Failed to create verification notification:', notificationError);
+      console.error(
+        "Failed to create verification notification:",
+        notificationError
+      );
     }
 
     const jwtToken = jwt.sign(
@@ -332,13 +345,13 @@ const resendVerificationEmail = async (req, res, next) => {
     }
 
     const verificationToken = user.createEmailVerificationToken();
-    
+
     // Track resend attempts
     if (!user.verificationResendAttempts) {
       user.verificationResendAttempts = [];
     }
     user.verificationResendAttempts.push(new Date());
-    
+
     await user.save({ validateBeforeSave: false });
 
     try {
@@ -394,7 +407,9 @@ const handleLogin = async (req, res, next) => {
   }
 
   try {
-    const user = await USER.findOne({ email: email.toLowerCase() }).select("+password");
+    const user = await USER.findOne({ email: email.toLowerCase() }).select(
+      "+password"
+    );
 
     if (!user) {
       return next(new ErrorResponse("Invalid email or password", 401));
@@ -453,8 +468,9 @@ const handleLogin = async (req, res, next) => {
       token,
       user: user.getProfile(),
       // Include security info for frontend
-      securityAlert: loginResult.isSuspicious ? 
-        "New device/location detected. Please verify this login." : null
+      securityAlert: loginResult.isSuspicious
+        ? "New device/location detected. Please verify this login."
+        : null,
     });
   } catch (error) {
     next(new ErrorResponse("Login failed. Please try again.", 500));
@@ -545,16 +561,19 @@ const handleGoogleAuth = async (req, res, next) => {
       };
 
       user = await USER.create(userData);
-      
+
       // Create welcome notification for Google signup
       try {
         await NotificationService.createSystemNotification(user._id, {
-          title: '🎉 Welcome to Eventry!',
+          title: "🎉 Welcome to Eventry!",
           message: `Welcome ${user.firstName}! Your account has been created with Google.`,
-          priority: 'medium'
+          priority: "medium",
         });
       } catch (notificationError) {
-        console.error('Failed to create welcome notification:', notificationError);
+        console.error(
+          "Failed to create welcome notification:",
+          notificationError
+        );
       }
     }
 
@@ -595,7 +614,9 @@ const handleGoogleAuth = async (req, res, next) => {
 
 const getCurrentUser = async (req, res, next) => {
   try {
-    const user = await USER.findById(req.user.userId || req.user._id || req.user.id);
+    const user = await USER.findById(
+      req.user.userId || req.user._id || req.user.id
+    );
 
     if (!user) {
       console.log(" No user ID found in request");
@@ -613,42 +634,127 @@ const getCurrentUser = async (req, res, next) => {
 
 const updateProfile = async (req, res, next) => {
   try {
-    const { userName, bio, firstName, lastName, preferences } = req.body;
+    console.log("Update profile request received:", {
+      body: req.body,
+      files: req.files ? Object.keys(req.files) : "No files",
+      user: req.user.userId,
+    });
+
+    // Handle both JSON and FormData
+    const {
+      userName,
+      bio,
+      firstName,
+      lastName,
+      preferences,
+      phone,
+      location,
+      email,
+    } = req.body;
+
     const userId = req.user.userId;
 
     const user = await USER.findById(userId);
-    if (!user) { 
+    if (!user) {
       return next(new ErrorResponse("User not found", 404));
     }
 
     // Store old values for comparison
-    const oldUserName = user.userName;
-    const oldFirstName = user.firstName;
-    const oldLastName = user.lastName;
+    const oldValues = {
+      userName: user.userName,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      location: user.location,
+      bio: user.bio,
+    };
 
-    if (userName && userName !== user.userName) {
-      const existingUser = await USER.findOne({ userName });
+    const changes = [];
+
+    // Validate and update username
+    if (userName && userName !== oldValues.userName) {
+      const existingUser = await USER.findOne({
+        userName: userName.trim(),
+        _id: { $ne: userId }, // Exclude current user
+      });
       if (existingUser) {
         return next(new ErrorResponse("Username already taken", 409));
       }
-      user.userName = userName;
+      user.userName = userName.trim();
+      changes.push(`username from "${oldValues.userName}" to "${userName}"`);
     }
 
-    if (firstName) user.firstName = firstName;
-    if (lastName) user.lastName = lastName;
-    if (bio !== undefined) user.bio = bio;
-    if (preferences) user.preferences = { ...user.preferences, ...preferences };
+    // Update basic profile fields
+    if (firstName && firstName !== oldValues.firstName) {
+      user.firstName = firstName.trim();
+      changes.push(`first name to "${firstName}"`);
+    }
 
+    if (lastName && lastName !== oldValues.lastName) {
+      user.lastName = lastName.trim();
+      changes.push(`last name to "${lastName}"`);
+    }
+
+    if (bio !== undefined && bio !== oldValues.bio) {
+      user.bio = bio.trim();
+      changes.push("bio");
+    }
+
+    if (phone !== undefined && phone !== oldValues.phone) {
+      user.phone = phone.trim();
+      changes.push("phone number");
+    }
+
+    if (location !== undefined && location !== oldValues.location) {
+      user.location = location.trim();
+      changes.push(`location to "${location}"`);
+    }
+
+    // Handle email update with validation
+    if (email && email !== oldValues.email) {
+      const normalizedEmail = email.toLowerCase().trim();
+      // Check if email already exists
+      const existingUser = await USER.findOne({
+        email: normalizedEmail,
+        _id: { $ne: userId }, // Exclude current user
+      });
+      if (existingUser) {
+        return next(new ErrorResponse("Email already taken", 409));
+      }
+      user.email = normalizedEmail;
+      user.isVerified = false; // Require re-verification for email changes
+      changes.push(`email to ${email}`);
+    }
+
+    // Handle preferences (could be string from FormData or object from JSON)
+    if (preferences) {
+      try {
+        const prefs =
+          typeof preferences === "string"
+            ? JSON.parse(preferences)
+            : preferences;
+        user.preferences = { ...user.preferences, ...prefs };
+        changes.push("preferences");
+      } catch (error) {
+        console.error("Error parsing preferences:", error);
+        // Continue without preferences if parsing fails
+      }
+    }
+
+    // Handle profile picture upload (already validated by middleware)
     if (req.files && req.files.profilePicture) {
       const profilePicture = req.files.profilePicture;
 
       try {
+        console.log("Uploading profile picture to Cloudinary...");
+
         const result = await cloudinary.uploader.upload(
           profilePicture.tempFilePath,
           {
             folder: "inklune/profilePictures",
             use_filename: true,
-            unique_filename: false,
+            unique_filename: true,
             resource_type: "image",
             transformation: [
               { width: 500, height: 500, crop: "limit" },
@@ -658,46 +764,95 @@ const updateProfile = async (req, res, next) => {
           }
         );
 
-        user.profilePicture = result.secure_url;
+        // Delete old profile picture from Cloudinary if it exists
+        if (user.profilePicture) {
+          try {
+            const oldPublicId = user.profilePicture
+              .split("/")
+              .pop()
+              .split(".")[0];
+            await cloudinary.uploader.destroy(
+              `inklune/profilePictures/${oldPublicId}`
+            );
+            console.log("Old profile picture deleted from Cloudinary");
+          } catch (deleteError) {
+            console.error("Error deleting old profile picture:", deleteError);
+            // Continue even if deletion fails
+          }
+        }
 
-        fs.unlink(profilePicture.tempFilePath, (err) => {
-          if (err) console.error("Failed to delete temp file:", err);
-        });
+        user.profilePicture = result.secure_url;
+        changes.push("profile picture");
+        console.log(
+          "Profile picture uploaded successfully:",
+          result.secure_url
+        );
+
+        // Clean up temp file
+        if (
+          profilePicture.tempFilePath &&
+          fs.existsSync(profilePicture.tempFilePath)
+        ) {
+          fs.unlink(profilePicture.tempFilePath, (err) => {
+            if (err) console.error("Failed to delete temp file:", err);
+            else console.log("Temp file cleaned up");
+          });
+        }
       } catch (uploadError) {
+        console.error("Profile picture upload error:", uploadError);
         return next(new ErrorResponse("Failed to upload profile picture", 500));
       }
     }
 
-    await user.save();
+    // Only save if there are changes
+    if (changes.length > 0) {
+      await user.save();
+      console.log("User profile updated successfully. Changes:", changes);
 
-    // Create profile update notification
-    try {
-      let updateMessage = 'Your profile has been updated.';
-      
-      // More specific messages based on what changed
-      if (userName && userName !== oldUserName) {
-        updateMessage = `Username updated from "${oldUserName}" to "${userName}"`;
-      } else if (firstName && firstName !== oldFirstName) {
-        updateMessage = `Name updated to ${firstName} ${lastName || user.lastName}`;
-      } else if (req.files?.profilePicture) {
-        updateMessage = 'Profile picture updated successfully';
+      // Create profile update notification
+      try {
+        const updateMessage =
+          changes.length === 1
+            ? `Updated ${changes[0]}`
+            : `Updated ${changes.slice(0, -1).join(", ")} and ${
+                changes[changes.length - 1]
+              }`;
+
+        const Notification = require("../models/notification");
+        await Notification.create({
+          user: user._id,
+          title: "Profile Updated",
+          message: updateMessage,
+          type: "profile_update",
+          isRead: false,
+        });
+
+        console.log("Profile update notification created");
+      } catch (notificationError) {
+        console.error(
+          "Failed to create profile update notification:",
+          notificationError
+        );
       }
-      
-      await NotificationService.createProfileUpdateNotification(user._id, updateMessage);
-    } catch (notificationError) {
-      console.error('Failed to create profile update notification:', notificationError);
-    }
 
-    res.status(200).json({
-      success: true,
-      message: "Profile updated successfully",
-      user: user.getProfile(),
-    });
+      res.status(200).json({
+        success: true,
+        message: "Profile updated successfully",
+        user: user.getProfile(),
+        changes: changes,
+      });
+    } else {
+      res.status(200).json({
+        success: true,
+        message: "No changes detected",
+        user: user.getProfile(),
+      });
+    }
   } catch (error) {
+    console.error("Update profile error:", error);
     next(new ErrorResponse("Failed to update profile", 500));
   }
 };
-
 const forgotPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -778,12 +933,15 @@ const resetPassword = async (req, res, next) => {
     try {
       const clientInfo = getClientInfo(req);
       await NotificationService.createSecurityAlertNotification(user._id, {
-        alertType: 'Password Reset',
+        alertType: "Password Reset",
         description: `Your password was reset from ${clientInfo.device} (IP: ${clientInfo.ipAddress}).`,
-        severity: 'high'
+        severity: "high",
       });
     } catch (notificationError) {
-      console.error('Failed to create security notification:', notificationError);
+      console.error(
+        "Failed to create security notification:",
+        notificationError
+      );
     }
 
     const jwtToken = jwt.sign(
@@ -842,12 +1000,15 @@ const changePassword = async (req, res, next) => {
     try {
       const clientInfo = getClientInfo(req);
       await NotificationService.createSecurityAlertNotification(user._id, {
-        alertType: 'Password Changed',
+        alertType: "Password Changed",
         description: `Your password was changed from ${clientInfo.device} (IP: ${clientInfo.ipAddress}).`,
-        severity: 'high'
+        severity: "high",
       });
     } catch (notificationError) {
-      console.error('Failed to create security notification:', notificationError);
+      console.error(
+        "Failed to create security notification:",
+        notificationError
+      );
     }
 
     res.status(200).json({
@@ -872,16 +1033,20 @@ const updatePreferences = async (req, res, next) => {
     if (preferences) {
       user.preferences = { ...user.preferences, ...preferences };
       await user.save();
-      
+
       // Create notification for preference changes
       try {
         await NotificationService.createSystemNotification(user._id, {
-          title: '⚙️ Preferences Updated',
-          message: 'Your notification preferences have been updated successfully.',
-          priority: 'low'
+          title: "⚙️ Preferences Updated",
+          message:
+            "Your notification preferences have been updated successfully.",
+          priority: "low",
         });
       } catch (notificationError) {
-        console.error('Failed to create preferences notification:', notificationError);
+        console.error(
+          "Failed to create preferences notification:",
+          notificationError
+        );
       }
     }
 
@@ -1002,12 +1167,15 @@ const deleteAccount = async (req, res, next) => {
     try {
       const clientInfo = getClientInfo(req);
       await NotificationService.createSecurityAlertNotification(user._id, {
-        alertType: 'Account Deleted',
+        alertType: "Account Deleted",
         description: `Your account was deleted from ${clientInfo.device} (IP: ${clientInfo.ipAddress}).`,
-        severity: 'critical'
+        severity: "critical",
       });
     } catch (notificationError) {
-      console.error('Failed to create account deletion notification:', notificationError);
+      console.error(
+        "Failed to create account deletion notification:",
+        notificationError
+      );
     }
 
     await USER.findByIdAndDelete(userId);
