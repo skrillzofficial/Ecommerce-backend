@@ -1348,7 +1348,9 @@ const toggleLikeEvent = async (req, res, next) => {
 const cancelEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { reason } = req.body;
+    
+    // FIX: Safe destructuring with default value
+    const { reason = "Event cancelled by organizer" } = req.body || {};
 
     const event = await Event.findById(id);
 
@@ -1356,14 +1358,29 @@ const cancelEvent = async (req, res, next) => {
       return next(new ErrorResponse("Event not found", 404));
     }
 
-    // Check ownership
-    if (
-      event.organizer.toString() !== req.user.userId &&
-      req.user.role !== "superadmin"
-    ) {
+    // Check ownership - FIXED: Use consistent user ID access
+    const eventOrganizerId = event.organizer._id?.toString() || event.organizer.toString();
+    const currentUserId = req.user._id?.toString() || req.user.userId?.toString();
+
+    if (eventOrganizerId !== currentUserId && req.user.role !== "superadmin") {
       return next(
         new ErrorResponse("Not authorized to cancel this event", 403)
       );
+    }
+
+    // Additional validation: Check if event can be cancelled
+    if (event.status === 'cancelled') {
+      return next(new ErrorResponse("Event is already cancelled", 400));
+    }
+
+    if (event.status === 'completed') {
+      return next(new ErrorResponse("Cannot cancel a completed event", 400));
+    }
+
+    // Check if event has already started
+    const now = new Date();
+    if (event.date && new Date(event.date) < now) {
+      return next(new ErrorResponse("Cannot cancel an event that has already started", 400));
     }
 
     await event.cancelEvent(reason);
@@ -1371,14 +1388,19 @@ const cancelEvent = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: "Event cancelled successfully",
-      event,
+      data: {
+        eventId: event._id,
+        title: event.title,
+        status: event.status,
+        cancelledAt: event.cancelledAt,
+        reason: reason
+      }
     });
   } catch (error) {
     console.error("Cancel event error:", error);
     next(new ErrorResponse("Failed to cancel event", 500));
   }
 };
-
 // @desc    Get featured events
 // @route   GET /api/v1/events/featured
 // @access  Public
