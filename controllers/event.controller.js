@@ -578,14 +578,30 @@ const getEventById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Try to find by ID first, then by slug
-    let event = await Event.findById(id)
-      .populate(
-        "organizer",
-        "firstName lastName userName email profilePicture organizerInfo"
-      )
-      .populate("attendees.user", "firstName lastName userName profilePicture");
+    // Validate that id parameter exists and is not 'undefined'
+    if (!id || id === "undefined") {
+      return next(new ErrorResponse("Invalid event identifier", 400));
+    }
 
+    let event;
+
+    // Check if id is a valid ObjectId format (24 hex characters)
+    const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(id);
+
+    if (isValidObjectId) {
+      // Try to find by ID first
+      event = await Event.findById(id)
+        .populate(
+          "organizer",
+          "firstName lastName userName email profilePicture organizerInfo"
+        )
+        .populate(
+          "attendees.user",
+          "firstName lastName userName profilePicture"
+        );
+    }
+
+    // If not found by ID or ID wasn't valid ObjectId format, try slug
     if (!event) {
       event = await Event.findOne({ slug: id })
         .populate(
@@ -616,7 +632,6 @@ const getEventById = async (req, res, next) => {
     next(new ErrorResponse("Failed to fetch event", 500));
   }
 };
-
 // @desc    Update event
 // @route   PUT /api/v1/events/:id
 // @access  Private (Organizer only - own events)
