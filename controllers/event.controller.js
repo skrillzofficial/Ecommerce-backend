@@ -103,7 +103,10 @@ const createEvent = async (req, res, next) => {
         }
       } else if (price === undefined || !capacity) {
         return next(
-          new ErrorResponse("Please provide pricing information to publish", 400)
+          new ErrorResponse(
+            "Please provide pricing information to publish",
+            400
+          )
         );
       }
     }
@@ -304,7 +307,6 @@ const createEvent = async (req, res, next) => {
     next(new ErrorResponse("Failed to create event", 500));
   }
 };
-
 
 // @desc    Get all events with filtering and pagination
 // @route   GET /api/v1/events
@@ -950,11 +952,22 @@ const deleteEvent = async (req, res, next) => {
       return next(new ErrorResponse("Event not found", 404));
     }
 
+    //  Consistent user ID comparison
+    const eventOrganizerId =
+      event.organizer._id?.toString() || event.organizer.toString();
+    const currentUserId =
+      req.user._id?.toString() ||
+      req.user.userId?.toString() ||
+      req.user.id?.toString();
+
+    console.log("Debug - User IDs:", {
+      eventOrganizerId,
+      currentUserId,
+      user: req.user,
+    });
+
     // Check ownership
-    if (
-      event.organizer.toString() !== req.user.userId &&
-      req.user.role !== "superadmin"
-    ) {
+    if (eventOrganizerId !== currentUserId && req.user.role !== "superadmin") {
       return next(
         new ErrorResponse("Not authorized to delete this event", 403)
       );
@@ -970,33 +983,49 @@ const deleteEvent = async (req, res, next) => {
       );
     }
 
-    // Delete images from Cloudinary
-    for (const image of event.images) {
-      if (image.publicId) {
-        try {
-          await cloudinary.uploader.destroy(image.publicId);
-        } catch (cloudinaryError) {
-          console.error("Cloudinary delete error:", cloudinaryError);
+    // For draft events with no bookings, allow hard delete
+    // For published events, use soft delete
+    if (event.status === "draft" && event.totalAttendees === 0) {
+      // Hard delete for drafts with no bookings
+      await Event.findByIdAndDelete(id);
+
+      // Delete images from Cloudinary
+      for (const image of event.images) {
+        if (image.publicId) {
+          try {
+            await cloudinary.uploader.destroy(image.publicId);
+          } catch (cloudinaryError) {
+            console.error("Cloudinary delete error:", cloudinaryError);
+          }
         }
       }
+
+      res.status(200).json({
+        success: true,
+        message: "Event permanently deleted successfully",
+      });
+    } else {
+      // Soft delete for published events or events with attendees
+      event.deletedAt = new Date();
+      event.isActive = false;
+      event.status = "cancelled";
+      await event.save();
+
+      res.status(200).json({
+        success: true,
+        message: "Event archived successfully",
+        data: {
+          eventId: event._id,
+          status: event.status,
+          deletedAt: event.deletedAt,
+        },
+      });
     }
-
-    // Soft delete
-    event.deletedAt = new Date();
-    event.isActive = false;
-    event.status = "cancelled";
-    await event.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Event deleted successfully",
-    });
   } catch (error) {
     console.error("Delete event error:", error);
     next(new ErrorResponse("Failed to delete event", 500));
   }
 };
-
 // @desc    Get organizer's events (including drafts)
 // @route   GET /api/v1/events/organizer/my-events
 // @access  Private (Organizer only)
@@ -1053,7 +1082,6 @@ const getOrganizerEvents = async (req, res, next) => {
     next(new ErrorResponse("Failed to fetch organizer events", 500));
   }
 };
-
 
 // @desc    Get organizer statistics
 // @route   GET /api/v1/events/organizer/statistics
@@ -1128,16 +1156,19 @@ const bookEventTicket = async (req, res, next) => {
           _id: bookingResult.ticketId,
           quantity: bookingResult.quantity,
           totalAmount: bookingResult.totalPrice,
-          ticketType: bookingResult.ticketType
+          ticketType: bookingResult.ticketType,
         },
         {
           _id: event._id,
           title: event.title,
-          date: event.date
+          date: event.date,
         }
       );
     } catch (notificationError) {
-      console.error('Failed to create ticket purchase notification:', notificationError);
+      console.error(
+        "Failed to create ticket purchase notification:",
+        notificationError
+      );
     }
 
     // Format event date for email
@@ -1227,12 +1258,15 @@ const cancelBooking = async (req, res, next) => {
     // Create booking cancellation notification
     try {
       await NotificationService.createSystemNotification(req.user.userId, {
-        title: '❌ Booking Cancelled',
+        title: "❌ Booking Cancelled",
         message: `Your booking for "${event.title}" has been cancelled successfully.`,
-        priority: 'medium'
+        priority: "medium",
       });
     } catch (notificationError) {
-      console.error('Failed to create cancellation notification:', notificationError);
+      console.error(
+        "Failed to create cancellation notification:",
+        notificationError
+      );
     }
 
     res.status(200).json({
@@ -1348,7 +1382,7 @@ const toggleLikeEvent = async (req, res, next) => {
 const cancelEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
-    
+
     // FIX: Safe destructuring with default value
     const { reason = "Event cancelled by organizer" } = req.body || {};
 
@@ -1359,8 +1393,10 @@ const cancelEvent = async (req, res, next) => {
     }
 
     // Check ownership - FIXED: Use consistent user ID access
-    const eventOrganizerId = event.organizer._id?.toString() || event.organizer.toString();
-    const currentUserId = req.user._id?.toString() || req.user.userId?.toString();
+    const eventOrganizerId =
+      event.organizer._id?.toString() || event.organizer.toString();
+    const currentUserId =
+      req.user._id?.toString() || req.user.userId?.toString();
 
     if (eventOrganizerId !== currentUserId && req.user.role !== "superadmin") {
       return next(
@@ -1369,18 +1405,23 @@ const cancelEvent = async (req, res, next) => {
     }
 
     // Additional validation: Check if event can be cancelled
-    if (event.status === 'cancelled') {
+    if (event.status === "cancelled") {
       return next(new ErrorResponse("Event is already cancelled", 400));
     }
 
-    if (event.status === 'completed') {
+    if (event.status === "completed") {
       return next(new ErrorResponse("Cannot cancel a completed event", 400));
     }
 
     // Check if event has already started
     const now = new Date();
     if (event.date && new Date(event.date) < now) {
-      return next(new ErrorResponse("Cannot cancel an event that has already started", 400));
+      return next(
+        new ErrorResponse(
+          "Cannot cancel an event that has already started",
+          400
+        )
+      );
     }
 
     await event.cancelEvent(reason);
@@ -1393,8 +1434,8 @@ const cancelEvent = async (req, res, next) => {
         title: event.title,
         status: event.status,
         cancelledAt: event.cancelledAt,
-        reason: reason
-      }
+        reason: reason,
+      },
     });
   } catch (error) {
     console.error("Cancel event error:", error);
@@ -1447,18 +1488,20 @@ const getUpcomingEvents = async (req, res, next) => {
 const parseVoiceSearch = async (req, res, next) => {
   try {
     const { query } = req.body;
-    
+
     if (!query) {
-      return next(new ErrorResponse("Please provide a voice search query", 400));
+      return next(
+        new ErrorResponse("Please provide a voice search query", 400)
+      );
     }
-    
+
     const parsedParams = parseVoiceQuery(query);
-    
+
     res.status(200).json({
       success: true,
       originalQuery: query,
       parsedParameters: parsedParams,
-      message: "Voice query parsed successfully"
+      message: "Voice query parsed successfully",
     });
   } catch (error) {
     console.error("Parse voice search error:", error);
