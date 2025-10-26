@@ -1020,23 +1020,43 @@ const getOrganizerStatistics = async (req, res, next) => {
 const bookEventTicket = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { ticketBookings, userInfo } = req.body;
+    const { ticketBookings, ticketType, quantity, userInfo } = req.body;
 
-    // Validate input
+    console.log("=== BOOKING REQUEST DATA ===");
+    console.log("ticketBookings:", ticketBookings);
+    console.log("ticketType:", ticketType);
+    console.log("quantity:", quantity);
+    console.log("userInfo:", userInfo);
+
+    // SUPPORT BOTH FORMATS:
+    // 1. New format: { ticketBookings: [{ ticketType, quantity }] }
+    // 2. Old format: { ticketType, quantity }
+
+    let bookingData = [];
+
     if (
-      !ticketBookings ||
-      !Array.isArray(ticketBookings) ||
-      ticketBookings.length === 0
+      ticketBookings &&
+      Array.isArray(ticketBookings) &&
+      ticketBookings.length > 0
     ) {
+      // New format - multiple ticket types
+      bookingData = ticketBookings;
+    } else if (ticketType && quantity) {
+      // Old format - single ticket type
+      bookingData = [{ ticketType, quantity }];
+    } else {
       return next(
         new ErrorResponse("Please provide at least one ticket booking", 400)
       );
     }
 
+    console.log("Processed booking data:", bookingData);
+
     // Validate each ticket booking
-    for (const booking of ticketBookings) {
-      const { ticketType, quantity } = booking;
-      if (!ticketType || !quantity) {
+    for (const booking of bookingData) {
+      const { ticketType: bookingType, quantity: bookingQuantity } = booking;
+
+      if (!bookingType || !bookingQuantity) {
         return next(
           new ErrorResponse(
             "Each booking must have ticketType and quantity",
@@ -1045,17 +1065,17 @@ const bookEventTicket = async (req, res, next) => {
         );
       }
 
-      const parsedQuantity = parseInt(quantity);
+      const parsedQuantity = parseInt(bookingQuantity);
       if (isNaN(parsedQuantity) || parsedQuantity < 1) {
         return next(
-          new ErrorResponse(`Invalid quantity for ${ticketType} tickets`, 400)
+          new ErrorResponse(`Invalid quantity for ${bookingType} tickets`, 400)
         );
       }
 
       if (parsedQuantity > 10) {
         return next(
           new ErrorResponse(
-            `Cannot book more than 10 ${ticketType} tickets at once`,
+            `Cannot book more than 10 ${bookingType} tickets at once`,
             400
           )
         );
@@ -1093,12 +1113,20 @@ const bookEventTicket = async (req, res, next) => {
       phone: user.phone || "",
     };
 
+    console.log("Calling event.bookTickets with:", {
+      userId: req.user.userId,
+      userInfo: bookingUserInfo,
+      ticketBookings: bookingData,
+    });
+
     // Book tickets using the new method
     const bookingResult = await event.bookTickets(
       req.user.userId,
       bookingUserInfo,
-      ticketBookings
+      bookingData
     );
+
+    console.log("Booking result:", bookingResult);
 
     // Create ticket purchase notifications for each ticket
     try {
@@ -1218,7 +1246,6 @@ const bookEventTicket = async (req, res, next) => {
     next(new ErrorResponse(error.message || "Failed to book ticket", 500));
   }
 };
-
 // @desc    Cancel booking
 // @route   DELETE /api/v1/events/:id/cancel-booking
 // @access  Private
