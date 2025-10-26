@@ -118,7 +118,7 @@ const ticketSchema = new mongoose.Schema(
     ticketType: {
       type: String,
       required: true,
-      enum: ["Regular", "VIP", "VVIP"],
+      enum: ["Regular", "VIP", "VVIP", "Free"],
       default: "Regular",
     },
     ticketPrice: {
@@ -152,7 +152,7 @@ const ticketSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: {
-        values: ["confirmed", "used", "cancelled", "expired"],
+        values: ["confirmed", "used", "cancelled", "expired", "pending"],
         message: "{VALUE} is not a valid ticket status",
       },
       default: "confirmed",
@@ -439,16 +439,44 @@ ticketSchema.virtual("isPast").get(function () {
   return new Date() > this.eventDate;
 });
 
-// Pre-save Middleware
+ticketSchema.virtual("isFree").get(function () {
+  return this.ticketPrice === 0;
+});
+
+ticketSchema.virtual("ticketValue").get(function () {
+  return this.ticketPrice * this.quantity;
+});
+
+ticketSchema.virtual("refundEligible").get(function () {
+  if (this.status !== "confirmed") return false;
+  if (this.isCheckedIn) return false;
+  if (new Date() > this.eventDate) return false;
+  
+  const eventDate = new Date(this.eventDate);
+  const now = new Date();
+  const hoursUntilEvent = (eventDate - now) / (1000 * 60 * 60);
+  
+  // Only eligible for refund if more than 24 hours before event
+  return hoursUntilEvent > 24;
+});
+
+// PRE-SAVE MIDDLEWARE
+
+// Pre-save middleware for data validation and generation
 ticketSchema.pre("save", function (next) {
   // Generate ticket number if not provided
   if (!this.ticketNumber) {
-    this.ticketNumber = `TKT-${this.eventId.toString().slice(-6)}-${Date.now().toString().slice(-6)}`;
+    this.ticketNumber = `TKT-${this.eventId ? this.eventId.toString().slice(-6) : 'EVENT'}-${Date.now().toString().slice(-6)}`;
   }
 
   // Generate QR code if not provided
   if (!this.qrCode) {
-    this.qrCode = `QR-${this._id.toString()}-${Date.now()}`;
+    this.qrCode = `QR-${this._id ? this._id.toString() : 'TEMP'}-${Date.now()}`;
+  }
+
+  // Generate barcode if not provided
+  if (!this.barcode) {
+    this.barcode = `BC-${this.ticketNumber}-${Date.now().toString().slice(-8)}`;
   }
 
   // Set expiration date (7 days after event date for cleanup)
@@ -462,6 +490,37 @@ ticketSchema.pre("save", function (next) {
     this.benefits = ["Priority access", "VIP lounge", "Complimentary drinks"];
   } else if (this.ticketType === "VVIP" && (!this.benefits || this.benefits.length === 0)) {
     this.benefits = ["VVIP access", "Backstage pass", "Meet & greet", "Premium seating"];
+  } else if (this.ticketType === "Free" && (!this.benefits || this.benefits.length === 0)) {
+    this.benefits = ["General admission"];
+  }
+
+  // Set payment method for free tickets
+  if (this.ticketPrice === 0 && this.paymentMethod === "card") {
+    this.paymentMethod = "free";
+    this.paymentStatus = "completed";
+  }
+
+  // Set access level based on ticket type
+  if (!this.accessLevel) {
+    if (this.ticketType === "VVIP") this.accessLevel = "vvip";
+    else if (this.ticketType === "VIP") this.accessLevel = "vip";
+    else this.accessLevel = "general";
+  }
+
+  // Set allowed areas based on access level
+  if (!this.allowedAreas || this.allowedAreas.length === 0) {
+    if (this.accessLevel === "vvip") {
+      this.allowedAreas = ["Main Hall", "VVIP Lounge", "Backstage", "Premium Seating"];
+    } else if (this.accessLevel === "vip") {
+      this.allowedAreas = ["Main Hall", "VIP Lounge", "Premium Seating"];
+    } else {
+      this.allowedAreas = ["Main Hall", "General Seating"];
+    }
+  }
+
+  // Generate security code if not provided
+  if (!this.securityCode) {
+    this.securityCode = Math.random().toString(36).substring(2, 10).toUpperCase();
   }
 
   next();
@@ -469,20 +528,90 @@ ticketSchema.pre("save", function (next) {
 
 // Pre-save middleware for status changes
 ticketSchema.pre("save", function (next) {
-  if (this.isModified("status") && this.status === "used") {
-    this.isCheckedIn = true;
+  // Handle status changes
+  if (this.isModified("status")) {
+    if (this.status === "used") {
+      this.isCheckedIn = true;
+      this.checkedInAt = new Date();
+    }
+
+    if (this.status === "cancelled") {
+      this.refundStatus = "requested";
+      // Calculate refund based on policy
+      if (this.refundPolicy === "full") {
+        this.refundAmount = this.totalAmount;
+      } else if (this.refundPolicy === "partial") {
+        this.refundAmount = this.totalAmount * 0.7; // 70% refund
+      } else {
+        this.refundAmount = 0;
+      }
+    }
+
+    if (this.status === "expired") {
+      // Auto-expire tickets after event date
+      this.isTransferable = false;
+    }
+  }
+
+  // Handle check-in
+  if (this.isModified("isCheckedIn") && this.isCheckedIn) {
+    this.status = "used";
     this.checkedInAt = new Date();
   }
 
-  if (this.isModified("status") && this.status === "cancelled") {
-    this.refundStatus = "requested";
-    this.refundAmount = this.totalAmount * 0.7; // 70% refund for partial policy
+  // Handle refund processing
+  if (this.isModified("refundStatus") && this.refundStatus === "processed") {
+    this.refundDate = new Date();
   }
 
   next();
 });
 
-// Methods
+// Pre-save middleware for number validation (NaN protection)
+ticketSchema.pre("save", function (next) {
+  // Safe number parsing function
+  const safeNumber = (value, defaultValue = 0) => {
+    if (value === undefined || value === null || isNaN(value)) {
+      return defaultValue;
+    }
+    return Number(value);
+  };
+
+  // Validate all number fields
+  this.ticketPrice = safeNumber(this.ticketPrice, 0);
+  this.quantity = safeNumber(this.quantity, 1);
+  this.totalAmount = safeNumber(this.totalAmount, this.ticketPrice * this.quantity);
+  this.refundAmount = safeNumber(this.refundAmount, 0);
+  this.views = safeNumber(this.views, 0);
+  this.verificationAttempts = safeNumber(this.verificationAttempts, 0);
+
+  // Validate location coordinates
+  if (this.eventCoordinates) {
+    this.eventCoordinates.latitude = safeNumber(this.eventCoordinates.latitude, 0);
+    this.eventCoordinates.longitude = safeNumber(this.eventCoordinates.longitude, 0);
+  }
+
+  if (this.validationLocation) {
+    this.validationLocation.latitude = safeNumber(this.validationLocation.latitude, 0);
+    this.validationLocation.longitude = safeNumber(this.validationLocation.longitude, 0);
+    this.validationLocation.accuracy = safeNumber(this.validationLocation.accuracy, 50);
+  }
+
+  // Validate location history
+  if (this.locationHistory && this.locationHistory.length > 0) {
+    this.locationHistory.forEach(location => {
+      location.latitude = safeNumber(location.latitude, 0);
+      location.longitude = safeNumber(location.longitude, 0);
+      location.accuracy = safeNumber(location.accuracy, 50);
+    });
+  }
+
+  next();
+});
+
+// INSTANCE METHODS
+
+// Method to validate ticket
 ticketSchema.methods.validateTicket = async function (validatorId, location = null) {
   if (this.status !== "confirmed") {
     throw new Error(`Cannot validate ticket with status: ${this.status}`);
@@ -490,6 +619,10 @@ ticketSchema.methods.validateTicket = async function (validatorId, location = nu
 
   if (new Date() > this.eventDate) {
     throw new Error("Cannot validate ticket for past event");
+  }
+
+  if (this.isCheckedIn) {
+    throw new Error("Ticket is already checked in");
   }
 
   this.status = "used";
@@ -521,6 +654,7 @@ ticketSchema.methods.validateTicket = async function (validatorId, location = nu
   return this;
 };
 
+// Method to cancel ticket
 ticketSchema.methods.cancelTicket = async function (reason = "") {
   if (this.status !== "confirmed") {
     throw new Error(`Cannot cancel ticket with status: ${this.status}`);
@@ -528,6 +662,10 @@ ticketSchema.methods.cancelTicket = async function (reason = "") {
 
   if (this.isCheckedIn) {
     throw new Error("Cannot cancel checked-in ticket");
+  }
+
+  if (new Date() > this.eventDate) {
+    throw new Error("Cannot cancel ticket for past event");
   }
 
   this.status = "cancelled";
@@ -547,9 +685,14 @@ ticketSchema.methods.cancelTicket = async function (reason = "") {
   return this;
 };
 
+// Method to transfer ticket
 ticketSchema.methods.transferTicket = async function (newUserId, newUserInfo) {
   if (!this.canBeTransferred) {
     throw new Error("Ticket cannot be transferred");
+  }
+
+  if (this.userId.toString() === newUserId.toString()) {
+    throw new Error("Cannot transfer ticket to yourself");
   }
 
   this.transferredFrom = this.userId;
@@ -567,12 +710,29 @@ ticketSchema.methods.transferTicket = async function (newUserId, newUserInfo) {
   return this;
 };
 
+// Method to add location point
 ticketSchema.methods.addLocationPoint = async function (location, type = "live-tracking", source = "attendee") {
+  // Validate location data
+  if (!location.latitude || !location.longitude) {
+    throw new Error("Latitude and longitude are required");
+  }
+
+  const lat = Number(location.latitude);
+  const lng = Number(location.longitude);
+  
+  if (isNaN(lat) || lat < -90 || lat > 90) {
+    throw new Error("Invalid latitude value");
+  }
+  
+  if (isNaN(lng) || lng < -180 || lng > 180) {
+    throw new Error("Invalid longitude value");
+  }
+
   this.locationHistory.push({
-    latitude: location.latitude,
-    longitude: location.longitude,
-    address: location.address,
-    accuracy: location.accuracy,
+    latitude: lat,
+    longitude: lng,
+    address: location.address || '',
+    accuracy: location.accuracy || 50,
     type: type,
     source: source,
     timestamp: new Date(),
@@ -587,19 +747,131 @@ ticketSchema.methods.addLocationPoint = async function (location, type = "live-t
   return this;
 };
 
+// Method to get recent locations
 ticketSchema.methods.getRecentLocations = function (limit = 10) {
   return this.locationHistory
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
     .slice(0, limit);
 };
 
+// Method to increment views
 ticketSchema.methods.incrementViews = async function () {
   this.views += 1;
   this.lastViewed = new Date();
   await this.save({ validateBeforeSave: false });
 };
 
-// Static Methods
+// Method to verify security code
+ticketSchema.methods.verifySecurityCode = function (code) {
+  if (this.securityCode === code) {
+    this.isVerified = true;
+    this.verificationAttempts = 0;
+    return true;
+  } else {
+    this.verificationAttempts += 1;
+    return false;
+  }
+};
+
+// Method to check if ticket can be refunded
+ticketSchema.methods.canBeRefunded = function () {
+  if (this.status !== "confirmed") return false;
+  if (this.isCheckedIn) return false;
+  if (new Date() > this.eventDate) return false;
+  
+  const eventDate = new Date(this.eventDate);
+  const now = new Date();
+  const hoursUntilEvent = (eventDate - now) / (1000 * 60 * 60);
+  
+  // Only eligible for refund if more than 24 hours before event
+  return hoursUntilEvent > 24;
+};
+
+// Method to calculate refund amount
+ticketSchema.methods.calculateRefundAmount = function () {
+  if (!this.canBeRefunded()) {
+    return 0;
+  }
+
+  const eventDate = new Date(this.eventDate);
+  const now = new Date();
+  const daysUntilEvent = (eventDate - now) / (1000 * 60 * 60 * 24);
+
+  if (this.refundPolicy === "full") {
+    return this.totalAmount;
+  } else if (this.refundPolicy === "partial") {
+    // Scale refund based on how close to event
+    if (daysUntilEvent > 7) {
+      return this.totalAmount * 0.9; // 90% refund
+    } else if (daysUntilEvent > 3) {
+      return this.totalAmount * 0.7; // 70% refund
+    } else if (daysUntilEvent > 1) {
+      return this.totalAmount * 0.5; // 50% refund
+    } else {
+      return this.totalAmount * 0.3; // 30% refund
+    }
+  } else {
+    return 0; // no-refund policy
+  }
+};
+
+// Method to process refund
+ticketSchema.methods.processRefund = async function (reason = "") {
+  if (!this.canBeRefunded()) {
+    throw new Error("Ticket is not eligible for refund");
+  }
+
+  this.refundStatus = "processed";
+  this.refundAmount = this.calculateRefundAmount();
+  this.refundDate = new Date();
+  this.refundReason = reason;
+
+  await this.save();
+  return this;
+};
+
+// Method to send reminder
+ticketSchema.methods.sendReminder = async function () {
+  if (this.reminderSent) {
+    throw new Error("Reminder already sent for this ticket");
+  }
+
+  if (new Date() > this.eventDate) {
+    throw new Error("Cannot send reminder for past event");
+  }
+
+  this.reminderSent = true;
+  this.reminderDate = new Date();
+
+  await this.save();
+  return this;
+};
+
+// Method to generate QR code data
+ticketSchema.methods.generateQRData = function () {
+  return JSON.stringify({
+    ticketId: this._id.toString(),
+    ticketNumber: this.ticketNumber,
+    eventId: this.eventId.toString(),
+    userId: this.userId.toString(),
+    securityCode: this.securityCode
+  });
+};
+
+// Method to validate QR code
+ticketSchema.methods.validateQRCode = function (qrData) {
+  try {
+    const data = JSON.parse(qrData);
+    return data.ticketId === this._id.toString() && 
+           data.securityCode === this.securityCode;
+  } catch (error) {
+    return false;
+  }
+};
+
+// STATIC METHODS
+
+// Static method to find tickets by event
 ticketSchema.statics.findByEvent = function (eventId, options = {}) {
   const query = { eventId: eventId };
 
@@ -612,12 +884,13 @@ ticketSchema.statics.findByEvent = function (eventId, options = {}) {
   }
 
   return this.find(query)
-    .populate("userId", "name email phone")
-    .populate("validatedBy", "name email")
-    .populate("organizerId", "name email companyName")
+    .populate("userId", "firstName lastName email phone profilePicture")
+    .populate("validatedBy", "firstName lastName email")
+    .populate("organizerId", "firstName lastName email companyName profilePicture")
     .sort(options.sort || { purchaseDate: -1 });
 };
 
+// Static method to find tickets by user
 ticketSchema.statics.findByUser = function (userId, options = {}) {
   const query = { userId: userId };
 
@@ -630,11 +903,30 @@ ticketSchema.statics.findByUser = function (userId, options = {}) {
   }
 
   return this.find(query)
-    .populate("eventId", "title date time venue city status images")
-    .populate("organizerId", "name companyName")
+    .populate("eventId", "title date time venue city images status organizer")
+    .populate("organizerId", "firstName lastName companyName profilePicture")
     .sort(options.sort || { eventDate: 1 });
 };
 
+// Static method to find tickets by organizer
+ticketSchema.statics.findByOrganizer = function (organizerId, options = {}) {
+  const query = { organizerId: organizerId };
+
+  if (options.status) {
+    query.status = options.status;
+  }
+
+  if (options.eventId) {
+    query.eventId = options.eventId;
+  }
+
+  return this.find(query)
+    .populate("eventId", "title date time venue")
+    .populate("userId", "firstName lastName email phone")
+    .sort(options.sort || { purchaseDate: -1 });
+};
+
+// Static method to get event statistics
 ticketSchema.statics.getEventStats = async function (eventId) {
   const stats = await this.aggregate([
     {
@@ -646,6 +938,7 @@ ticketSchema.statics.getEventStats = async function (eventId) {
         count: { $sum: 1 },
         totalRevenue: { $sum: "$totalAmount" },
         averagePrice: { $avg: "$ticketPrice" },
+        totalTickets: { $sum: "$quantity" },
       },
     },
   ]);
@@ -660,6 +953,23 @@ ticketSchema.statics.getEventStats = async function (eventId) {
         count: { $sum: 1 },
         totalRevenue: { $sum: "$totalAmount" },
         checkedIn: { $sum: { $cond: [{ $eq: ["$isCheckedIn", true] }, 1, 0] } },
+        totalTickets: { $sum: "$quantity" },
+      },
+    },
+  ]);
+
+  const totalStats = await this.aggregate([
+    {
+      $match: { eventId: new mongoose.Types.ObjectId(eventId) },
+    },
+    {
+      $group: {
+        _id: null,
+        totalTickets: { $sum: "$quantity" },
+        totalRevenue: { $sum: "$totalAmount" },
+        checkedInTickets: { $sum: { $cond: [{ $eq: ["$isCheckedIn", true] }, "$quantity", 0] } },
+        freeTickets: { $sum: { $cond: [{ $eq: ["$ticketPrice", 0] }, "$quantity", 0] } },
+        paidTickets: { $sum: { $cond: [{ $gt: ["$ticketPrice", 0] }, "$quantity", 0] } },
       },
     },
   ]);
@@ -667,40 +977,145 @@ ticketSchema.statics.getEventStats = async function (eventId) {
   return {
     byStatus: stats,
     byType: ticketTypes,
-    totalTickets: stats.reduce((sum, stat) => sum + stat.count, 0),
-    totalRevenue: stats.reduce((sum, stat) => sum + stat.totalRevenue, 0),
+    total: totalStats[0] || {
+      totalTickets: 0,
+      totalRevenue: 0,
+      checkedInTickets: 0,
+      freeTickets: 0,
+      paidTickets: 0,
+    },
   };
 };
 
+// Static method to generate ticket number
 ticketSchema.statics.generateTicketNumber = function (eventId) {
   const timestamp = Date.now().toString().slice(-6);
   const eventCode = eventId.toString().slice(-6);
   return `TKT-${eventCode}-${timestamp}`;
 };
 
-// Query Helpers
+// Static method to find expired tickets
+ticketSchema.statics.findExpiredTickets = function () {
+  const now = new Date();
+  return this.find({
+    status: "confirmed",
+    eventDate: { $lt: now }
+  });
+};
+
+// Static method to auto-expire tickets
+ticketSchema.statics.autoExpireTickets = async function () {
+  const now = new Date();
+  const result = await this.updateMany(
+    {
+      status: "confirmed",
+      eventDate: { $lt: now }
+    },
+    {
+      $set: { status: "expired" }
+    }
+  );
+  return result;
+};
+
+// Static method to get popular events
+ticketSchema.statics.getPopularEvents = async function (limit = 10) {
+  const popularEvents = await this.aggregate([
+    {
+      $group: {
+        _id: "$eventId",
+        ticketCount: { $sum: "$quantity" },
+        totalRevenue: { $sum: "$totalAmount" },
+        uniqueAttendees: { $addToSet: "$userId" }
+      }
+    },
+    {
+      $lookup: {
+        from: "events",
+        localField: "_id",
+        foreignField: "_id",
+        as: "eventDetails"
+      }
+    },
+    {
+      $unwind: "$eventDetails"
+    },
+    {
+      $project: {
+        eventId: "$_id",
+        eventTitle: "$eventDetails.title",
+        eventDate: "$eventDetails.date",
+        ticketCount: 1,
+        totalRevenue: 1,
+        attendeeCount: { $size: "$uniqueAttendees" }
+      }
+    },
+    {
+      $sort: { ticketCount: -1 }
+    },
+    {
+      $limit: limit
+    }
+  ]);
+
+  return popularEvents;
+};
+
+// QUERY HELPERS
+
+// Query helper for active tickets
 ticketSchema.query.active = function () {
   return this.where({ status: "confirmed" });
 };
 
+// Query helper for checked-in tickets
 ticketSchema.query.checkedIn = function () {
   return this.where({ isCheckedIn: true });
 };
 
+// Query helper for tickets by event
 ticketSchema.query.byEvent = function (eventId) {
   return this.where({ eventId: eventId });
 };
 
+// Query helper for tickets by user
 ticketSchema.query.byUser = function (userId) {
   return this.where({ userId: userId });
 };
 
+// Query helper for tickets by organizer
 ticketSchema.query.byOrganizer = function (organizerId) {
   return this.where({ organizerId: organizerId });
 };
 
+// Query helper for upcoming tickets
 ticketSchema.query.upcoming = function () {
   return this.where({ eventDate: { $gte: new Date() } });
+};
+
+// Query helper for past tickets
+ticketSchema.query.past = function () {
+  return this.where({ eventDate: { $lt: new Date() } });
+};
+
+// Query helper for free tickets
+ticketSchema.query.free = function () {
+  return this.where({ ticketPrice: 0 });
+};
+
+// Query helper for paid tickets
+ticketSchema.query.paid = function () {
+  return this.where({ ticketPrice: { $gt: 0 } });
+};
+
+// Query helper for transferable tickets
+ticketSchema.query.transferable = function () {
+  return this.where({ 
+    isTransferable: true,
+    status: "confirmed",
+    eventDate: { $gte: new Date() },
+    isCheckedIn: false
+  });
 };
 
 module.exports = mongoose.model("Ticket", ticketSchema);

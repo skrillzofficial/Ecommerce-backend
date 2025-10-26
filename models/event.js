@@ -16,10 +16,9 @@ const eventSchema = new mongoose.Schema(
       trim: true,
       minlength: [50, "Description must be at least 50 characters"],
       maxlength: [5000, "Description cannot exceed 5000 characters"],
-      required: function() {
-        // Only required if status is published
-        return this.status === 'published';
-      }
+      required: function () {
+        return this.status === "published";
+      },
     },
     longDescription: {
       type: String,
@@ -46,8 +45,8 @@ const eventSchema = new mongoose.Schema(
         ],
         message: "{VALUE} is not a valid category",
       },
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
       index: true,
     },
@@ -55,15 +54,12 @@ const eventSchema = new mongoose.Schema(
     // Date & Time
     date: {
       type: Date,
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
       validate: {
         validator: function (value) {
-          // Skip validation for drafts
-          if (this.status === 'draft') return true;
-          
-          // Compare dates without time component
+          if (this.status === "draft") return true;
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           const eventDate = new Date(value);
@@ -76,15 +72,15 @@ const eventSchema = new mongoose.Schema(
     },
     time: {
       type: String,
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
       match: [/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid time format (HH:MM)"],
     },
     endTime: {
       type: String,
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
       match: [/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid time format (HH:MM)"],
     },
@@ -94,16 +90,16 @@ const eventSchema = new mongoose.Schema(
       type: String,
       trim: true,
       maxlength: [200, "Venue name cannot exceed 200 characters"],
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
     },
     address: {
       type: String,
       trim: true,
       maxlength: [500, "Address cannot exceed 500 characters"],
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
     },
     city: {
@@ -150,65 +146,10 @@ const eventSchema = new mongoose.Schema(
         ],
         message: "{VALUE} is not a supported state",
       },
-      required: function() {
-        return this.status === 'published';
+      required: function () {
+        return this.status === "published";
       },
       index: true,
-    },
-
-    // STATIC Coordinates (Original venue location)
-    coordinates: {
-      latitude: {
-        type: Number,
-        min: -90,
-        max: 90,
-      },
-      longitude: {
-        type: Number,
-        min: -180,
-        max: 180,
-      },
-    },
-
-    // NEW: REAL-TIME LOCATION TRACKING
-    liveLocation: {
-      isSharing: {
-        type: Boolean,
-        default: false,
-      },
-      lastUpdated: Date,
-      currentLocation: {
-        latitude: {
-          type: Number,
-          min: -90,
-          max: 90,
-          required: function() { return this.parent().isSharing; }
-        },
-        longitude: {
-          type: Number,
-          min: -180,
-          max: 180,
-          required: function() { return this.parent().isSharing; }
-        },
-        address: String,
-        accuracy: Number,
-      },
-      locationHistory: [
-        {
-          latitude: Number,
-          longitude: Number,
-          address: String,
-          timestamp: {
-            type: Date,
-            default: Date.now,
-          },
-          accuracy: Number,
-        },
-      ],
-      sharedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
     },
 
     // Ticket Types with Pricing
@@ -217,12 +158,13 @@ const eventSchema = new mongoose.Schema(
         name: {
           type: String,
           required: true,
-          enum: ["Regular", "VIP", "VVIP"],
+          enum: ["Regular", "VIP", "VVIP", "Free"],
         },
         price: {
           type: Number,
           required: true,
           min: [0, "Price cannot be negative"],
+          default: 0,
         },
         capacity: {
           type: Number,
@@ -236,6 +178,9 @@ const eventSchema = new mongoose.Schema(
         availableTickets: {
           type: Number,
           min: 0,
+          default: function () {
+            return this.capacity;
+          },
         },
         description: {
           type: String,
@@ -247,17 +192,25 @@ const eventSchema = new mongoose.Schema(
             trim: true,
           },
         ],
+        isFree: {
+          type: Boolean,
+          default: function () {
+            return this.price === 0;
+          },
+        },
       },
     ],
 
-    // Legacy fields (kept for backward compatibility)
+    // Legacy fields (backward compatibility)
     price: {
       type: Number,
       min: [0, "Price cannot be negative"],
       default: 0,
       required: function () {
-        // Only required for published events without ticket types
-        return this.status === 'published' && (!this.ticketTypes || this.ticketTypes.length === 0);
+        return (
+          this.status === "published" &&
+          (!this.ticketTypes || this.ticketTypes.length === 0)
+        );
       },
     },
     currency: {
@@ -273,13 +226,18 @@ const eventSchema = new mongoose.Schema(
         message: "Capacity must be a whole number",
       },
       required: function () {
-        // Only required for published events without ticket types
-        return this.status === 'published' && (!this.ticketTypes || this.ticketTypes.length === 0);
+        return (
+          this.status === "published" &&
+          (!this.ticketTypes || this.ticketTypes.length === 0)
+        );
       },
     },
     availableTickets: {
       type: Number,
       min: 0,
+      default: function () {
+        return this.capacity;
+      },
     },
 
     // Images
@@ -293,12 +251,6 @@ const eventSchema = new mongoose.Schema(
         alt: String,
       },
     ],
-    thumbnail: {
-      type: String,
-      default: function () {
-        return this.images && this.images.length > 0 ? this.images[0].url : "";
-      },
-    },
 
     // Organizer Information
     organizer: {
@@ -348,7 +300,7 @@ const eventSchema = new mongoose.Schema(
         },
         ticketType: {
           type: String,
-          enum: ["Regular", "VIP", "VVIP"],
+          enum: ["Regular", "VIP", "VVIP", "Free"],
           default: "Regular",
         },
         quantity: {
@@ -434,33 +386,13 @@ const eventSchema = new mongoose.Schema(
         maxlength: [200, "Each requirement cannot exceed 200 characters"],
       },
     ],
-    agenda: [
-      {
-        time: String,
-        activity: String,
-        speaker: String,
-      },
-    ],
-    faqs: [
-      {
-        question: String,
-        answer: String,
-      },
-    ],
 
     slug: {
       type: String,
       unique: true,
-      sparse: true, // Allows null values to not violate unique constraint
+      sparse: true,
       lowercase: true,
       trim: true,
-    },
-    metaDescription: String,
-    socialLinks: {
-      facebook: String,
-      twitter: String,
-      instagram: String,
-      website: String,
     },
 
     // Cancellation & Refund
@@ -472,17 +404,6 @@ const eventSchema = new mongoose.Schema(
       type: String,
       enum: ["full", "partial", "no-refund"],
       default: "partial",
-    },
-
-    // Blockchain Integration
-    blockchainData: {
-      contractAddress: String,
-      transactionHash: String,
-      tokenId: String,
-      verified: {
-        type: Boolean,
-        default: false,
-      },
     },
 
     // Timestamps
@@ -498,7 +419,7 @@ const eventSchema = new mongoose.Schema(
   }
 );
 
-// Indexes for performance
+// Indexes
 eventSchema.index({ title: "text", description: "text", tags: "text" });
 eventSchema.index({ date: 1, status: 1 });
 eventSchema.index({ category: 1, city: 1 });
@@ -506,15 +427,12 @@ eventSchema.index({ organizer: 1, status: 1 });
 eventSchema.index({ price: 1 });
 eventSchema.index({ createdAt: -1 });
 eventSchema.index({ isFeatured: 1, status: 1 });
-eventSchema.index({ status: 1, date: 1, category: 1 });
-eventSchema.index({ city: 1, date: 1, price: 1 });
 
-// Virtual for event URL
+// Virtuals
 eventSchema.virtual("eventUrl").get(function () {
   return `/event/${this.slug || this._id}`;
 });
 
-// Virtual for availability
 eventSchema.virtual("isAvailable").get(function () {
   const now = new Date();
   const isFutureDate = this.date > now;
@@ -526,15 +444,9 @@ eventSchema.virtual("isAvailable").get(function () {
     );
     return hasAvailableTickets && isPublished && isFutureDate;
   }
-  // Legacy check
-  return (
-    this.availableTickets > 0 &&
-    isPublished &&
-    isFutureDate
-  );
+  return this.availableTickets > 0 && isPublished && isFutureDate;
 });
 
-// Virtual for sold out status
 eventSchema.virtual("isSoldOut").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     return this.ticketTypes.every((tt) => tt.availableTickets === 0);
@@ -542,7 +454,6 @@ eventSchema.virtual("isSoldOut").get(function () {
   return this.availableTickets === 0;
 });
 
-// Virtual for total capacity
 eventSchema.virtual("totalCapacity").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     return this.ticketTypes.reduce((sum, tt) => sum + tt.capacity, 0);
@@ -550,7 +461,6 @@ eventSchema.virtual("totalCapacity").get(function () {
   return this.capacity || 0;
 });
 
-// Virtual for total available tickets
 eventSchema.virtual("totalAvailableTickets").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     return this.ticketTypes.reduce((sum, tt) => sum + tt.availableTickets, 0);
@@ -558,14 +468,19 @@ eventSchema.virtual("totalAvailableTickets").get(function () {
   return this.availableTickets || 0;
 });
 
-// Virtual for attendance percentage
+eventSchema.virtual("hasFreeTickets").get(function () {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    return this.ticketTypes.some((tt) => tt.price === 0);
+  }
+  return this.price === 0;
+});
+
 eventSchema.virtual("attendancePercentage").get(function () {
   const totalCap = this.totalCapacity;
   if (totalCap === 0) return 0;
   return Math.round((this.totalAttendees / totalCap) * 100);
 });
 
-// Virtual for days until event
 eventSchema.virtual("daysUntilEvent").get(function () {
   const now = new Date();
   const eventDate = new Date(this.date);
@@ -574,7 +489,6 @@ eventSchema.virtual("daysUntilEvent").get(function () {
   return diffDays > 0 ? diffDays : 0;
 });
 
-// Virtual for price range
 eventSchema.virtual("priceRange").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     const prices = this.ticketTypes.map((tt) => tt.price);
@@ -585,78 +499,93 @@ eventSchema.virtual("priceRange").get(function () {
   return this.price || 0;
 });
 
-// ===================================
-// PRE-SAVE MIDDLEWARE - FIXED
-// ===================================
-
-// 1. EMERGENCY FIX: Ensure slug is NEVER null (FIRST - most important)
+// PRE-SAVE MIDDLEWARE - COMPLETE FIX FOR NaN ISSUES
 eventSchema.pre("save", function (next) {
-  // Ensure slug is NEVER null before any other operations
-  if (!this.slug || this.slug === null || this.slug === '') {
-    this.slug = `emergency-fix-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  // CRITICAL: Ensure slug is NEVER null
+  if (!this.slug || this.slug === null || this.slug === "") {
+    this.slug = `event-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 11)}`;
   }
-  next();
-});
 
-// 2. Initialize ticket types availableTickets
-eventSchema.pre("save", function (next) {
+  // CRITICAL: Initialize and validate ALL number fields to prevent NaN
+  const safeNumber = (value, defaultValue = 0) => {
+    if (value === undefined || value === null || isNaN(value)) {
+      return defaultValue;
+    }
+    return Number(value);
+  };
+
+  // Validate ticket types
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     this.ticketTypes.forEach((ticketType) => {
-      if (ticketType.availableTickets === undefined) {
-        ticketType.availableTickets = ticketType.capacity;
-      }
+      ticketType.price = safeNumber(ticketType.price, 0);
+      ticketType.capacity = safeNumber(ticketType.capacity, 1);
+      ticketType.availableTickets = safeNumber(
+        ticketType.availableTickets,
+        ticketType.capacity
+      );
+      ticketType.isFree = ticketType.price === 0;
     });
+  } else {
+    // Legacy system
+    this.price = safeNumber(this.price, 0);
+    this.capacity = safeNumber(this.capacity, 1);
+    this.availableTickets = safeNumber(this.availableTickets, this.capacity);
   }
+
+  // Validate statistics
+  this.totalAttendees = safeNumber(this.totalAttendees, 0);
+  this.bookings = safeNumber(this.bookings, 0);
+  this.totalRevenue = safeNumber(this.totalRevenue, 0);
+  this.views = safeNumber(this.views, 0);
+  this.totalLikes = safeNumber(this.totalLikes, 0);
+
   next();
 });
 
-// 3. FIXED: Generate proper slug for ALL events (including drafts)
+// Generate proper slug
 eventSchema.pre("save", async function (next) {
   try {
-    // Only generate proper slug if current slug is the emergency one
-    if (this.slug && this.slug.startsWith('emergency-fix-')) {
-      // Create base slug from title
+    if (this.slug && this.slug.startsWith("event-")) {
       const baseSlug = this.title
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
-      
-      // Use existing _id if available, otherwise create a temporary unique ID
-      const uniqueId = this._id 
-        ? this._id.toString().slice(-6) 
-        : Date.now().toString().slice(-6) + Math.random().toString(36).slice(2, 5);
-      
+
+      const uniqueId = this._id
+        ? this._id.toString().slice(-6)
+        : Date.now().toString().slice(-6);
+
       let slug = `${baseSlug}-${uniqueId}`;
-      
-      // Ensure slug uniqueness by checking database
+
       const Event = this.constructor;
       let counter = 1;
       let existingEvent = await Event.findOne({ slug, _id: { $ne: this._id } });
-      
+
       while (existingEvent) {
         slug = `${baseSlug}-${uniqueId}-${counter}`;
         existingEvent = await Event.findOne({ slug, _id: { $ne: this._id } });
         counter++;
-        
-        // Safety break to prevent infinite loops
+
         if (counter > 50) {
-          slug = `event-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          slug = `event-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 9)}`;
           break;
         }
       }
-      
+
       this.slug = slug;
-      console.log(`🔄 Generated slug: ${this.slug} for "${this.title}"`);
     }
     next();
   } catch (error) {
-    console.error("❌ Error generating slug:", error);
-    // Keep the emergency slug if generation fails - NEVER go back to null
+    console.error("Error generating slug:", error);
     next();
   }
 });
 
-// 4. Set publishedAt timestamp
+// Set publishedAt timestamp
 eventSchema.pre("save", function (next) {
   if (
     this.isModified("status") &&
@@ -668,19 +597,23 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// 5. Validate end time (skip for drafts)
+// Validate end time
 eventSchema.pre("save", function (next) {
-  if (this.status === 'draft') {
+  if (this.status === "draft") {
     return next();
   }
-  
+
   if (this.time && this.endTime) {
     try {
       const [startHour, startMin] = this.time.split(":").map(Number);
       const [endHour, endMin] = this.endTime.split(":").map(Number);
 
-      // Validate time components
-      if (isNaN(startHour) || isNaN(startMin) || isNaN(endHour) || isNaN(endMin)) {
+      if (
+        isNaN(startHour) ||
+        isNaN(startMin) ||
+        isNaN(endHour) ||
+        isNaN(endMin)
+      ) {
         return next(new Error("Invalid time format"));
       }
 
@@ -697,259 +630,266 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// ===================================
-// INSTANCE METHODS
-// ===================================
+// INSTANCE METHODS - COMPLETE FIXED VERSION
 
 // Method to regenerate slug manually
-eventSchema.methods.regenerateSlug = async function() {
+eventSchema.methods.regenerateSlug = async function () {
   const baseSlug = this.title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  
+
   const uniqueId = this._id.toString().slice(-6);
   let slug = `${baseSlug}-${uniqueId}`;
-  
-  // Check for duplicates
+
   let counter = 1;
   while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
     slug = `${baseSlug}-${uniqueId}-${counter}`;
     counter++;
   }
-  
+
   this.slug = slug;
   await this.save({ validateBeforeSave: false });
-  
+
   return this.slug;
 };
 
-// Method to book ticket with Ticket schema integration
+// Method to book multiple ticket types
+eventSchema.methods.bookTickets = async function (
+  userId,
+  userInfo,
+  ticketBookings = []
+) {
+  const Ticket = mongoose.model("Ticket");
+
+  // Validate inputs
+  if (!userId || !userInfo) {
+    throw new Error("User ID and user info are required");
+  }
+
+  if (!Array.isArray(ticketBookings) || ticketBookings.length === 0) {
+    throw new Error("At least one ticket booking is required");
+  }
+
+  // Validate event status
+  if (this.status !== "published") {
+    throw new Error("Event is not available for booking");
+  }
+
+  if (this.date < new Date()) {
+    throw new Error("Cannot book tickets for past events");
+  }
+
+  // Check if user already booked
+  const existingBooking = this.attendees.find(
+    (a) => a.user.toString() === userId.toString() && a.status === "confirmed"
+  );
+
+  if (existingBooking) {
+    throw new Error("You already have a confirmed booking for this event");
+  }
+
+  // Validate all ticket bookings and calculate totals
+  let totalQuantity = 0;
+  let totalPrice = 0;
+  const bookingDetails = [];
+
+  // First pass: validate availability
+  for (const booking of ticketBookings) {
+    const { ticketType, quantity } = booking;
+    const parsedQuantity = parseInt(quantity);
+
+    if (isNaN(parsedQuantity) || parsedQuantity < 1) {
+      throw new Error(`Invalid quantity for ${ticketType} tickets`);
+    }
+
+    let ticketTypeObj = null;
+    let ticketPrice = 0;
+
+    if (this.ticketTypes && this.ticketTypes.length > 0) {
+      ticketTypeObj = this.ticketTypes.find((tt) => tt.name === ticketType);
+      if (!ticketTypeObj) {
+        throw new Error(`Ticket type "${ticketType}" not found`);
+      }
+
+      // Ensure availableTickets is valid
+      const availableCount = Number(ticketTypeObj.availableTickets);
+      if (isNaN(availableCount) || availableCount < 0) {
+        throw new Error(`Invalid availability for ${ticketType} tickets`);
+      }
+
+      if (availableCount < parsedQuantity) {
+        throw new Error(
+          `Only ${availableCount} ${ticketType} ticket(s) available`
+        );
+      }
+
+      ticketPrice = Number(ticketTypeObj.price);
+      if (isNaN(ticketPrice) || ticketPrice < 0) {
+        throw new Error(`Invalid price for ${ticketType} tickets`);
+      }
+    } else {
+      // Legacy system
+      ticketPrice = Number(this.price);
+      const availableCount = Number(this.availableTickets);
+
+      if (isNaN(availableCount) || availableCount < 0) {
+        throw new Error("Invalid ticket availability data");
+      }
+
+      if (availableCount < parsedQuantity) {
+        throw new Error(`Only ${availableCount} ticket(s) available`);
+      }
+
+      if (isNaN(ticketPrice) || ticketPrice < 0) {
+        throw new Error("Invalid ticket price");
+      }
+    }
+
+    totalQuantity += parsedQuantity;
+    totalPrice += ticketPrice * parsedQuantity;
+
+    bookingDetails.push({
+      ticketType,
+      quantity: parsedQuantity,
+      unitPrice: ticketPrice,
+      subtotal: ticketPrice * parsedQuantity,
+      ticketTypeObj,
+    });
+  }
+
+  // Second pass: update availability and create tickets
+  const tickets = [];
+  const attendeeRecords = [];
+
+  for (const detail of bookingDetails) {
+    const { ticketType, quantity, unitPrice, subtotal, ticketTypeObj } = detail;
+
+    // Update availability
+    if (this.ticketTypes && this.ticketTypes.length > 0) {
+      ticketTypeObj.availableTickets -= quantity;
+    } else {
+      this.availableTickets -= quantity;
+    }
+
+    // Generate unique identifiers for each ticket
+    const ticketNumber = `TKT-${this._id
+      .toString()
+      .slice(-6)}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const qrCode = `QR-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)
+      .toUpperCase()}`;
+
+    // Create ticket document
+    const ticketData = {
+      ticketNumber,
+      qrCode,
+      eventId: this._id,
+      eventName: this.title,
+      eventDate: this.date,
+      eventTime: this.time,
+      eventEndTime: this.endTime,
+      eventVenue: this.venue,
+      eventAddress: this.address,
+      eventCity: this.city,
+      eventCategory: this.category,
+      userId: userId,
+      userName: userInfo.name,
+      userEmail: userInfo.email,
+      userPhone: userInfo.phone || "",
+      ticketType: ticketType,
+      ticketPrice: unitPrice,
+      currency: this.currency || "NGN",
+      quantity: quantity,
+      totalAmount: subtotal,
+      status: "confirmed",
+      paymentMethod: unitPrice === 0 ? "free" : "card",
+      paymentStatus: "completed",
+      purchaseDate: new Date(),
+      organizerId: this.organizer,
+      organizerName: this.organizerInfo?.name || "",
+      organizerEmail: this.organizerInfo?.email || "",
+      organizerCompany: this.organizerInfo?.companyName || "",
+      refundPolicy: this.refundPolicy || "partial",
+    };
+
+    const ticket = await Ticket.create(ticketData);
+    tickets.push(ticket);
+
+    // Add to attendee records
+    attendeeRecords.push({
+      user: userId,
+      ticketId: ticket._id,
+      ticketType: ticketType,
+      ticketNumber: ticketNumber,
+      qrCode: qrCode,
+      quantity: quantity,
+      totalPrice: subtotal,
+      status: "confirmed",
+      bookingDate: new Date(),
+    });
+  }
+
+  // Add all attendee records to event
+  this.attendees.push(...attendeeRecords);
+
+  // Update event statistics
+  this.totalAttendees = (Number(this.totalAttendees) || 0) + totalQuantity;
+  this.bookings = (Number(this.bookings) || 0) + 1;
+  this.totalRevenue = (Number(this.totalRevenue) || 0) + totalPrice;
+
+  // Final validation before saving
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    this.ticketTypes.forEach((tt) => {
+      if (isNaN(tt.availableTickets)) tt.availableTickets = 0;
+      if (isNaN(tt.capacity)) tt.capacity = 0;
+    });
+  } else {
+    if (isNaN(this.availableTickets)) this.availableTickets = 0;
+  }
+
+  if (isNaN(this.totalAttendees)) this.totalAttendees = 0;
+  if (isNaN(this.bookings)) this.bookings = 0;
+  if (isNaN(this.totalRevenue)) this.totalRevenue = 0;
+
+  // Save event
+  await this.save();
+
+  return {
+    success: true,
+    tickets: tickets.map((ticket) => ({
+      ticketId: ticket._id,
+      ticketNumber: ticket.ticketNumber,
+      qrCode: ticket.qrCode,
+      ticketType: ticket.ticketType,
+      quantity: ticket.quantity,
+      totalPrice: ticket.totalAmount,
+    })),
+    totalQuantity,
+    totalPrice,
+    eventTitle: this.title,
+    eventDate: this.date,
+    eventVenue: this.venue,
+    message: "Tickets booked successfully",
+  };
+};
+
+// Single ticket booking (backward compatibility)
 eventSchema.methods.bookTicket = async function (
   userId,
   userInfo,
   ticketType = "Regular",
   quantity = 1
 ) {
-  const Ticket = mongoose.model("Ticket");
-  
-  // Check if using ticket types
-  if (this.ticketTypes && this.ticketTypes.length > 0) {
-    const selectedTicket = this.ticketTypes.find(
-      (tt) => tt.name === ticketType
-    );
-
-    if (!selectedTicket) {
-      throw new Error(`Ticket type ${ticketType} not found`);
-    }
-
-    if (selectedTicket.availableTickets < quantity) {
-      throw new Error(`Not enough ${ticketType} tickets available`);
-    }
-
-    if (this.status !== "published") {
-      throw new Error("Event is not available for booking");
-    }
-
-    const totalPrice = selectedTicket.price * quantity;
-
-    // CREATE TICKET DOCUMENT AUTOMATICALLY
-    const ticket = new Ticket({
-      // Ticket Identification
-      ticketNumber: `TKT-${this._id.toString().slice(-6)}-${Date.now().toString().slice(-6)}`,
-      qrCode: `QR-${this._id}-${userId}-${Date.now()}`,
-      
-      // Event Information (from current event)
-      eventId: this._id,
-      eventName: this.title,
-      eventDate: this.date,
-      eventTime: this.time,
-      eventEndTime: this.endTime,
-      eventVenue: this.venue,
-      eventAddress: this.address,
-      eventCity: this.city,
-      eventCategory: this.category,
-      eventCoordinates: this.coordinates,
-      
-      // Ticket Holder Information (from userInfo)
-      userId: userId,
-      userName: userInfo.name,
-      userEmail: userInfo.email,
-      userPhone: userInfo.phone,
-      
-      // Ticket Details
-      ticketType: ticketType,
-      ticketPrice: selectedTicket.price,
-      quantity: quantity,
-      totalAmount: totalPrice,
-      currency: this.currency,
-      
-      // Organizer Information
-      organizerId: this.organizer,
-      organizerName: this.organizerInfo?.name || "Event Organizer",
-      organizerEmail: this.organizerInfo?.email,
-      organizerCompany: this.organizerInfo?.companyName,
-      
-      // Refund Policy from event
-      refundPolicy: this.refundPolicy,
-      
-      // Initial location history
-      locationHistory: [{
-        latitude: this.coordinates?.latitude,
-        longitude: this.coordinates?.longitude,
-        address: this.address,
-        type: "purchase",
-        source: "system",
-        timestamp: new Date()
-      }]
-    });
-
-    // Save the ticket
-    await ticket.save();
-
-    // Add to event attendees with actual Ticket document ID
-    this.attendees.push({
-      user: userId,
-      ticketId: ticket._id,
-      ticketType: ticketType,
-      quantity: quantity,
-      totalPrice: totalPrice,
-      status: "confirmed",
-    });
-
-    // Update event statistics
-    selectedTicket.availableTickets -= quantity;
-    this.totalAttendees += quantity;
-    this.bookings += 1;
-    this.totalRevenue += totalPrice;
-
-    await this.save();
-
-    return { 
-      ticketId: ticket._id, 
-      ticketNumber: ticket.ticketNumber,
-      qrCode: ticket.qrCode,
-      ticketType, 
-      quantity, 
-      totalPrice,
-      eventName: this.title,
-      eventDate: this.date,
-      eventVenue: this.venue,
-      eventTime: this.time
-    };
-
-  } else {
-    // Legacy booking (backward compatibility)
-    if (this.availableTickets < quantity) {
-      throw new Error("Not enough tickets available");
-    }
-
-    if (this.status !== "published") {
-      throw new Error("Event is not available for booking");
-    }
-
-    const totalPrice = this.price * quantity;
-
-    // Create ticket for legacy events too
-    const ticket = new Ticket({
-      ticketNumber: `TKT-${this._id.toString().slice(-6)}-${Date.now().toString().slice(-6)}`,
-      qrCode: `QR-${this._id}-${userId}-${Date.now()}`,
-      eventId: this._id,
-      eventName: this.title,
-      eventDate: this.date,
-      eventTime: this.time,
-      eventEndTime: this.endTime,
-      eventVenue: this.venue,
-      eventAddress: this.address,
-      eventCity: this.city,
-      eventCategory: this.category,
-      userId: userId,
-      userName: userInfo.name,
-      userEmail: userInfo.email,
-      userPhone: userInfo.phone,
-      ticketType: "Regular",
-      ticketPrice: this.price,
-      quantity: quantity,
-      totalAmount: totalPrice,
-      currency: this.currency,
-      organizerId: this.organizer,
-      organizerName: this.organizerInfo?.name || "Event Organizer",
-    });
-
-    await ticket.save();
-
-    this.attendees.push({
-      user: userId,
-      ticketId: ticket._id,
-      quantity: quantity,
-      totalPrice: totalPrice,
-      status: "confirmed",
-    });
-
-    this.availableTickets -= quantity;
-    this.totalAttendees += quantity;
-    this.bookings += 1;
-    this.totalRevenue += totalPrice;
-
-    await this.save();
-
-    return { 
-      ticketId: ticket._id, 
-      ticketNumber: ticket.ticketNumber,
-      quantity, 
-      totalPrice 
-    };
-  }
+  return this.bookTickets(userId, userInfo, [{ ticketType, quantity }]);
 };
 
-// Method to cancel booking with Ticket integration
-eventSchema.methods.cancelBooking = async function (userId) {
-  try {
-    const attendeeIndex = this.attendees.findIndex(
-      (a) => a.user.toString() === userId.toString() && a.status === "confirmed"
-    );
-
-    if (attendeeIndex === -1) {
-      throw new Error("Booking not found");
-    }
-
-    const attendee = this.attendees[attendeeIndex];
-    attendee.status = "cancelled";
-
-    // Update the Ticket document status
-    const Ticket = mongoose.model("Ticket");
-    await Ticket.findByIdAndUpdate(attendee.ticketId, {
-      status: "cancelled",
-      refundStatus: "requested"
-    });
-
-    // Restore tickets
-    if (this.ticketTypes && this.ticketTypes.length > 0) {
-      const ticketType = this.ticketTypes.find(
-        (tt) => tt.name === attendee.ticketType
-      );
-      if (ticketType) {
-        ticketType.availableTickets += attendee.quantity;
-      }
-    } else {
-      this.availableTickets += attendee.quantity;
-    }
-
-    this.totalAttendees -= attendee.quantity;
-
-    if (this.refundPolicy !== "no-refund") {
-      this.totalRevenue -= attendee.totalPrice;
-    }
-
-    await this.save();
-  } catch (error) {
-    throw new Error(`Failed to cancel booking: ${error.message}`);
-  }
-};
-
-// Method to check in attendee with Ticket integration
+// Method to check in attendee
 eventSchema.methods.checkInAttendee = async function (ticketId) {
-  const attendee = this.attendees.find((a) => a.ticketId && a.ticketId.toString() === ticketId.toString());
+  const attendee = this.attendees.find(
+    (a) => a.ticketId && a.ticketId.toString() === ticketId.toString()
+  );
 
   if (!attendee) {
     throw new Error("Invalid ticket ID");
@@ -962,22 +902,61 @@ eventSchema.methods.checkInAttendee = async function (ticketId) {
   attendee.checkedIn = true;
   attendee.checkedInAt = new Date();
 
-  // Update the Ticket document
   const Ticket = mongoose.model("Ticket");
   await Ticket.findByIdAndUpdate(ticketId, {
     isCheckedIn: true,
     checkedInAt: new Date(),
-    status: "used"
+    status: "used",
   });
 
   await this.save();
-
   return attendee;
+};
+
+// Method to cancel booking
+eventSchema.methods.cancelBooking = async function (userId) {
+  const attendeeIndex = this.attendees.findIndex(
+    (a) => a.user.toString() === userId.toString() && a.status === "confirmed"
+  );
+
+  if (attendeeIndex === -1) {
+    throw new Error("No active booking found for this user");
+  }
+
+  const attendee = this.attendees[attendeeIndex];
+
+  // Restore ticket availability
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    const ticketTypeObj = this.ticketTypes.find(
+      (tt) => tt.name === attendee.ticketType
+    );
+    if (ticketTypeObj) {
+      ticketTypeObj.availableTickets += attendee.quantity;
+    }
+  } else {
+    this.availableTickets += attendee.quantity;
+  }
+
+  // Update statistics
+  this.totalAttendees = Math.max(0, this.totalAttendees - attendee.quantity);
+  this.totalRevenue = Math.max(0, this.totalRevenue - attendee.totalPrice);
+
+  // Update attendee status
+  attendee.status = "cancelled";
+
+  // Update ticket document
+  const Ticket = mongoose.model("Ticket");
+  await Ticket.findByIdAndUpdate(attendee.ticketId, {
+    status: "cancelled",
+    refundStatus: "requested",
+  });
+
+  await this.save();
 };
 
 // Method to increment views
 eventSchema.methods.incrementViews = async function () {
-  this.views += 1;
+  this.views = (Number(this.views) || 0) + 1;
   await this.save({ validateBeforeSave: false });
 };
 
@@ -987,28 +966,27 @@ eventSchema.methods.toggleLike = async function (userId) {
 
   if (index > -1) {
     this.likes.splice(index, 1);
-    this.totalLikes -= 1;
+    this.totalLikes = Math.max(0, (Number(this.totalLikes) || 0) - 1);
   } else {
     this.likes.push(userId);
-    this.totalLikes += 1;
+    this.totalLikes = (Number(this.totalLikes) || 0) + 1;
   }
 
   await this.save({ validateBeforeSave: false });
 };
 
-// Method to cancel event with Ticket integration
+// Method to cancel event
 eventSchema.methods.cancelEvent = async function (reason) {
   this.status = "cancelled";
   this.cancelledAt = new Date();
   this.isActive = false;
 
-  // Update all Ticket documents for this event
   const Ticket = mongoose.model("Ticket");
   await Ticket.updateMany(
     { eventId: this._id, status: "confirmed" },
-    { 
+    {
       status: "cancelled",
-      refundStatus: "requested"
+      refundStatus: "requested",
     }
   );
 
@@ -1025,8 +1003,7 @@ eventSchema.methods.cancelEvent = async function (reason) {
 eventSchema.methods.completeEvent = async function () {
   this.status = "completed";
   this.completedAt = new Date();
-  
-  // Update all active tickets to expired
+
   const Ticket = mongoose.model("Ticket");
   await Ticket.updateMany(
     { eventId: this._id, status: "confirmed" },
@@ -1037,9 +1014,12 @@ eventSchema.methods.completeEvent = async function () {
 };
 
 // Method to start sharing live location
-eventSchema.methods.startLocationSharing = async function(organizerId, initialLocation) {
+eventSchema.methods.startLocationSharing = async function (
+  organizerId,
+  initialLocation
+) {
   if (this.organizer.toString() !== organizerId.toString()) {
-    throw new Error('Only event organizer can share location');
+    throw new Error("Only event organizer can share location");
   }
 
   this.liveLocation = {
@@ -1049,16 +1029,18 @@ eventSchema.methods.startLocationSharing = async function(organizerId, initialLo
       latitude: initialLocation.latitude,
       longitude: initialLocation.longitude,
       address: initialLocation.address,
-      accuracy: initialLocation.accuracy || 50
-    },
-    locationHistory: [{
-      latitude: initialLocation.latitude,
-      longitude: initialLocation.longitude,
-      address: initialLocation.address,
       accuracy: initialLocation.accuracy || 50,
-      timestamp: new Date()
-    }],
-    sharedBy: organizerId
+    },
+    locationHistory: [
+      {
+        latitude: initialLocation.latitude,
+        longitude: initialLocation.longitude,
+        address: initialLocation.address,
+        accuracy: initialLocation.accuracy || 50,
+        timestamp: new Date(),
+      },
+    ],
+    sharedBy: organizerId,
   };
 
   await this.save();
@@ -1066,13 +1048,16 @@ eventSchema.methods.startLocationSharing = async function(organizerId, initialLo
 };
 
 // Method to update live location
-eventSchema.methods.updateLiveLocation = async function(organizerId, newLocation) {
+eventSchema.methods.updateLiveLocation = async function (
+  organizerId,
+  newLocation
+) {
   if (!this.liveLocation.isSharing) {
-    throw new Error('Location sharing is not active');
+    throw new Error("Location sharing is not active");
   }
 
   if (this.organizer.toString() !== organizerId.toString()) {
-    throw new Error('Only event organizer can update location');
+    throw new Error("Only event organizer can update location");
   }
 
   // Add to history (keep last 50 locations)
@@ -1081,12 +1066,15 @@ eventSchema.methods.updateLiveLocation = async function(organizerId, newLocation
     longitude: newLocation.longitude,
     address: newLocation.address,
     accuracy: newLocation.accuracy || 50,
-    timestamp: new Date()
+    timestamp: new Date(),
   });
 
   // Keep only last 50 location points
   if (this.liveLocation.locationHistory.length > 50) {
-    this.liveLocation.locationHistory = this.liveLocation.locationHistory.slice(0, 50);
+    this.liveLocation.locationHistory = this.liveLocation.locationHistory.slice(
+      0,
+      50
+    );
   }
 
   // Update current location
@@ -1094,7 +1082,7 @@ eventSchema.methods.updateLiveLocation = async function(organizerId, newLocation
     latitude: newLocation.latitude,
     longitude: newLocation.longitude,
     address: newLocation.address,
-    accuracy: newLocation.accuracy || 50
+    accuracy: newLocation.accuracy || 50,
   };
   this.liveLocation.lastUpdated = new Date();
 
@@ -1103,9 +1091,9 @@ eventSchema.methods.updateLiveLocation = async function(organizerId, newLocation
 };
 
 // Method to stop sharing location
-eventSchema.methods.stopLocationSharing = async function(organizerId) {
+eventSchema.methods.stopLocationSharing = async function (organizerId) {
   if (this.organizer.toString() !== organizerId.toString()) {
-    throw new Error('Only event organizer can stop location sharing');
+    throw new Error("Only event organizer can stop location sharing");
   }
 
   this.liveLocation.isSharing = false;
@@ -1113,6 +1101,8 @@ eventSchema.methods.stopLocationSharing = async function(organizerId) {
 
   await this.save();
 };
+
+// STATIC METHODS
 
 // Static method to find upcoming events
 eventSchema.statics.findUpcoming = function (limit = 10) {
@@ -1160,11 +1150,33 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
   }
 
   if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
-    searchQuery.price = {};
-    if (filters.minPrice !== undefined)
-      searchQuery.price.$gte = filters.minPrice;
-    if (filters.maxPrice !== undefined)
-      searchQuery.price.$lte = filters.maxPrice;
+    const priceQuery = [];
+
+    if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
+      const legacyPriceQuery = { price: {} };
+      if (filters.minPrice !== undefined)
+        legacyPriceQuery.price.$gte = parseFloat(filters.minPrice);
+      if (filters.maxPrice !== undefined)
+        legacyPriceQuery.price.$lte = parseFloat(filters.maxPrice);
+      priceQuery.push(legacyPriceQuery);
+    }
+
+    if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
+      const ticketTypePriceQuery = { "ticketTypes.price": {} };
+      if (filters.minPrice !== undefined)
+        ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(
+          filters.minPrice
+        );
+      if (filters.maxPrice !== undefined)
+        ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(
+          filters.maxPrice
+        );
+      priceQuery.push(ticketTypePriceQuery);
+    }
+
+    if (priceQuery.length > 0) {
+      searchQuery.$or = priceQuery;
+    }
   }
 
   if (filters.startDate || filters.endDate) {
@@ -1219,7 +1231,6 @@ eventSchema.statics.getStatistics = async function (organizerId) {
     }
   );
 };
-
 
 // Query helper for active events
 eventSchema.query.active = function () {
