@@ -7,12 +7,10 @@ const ticketSchema = new mongoose.Schema(
       type: String,
       required: [true, "Ticket number is required"],
       unique: true,
-
     },
     qrCode: {
       type: String,
       required: true,
-      
     },
     barcode: {
       type: String,
@@ -23,7 +21,6 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
       required: [true, "Event ID is required"],
-
     },
     eventName: {
       type: String,
@@ -60,8 +57,15 @@ const ticketSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: [
-        "Lagos", "Abuja", "Ibadan", "Port Harcourt", "Kano", "Benin",
-        "Enugu", "Kaduna", "Owerri", "Jos", "Calabar", "Abeokuta", "Other"
+        // 36 States + FCT
+        "Abia", "Adamawa", "Akwa Ibom", "Anambra", "Bauchi", "Bayelsa",
+        "Benue", "Borno", "Cross River", "Delta", "Ebonyi", "Edo",
+        "Ekiti", "Enugu", "Gombe", "Imo", "Jigawa", "Kaduna",
+        "Kano", "Katsina", "Kebbi", "Kogi", "Kwara", "Lagos",
+        "Nasarawa", "Niger", "Ogun", "Ondo", "Osun", "Oyo",
+        "Plateau", "Rivers", "Sokoto", "Taraba", "Yobe", "Zamfara",
+        "FCT (Abuja)", 
+        "Other"
       ],
     },
     eventCategory: {
@@ -69,7 +73,8 @@ const ticketSchema = new mongoose.Schema(
       required: true,
       enum: [
         "Technology", "Business", "Marketing", "Arts", "Health", "Education",
-        "Music", "Food", "Sports", "Entertainment", "Networking", "Other"
+        "Music", "Food", "Sports", "Entertainment", "Networking", "Lifestyle",
+        "Other"
       ],
     },
 
@@ -92,7 +97,6 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "User ID is required"],
-
     },
     userName: {
       type: String,
@@ -152,7 +156,6 @@ const ticketSchema = new mongoose.Schema(
         message: "{VALUE} is not a valid ticket status",
       },
       default: "confirmed",
-      
     },
 
     // Validation Information (for real-time validation)
@@ -233,7 +236,6 @@ const ticketSchema = new mongoose.Schema(
     },
     transactionId: {
       type: String,
-      
     },
 
     // Organizer Information (from Event schema)
@@ -241,7 +243,6 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-
     },
     organizerName: {
       type: String,
@@ -358,7 +359,6 @@ const ticketSchema = new mongoose.Schema(
     // Timestamps
     expiresAt: {
       type: Date,
-      // REMOVED: index: { expireAfterSeconds: 0 } (will be defined in schema.index() below)
     },
   },
   {
