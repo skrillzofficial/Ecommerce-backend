@@ -3,8 +3,25 @@ const fs = require("fs");
 const ErrorResponse = require("../utils/errorResponse");
 
 // Validate image files
+// Validate image files
 const validateImages = (req, res, next) => {
+  // DEBUG: Log what we received
+  console.log('=== VALIDATE IMAGES MIDDLEWARE ===');
+  console.log('Content-Type:', req.headers['content-type']);
+  console.log('Has req.files:', !!req.files);
+  console.log('Has req.body:', !!req.body);
+  console.log('Body keys:', req.body ? Object.keys(req.body) : []);
+  console.log('Files keys:', req.files ? Object.keys(req.files) : []);
+  
+  // Check if body exists
+  if (!req.body || Object.keys(req.body).length === 0) {
+    console.log('⚠️ Warning: req.body is empty or undefined');
+    console.log('Raw body:', req.body);
+  }
+
+  // Images are optional, so continue if no images
   if (!req.files || !req.files.images) {
+    console.log('No images in request, continuing...');
     return next();
   }
 
@@ -27,21 +44,19 @@ const validateImages = (req, res, next) => {
     }
 
     // Check MIME type
-    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"];
     if (!allowedTypes.includes(image.mimetype)) {
       errors.push(
-        `Image ${index + 1}: Only JPEG, PNG, and WebP images are allowed`
+        `Image ${index + 1}: Only JPEG, PNG, WebP, and GIF images are allowed`
       );
     }
 
     // Check file extension
     const ext = path.extname(image.name).toLowerCase();
-    const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp"];
+    const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
     if (!allowedExtensions.includes(ext)) {
       errors.push(
-        `Image ${
-          index + 1
-        }: Invalid file extension. Use .jpg, .jpeg, .png, or .webp`
+        `Image ${index + 1}: Invalid file extension. Use .jpg, .jpeg, .png, .webp, or .gif`
       );
     }
   });
@@ -50,9 +65,9 @@ const validateImages = (req, res, next) => {
     return next(new ErrorResponse(errors.join(", "), 400));
   }
 
+  console.log('✅ Images validated successfully');
   next();
 };
-
 // Validate profile picture
 const validateProfilePicture = (req, res, next) => {
   if (!req.files || !req.files.profilePicture) {

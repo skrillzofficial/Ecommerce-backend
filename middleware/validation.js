@@ -86,9 +86,30 @@ const VALID_STATES = [
 
 // Validate event creation data (UPDATED FOR DRAFT SUPPORT)
 const validateEventCreation = (req, res, next) => {
+  // Enhanced debugging
+  console.log('=== VALIDATE EVENT CREATION ===');
+  console.log('Content-Type:', req.headers['content-type']);
+  console.log('req.body exists:', !!req.body);
+  console.log('req.body type:', typeof req.body);
+  console.log('req.body keys:', req.body ? Object.keys(req.body) : 'NO BODY');
+  console.log('req.body content:', JSON.stringify(req.body, null, 2));
+  console.log('req.files exists:', !!req.files);
+  console.log('req.files keys:', req.files ? Object.keys(req.files) : 'NO FILES');
+
   // Check if req.body exists
-  if (!req.body || Object.keys(req.body).length === 0) {
-    return next(new ErrorResponse("Request body is missing or empty", 400));
+  if (!req.body) {
+    console.error('❌ req.body is undefined');
+    return next(new ErrorResponse("Request body is missing. Please ensure you're sending form data correctly.", 400));
+  }
+
+  if (typeof req.body !== 'object') {
+    console.error('❌ req.body is not an object:', typeof req.body);
+    return next(new ErrorResponse("Invalid request body format", 400));
+  }
+
+  if (Object.keys(req.body).length === 0) {
+    console.error('❌ req.body is empty');
+    return next(new ErrorResponse("Request body is empty. At least a title is required.", 400));
   }
 
   const {
@@ -103,12 +124,18 @@ const validateEventCreation = (req, res, next) => {
     city,
     price,
     capacity,
-    status = "draft", // Default to draft
+    status = "draft",
   } = req.body;
+
+  console.log('Extracted fields:', { title, status, category, date });
 
   const errors = [];
   const isPublishing = status === "published";
 
+  // Title validation (ALWAYS REQUIRED)
+  if (!title || title.trim().length < 5) {
+    errors.push("Title must be at least 5 characters long");
+  }
   // Title validation (ALWAYS REQUIRED)
   if (!title || title.trim().length < 5) {
     errors.push("Title must be at least 5 characters long");

@@ -61,12 +61,6 @@ cloudinary.config({
 // Cookie parser
 app.use(cookieParser());
 
-// BODY PARSER MIDDLEWARE
-// IMPORTANT: For Paystack webhook, use raw body BEFORE json parser
-app.use('/api/v1/transactions/webhook', express.raw({ type: 'application/json' }));
-
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // FILE UPLOAD MIDDLEWARE
 app.use(
@@ -77,7 +71,16 @@ app.use(
     abortOnLimit: true,
     createParentPath: true,
   })
-);
+); 
+
+// BODY PARSER MIDDLEWARE
+// IMPORTANT: For Paystack webhook, use raw body BEFORE json parser
+app.use('/api/v1/transactions/webhook', express.raw({ type: 'application/json' }));
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+
 
 // INPUT SANITIZATION
 app.use(sanitizeInput);
