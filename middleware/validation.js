@@ -86,6 +86,11 @@ const VALID_STATES = [
 
 // Validate event creation data (UPDATED FOR DRAFT SUPPORT)
 const validateEventCreation = (req, res, next) => {
+  // Check if req.body exists
+  if (!req.body || Object.keys(req.body).length === 0) {
+    return next(new ErrorResponse("Request body is missing or empty", 400));
+  }
+
   const {
     title,
     description,
