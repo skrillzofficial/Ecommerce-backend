@@ -16,7 +16,8 @@ const authRouter = require("./routes/userRoute");
 const superAdminRoutes = require("./routes/superAdminRoute");
 const eventRoutes = require("./routes/eventRoute");
 const transactionRoutes = require("./routes/transactionRoutes");
-const notificationRoutes = require('./routes/notificationRoute');  
+const notificationRoutes = require('./routes/notificationRoute'); 
+const ticketRoutes = require("./routes/ticketRoute"); 
 
 // Middleware
 const errorHandler = require("./middleware/errorHandler");
@@ -139,8 +140,9 @@ app.get("/", (req, res) => {
       auth: "/api/v1/auth",
       events: "/api/v1/events",
       transactions: "/api/v1/transactions", 
+      tickets: "/api/v1/tickets",
       admin: "/api/v1/admin",
-      notifications: "/api/v1/notifications", // NEW
+      notifications: "/api/v1/notifications",
     },
   });
 });
@@ -149,8 +151,10 @@ app.get("/", (req, res) => {
 app.use("/api/v1/", authRouter);
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/transactions", transactionRoutes); 
-app.use("/api/v1/notifications", notificationRoutes); // FIXED: Use app.use not router.use
+app.use("/api/v1/notifications", notificationRoutes);
+app.use("/api/v1/tickets", ticketRoutes);
 app.use("/api/v1/admin", superAdminRoutes);
+
 
 // ERROR HANDLING
 // 404 handler
