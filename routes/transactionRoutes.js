@@ -5,6 +5,8 @@ const {
   verifyTransaction,
   getUserTransactions,
   getTransaction,
+  verifyServiceFeePayment,
+  initializeServiceFeePayment,
   getEventTransactions,
   requestRefund,
   processRefund,
@@ -16,12 +18,15 @@ const { protect, authorize } = require("../middleware/auth");
 // Public routes
 router.post("/webhook", paystackWebhook);
 router.get("/verify/:reference", verifyTransaction);
+router.post('/verify-service-fee/:reference',  verifyServiceFeePayment);
 
 // Protected routes (require authentication)
 router.use(protect);
 
 // Initialize payment
 router.post("/initialize", initializeTransaction);
+router.post('/initialize-service-fee', initializeServiceFeePayment);
+
 
 // Get user's transactions
 router.get("/my-transactions", getUserTransactions);

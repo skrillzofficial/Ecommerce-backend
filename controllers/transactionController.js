@@ -357,6 +357,250 @@ const verifyTransaction = async (req, res) => {
     });
   }
 };
+// Add this to your transaction controller
+// @desc    Initialize service fee payment for free events
+// @route   POST /api/transactions/initialize-service-fee
+// @access  Private
+const initializeServiceFeePayment = async (req, res) => {
+  try {
+    const { 
+      eventId, 
+      serviceFee, 
+      attendanceRange, 
+      userInfo,
+      eventData 
+    } = req.body;
+    const userId = req.user._id;
+
+    // Validate input
+    if (!eventId || !serviceFee) {
+      return res.status(400).json({
+        success: false,
+        message: 'Event ID and service fee are required'
+      });
+    }
+
+    // Get event (or create if it doesn't exist yet for drafts)
+    let event;
+    if (eventId.startsWith('draft-')) {
+      // This is a draft event being published
+      event = {
+        _id: eventId,
+        title: eventData?.title || 'New Event',
+        organizer: userId
+      };
+    } else {
+      event = await Event.findById(eventId);
+      if (!event) {
+        return res.status(404).json({
+          success: false,
+          message: 'Event not found'
+        });
+      }
+    }
+
+    // Generate unique reference for service fee
+    const reference = `SRV-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+    // Create service fee transaction record
+    const transaction = new Transaction({
+      reference,
+      userId,
+      email: userInfo?.email || req.user.email,
+      userName: userInfo?.name || `${req.user.firstName} ${req.user.lastName}`,
+      userPhone: userInfo?.phone || req.user.phone,
+      eventId: event._id,
+      eventTitle: eventData?.title || event.title,
+      eventOrganizer: event.organizer,
+      // Service fee specific fields
+      tickets: [{
+        ticketType: 'Platform Service Fee',
+        quantity: 1,
+        unitPrice: serviceFee,
+        subtotal: serviceFee
+      }],
+      amount: serviceFee,
+      serviceFee: 0, // No additional service fee on service fees
+      totalAmount: serviceFee,
+      currency: 'NGN',
+      status: 'pending',
+      paymentType: 'service_fee', // Differentiate from ticket payments
+      metadata: {
+        serviceType: 'free_event_publishing',
+        attendanceRange: attendanceRange,
+        eventData: eventData,
+        isFreeEvent: true
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    await transaction.save();
+
+    // Initialize Paystack payment
+    const paystackResponse = await initializePayment({
+      email: transaction.email,
+      amount: serviceFee * 100, // Convert to kobo
+      reference: reference,
+      metadata: {
+        transactionId: transaction._id,
+        eventId: event._id,
+        eventTitle: event.title,
+        userId: userId,
+        paymentType: 'service_fee',
+        attendanceRange: attendanceRange
+      },
+      callback_url: `${process.env.FRONTEND_URL}/payment/verify?reference=${reference}&type=service_fee`
+    });
+
+    // Update transaction with Paystack data
+    transaction.authorizationUrl = paystackResponse.data.authorization_url;
+    transaction.accessCode = paystackResponse.data.access_code;
+    await transaction.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Service fee payment initialized successfully',
+      data: {
+        transactionId: transaction._id,
+        reference: transaction.reference,
+        authorizationUrl: transaction.authorizationUrl,
+        accessCode: transaction.accessCode,
+        amount: transaction.totalAmount,
+        currency: transaction.currency,
+        paymentType: 'service_fee'
+      }
+    });
+
+  } catch (error) {
+    console.error('Initialize service fee payment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to initialize service fee payment',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Verify service fee payment and publish event
+// @route   POST /api/transactions/verify-service-fee/:reference
+// @access  Private
+const verifyServiceFeePayment = async (req, res) => {
+  try {
+    const { reference } = req.params;
+    const { eventData, agreementData } = req.body;
+
+    // Find transaction
+    const transaction = await Transaction.findByReference(reference);
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      });
+    }
+
+    // Verify with Paystack
+    const paystackResponse = await verifyPayment(reference);
+
+    if (paystackResponse.data.status === 'success') {
+      // Mark transaction as paid
+      await transaction.markAsPaid(paystackResponse.data);
+
+      // Update transaction with event publishing data
+      await transaction.updateMetadata({
+        ...transaction.metadata,
+        eventPublished: true,
+        agreementData: agreementData,
+        publishedAt: new Date()
+      });
+
+      // Here you would publish the event
+      // This depends on your event publishing logic
+      let publishedEvent;
+      
+      if (eventData._id && !eventData._id.startsWith('draft-')) {
+        // Update existing draft to published
+        publishedEvent = await Event.findByIdAndUpdate(
+          eventData._id,
+          { 
+            status: 'published',
+            publishedAt: new Date(),
+            agreement: agreementData
+          },
+          { new: true }
+        );
+      } else {
+        // Create new published event
+        publishedEvent = new Event({
+          ...eventData,
+          status: 'published',
+          publishedAt: new Date(),
+          agreement: agreementData,
+          organizer: req.user._id
+        });
+        await publishedEvent.save();
+      }
+
+      // Send service fee payment confirmation email
+      try {
+        const paymentDate = new Date().toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        await sendPaymentEmail({
+          fullName: transaction.userName,
+          email: transaction.email,
+          eventName: eventData.title,
+          paymentId: transaction.reference,
+          paymentDate: paymentDate,
+          amount: `₦${transaction.totalAmount.toLocaleString()}`,
+          paymentMethod: 'Paystack',
+          bookingId: `SRV-${transaction._id}`,
+          clientUrl: `${process.env.FRONTEND_URL}/dashboard/organizer`,
+          isServiceFee: true
+        });
+      } catch (emailError) {
+        console.error("Failed to send service fee email:", emailError);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Service fee paid and event published successfully',
+        data: {
+          transaction,
+          event: publishedEvent,
+          published: true
+        }
+      });
+
+    } else {
+      // Payment failed
+      await transaction.markAsFailed(paystackResponse.data.gateway_response);
+
+      return res.status(400).json({
+        success: false,
+        message: 'Service fee payment failed',
+        data: {
+          transaction,
+          reason: paystackResponse.data.gateway_response
+        }
+      });
+    }
+
+  } catch (error) {
+    console.error('Verify service fee payment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify service fee payment',
+      error: error.message
+    });
+  }
+};
 
 // @desc    Get user transactions
 // @route   GET /api/transactions/my-transactions
@@ -683,6 +927,9 @@ module.exports = {
   processRefund,
   getRevenueStats,
   paystackWebhook,
+  initializeServiceFeePayment,
+  verifyServiceFeePayment,
+  initializeServiceFeePayment,
   handleSuccessfulCharge,
   handleFailedCharge,
   handleRefundProcessed
