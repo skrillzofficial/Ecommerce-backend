@@ -221,7 +221,13 @@ const getAllEvents = async (req, res, next) => {
 
     // Build query and sort
     const query = buildEventSearchQuery({ ...filters, search }, req.user?.role);
+    
+    // 🔍 DEBUG: Log the final query
+    console.log("Final Query:", JSON.stringify(query, null, 2));
+    
     const sortOption = getSortOptions(sort);
+    
+    console.log("Sort Option:", sortOption);
 
     // Pagination
     const pageNum = parseInt(page);
@@ -238,6 +244,8 @@ const getAllEvents = async (req, res, next) => {
       Event.countDocuments(query)
     ]);
 
+    console.log(`Found ${events.length} events out of ${total} total`);
+
     const response = {
       success: true,
       count: events.length,
@@ -247,7 +255,6 @@ const getAllEvents = async (req, res, next) => {
       events,
     };
 
-    // Add voice search info if applicable
     if (isVoiceSearch === "true") {
       response.voiceSearchParams = {
         originalQuery: req.query.search,
@@ -258,6 +265,7 @@ const getAllEvents = async (req, res, next) => {
     res.status(200).json(response);
 
   } catch (error) {
+    console.error("getAllEvents Error:", error);
     next(error);
   }
 };
