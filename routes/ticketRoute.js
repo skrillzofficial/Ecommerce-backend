@@ -1,17 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const {
-  purchaseTicket,
-  purchaseMultipleTickets,
-  getUserTickets,
   getTicketById,
   validateTicket,
-  cancelTicket,
-  transferTicket,
   getEventTickets,
   getTicketAnalytics,
-  addTicketLocation,
-  getTicketLocationHistory,
   downloadTicket,
   resendTicketEmail,
 } = require("../controllers/ticket.controller");
@@ -19,19 +12,32 @@ const {
 const { protect, authorize } = require("../middleware/auth");
 
 // ============================================
-// ALL ROUTES REQUIRE AUTHENTICATION
+// USER TICKET ROUTES
 // ============================================
 
-// Purchase single ticket
-router.post("/purchase", protect, purchaseTicket);
 
-// Purchase multiple tickets (different types)
-router.post("/purchase-multiple", protect, purchaseMultipleTickets);
+// @desc    Get specific ticket details
+// @route   GET /api/v1/tickets/:id
+// @access  Private (Ticket owner or organizer)
+router.get("/:id", protect, getTicketById);
 
-// Get user's tickets
-router.get("/my-tickets", protect, getUserTickets);
+// @desc    Download ticket as PDF
+// @route   GET /api/v1/tickets/:id/download
+// @access  Private (Ticket owner only)
+router.get("/:id/download", protect, downloadTicket);
 
-// Get tickets for a specific event (Organizer only)
+// @desc    Resend ticket confirmation email
+// @route   POST /api/v1/tickets/:id/resend-email
+// @access  Private (Ticket owner or event organizer)
+router.post("/:id/resend-email", protect, resendTicketEmail);
+
+// ============================================
+// ORGANIZER-ONLY ROUTES
+// ============================================
+
+// @desc    Get tickets for a specific event
+// @route   GET /api/v1/tickets/event/:eventId
+// @access  Private (Organizer only)
 router.get(
   "/event/:eventId",
   protect,
@@ -39,7 +45,9 @@ router.get(
   getEventTickets
 );
 
-// Get ticket analytics for an event (Organizer only)
+// @desc    Get ticket analytics for an event
+// @route   GET /api/v1/tickets/analytics/event/:eventId
+// @access  Private (Organizer only)
 router.get(
   "/analytics/event/:eventId",
   protect,
@@ -47,37 +55,14 @@ router.get(
   getTicketAnalytics
 );
 
-// ============================================
-// ROUTES WITH :ticketId PARAMETER
-// ============================================
-
-// Get specific ticket details
-router.get("/:ticketId", protect, getTicketById);
-
-// Validate ticket at entrance (Organizer only)
+// @desc    Validate ticket at entrance
+// @route   POST /api/v1/tickets/:id/validate
+// @access  Private (Organizer only)
 router.post(
-  "/:ticketId/validate",
+  "/:id/validate",
   protect,
   authorize("organizer", "superadmin"),
   validateTicket
 );
-
-// Cancel ticket
-router.post("/:ticketId/cancel", protect, cancelTicket);
-
-// Transfer ticket to another user
-router.post("/:ticketId/transfer", protect, transferTicket);
-
-// Add location point to ticket (for live tracking)
-router.post("/:ticketId/location", protect, addTicketLocation);
-
-// Get ticket location history
-router.get("/:ticketId/location-history", protect, getTicketLocationHistory);
-
-// Download ticket as PDF
-router.get("/:ticketId/download", protect, downloadTicket);
-
-// Resend ticket confirmation email
-router.post("/:ticketId/resend-email", protect, resendTicketEmail);
 
 module.exports = router;

@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+
+// ✅ ONLY EVENT CONTROLLER IMPORTS
 const {
   createEvent,
   getAllEvents,
@@ -7,32 +9,23 @@ const {
   getEventById,
   updateEvent,
   deleteEvent,
-  deleteEventImage,
   getOrganizerEvents,
   getOrganizerStatistics,
-  bookEventTicket,
-  cancelBooking,
-  getMyBookings,
-  toggleLikeEvent,
   cancelEvent,
   completeEvent,
   getFeaturedEvents,
   getUpcomingEvents,
-  parseVoiceSearch,
   getTicketAvailability,
-  checkInAttendee,
-  startLocationSharing,
-  updateLiveLocation,
-  stopLocationSharing,
   searchEventsAdvanced,
 } = require("../controllers/event.controller");
+const { toggleLikeEvent } = require("../controllers/interactionController");
+const { checkInAttendee } = require("../controllers/bookingController");
 
 const { protect, authorize, optionalAuth } = require("../middleware/auth");
 const { validateImages } = require("../middleware/fileUpload");
 const {
   validateEventCreation,
   validateEventUpdate,
-  validateBooking,
   validateQueryParams,
 } = require("../middleware/validation");
 
@@ -46,26 +39,20 @@ router.get("/featured", getFeaturedEvents);
 // Get upcoming events
 router.get("/upcoming", getUpcomingEvents);
 
-// Parse voice search query
-router.post("/voice-search", parseVoiceSearch);
+// Get past events
+router.get("/past", optionalAuth, validateQueryParams, getPastEvents);
 
 // Advanced search
 router.get("/search/advanced", validateQueryParams, searchEventsAdvanced);
 
-// Get past events
-router.get("/past", optionalAuth, validateQueryParams, getPastEvents);
-
-// Get all events with filtering (must be after specific routes)
+// Get all events with filtering
 router.get("/", optionalAuth, validateQueryParams, getAllEvents);
 
 // ============================================
 // PROTECTED ROUTES (Authentication required)
 // ============================================
 
-// User's bookings (MUST be before /:id)
-router.get("/my-bookings", protect, validateQueryParams, getMyBookings);
-
-// Organizer's events (MUST be before /:id)
+// Organizer's events
 router.get(
   "/organizer/my-events",
   protect,
@@ -74,7 +61,7 @@ router.get(
   getOrganizerEvents
 );
 
-// Organizer statistics (MUST be before /:id)
+// Organizer statistics
 router.get(
   "/organizer/statistics",
   protect,
@@ -84,7 +71,7 @@ router.get(
 
 // Create new event
 router.post(
-  "/create",
+  "/",
   protect,
   authorize("organizer", "superadmin"),
   validateImages,
@@ -96,17 +83,11 @@ router.post(
 // ROUTES WITH :id PARAMETER
 // ============================================
 
-// Get ticket availability (public)
-router.get("/:id/ticket-availability", getTicketAvailability);
-
 // Get single event by ID (PUBLIC - no auth needed)
 router.get("/:id", getEventById);
 
-// Book event ticket (PROTECTED)
-router.post("/:id/book", protect, validateBooking, bookEventTicket);
-
-// Cancel booking (PROTECTED)
-router.delete("/:id/cancel-booking", protect, cancelBooking);
+// Get ticket availability (public)
+router.get("/:id/ticket-availability", getTicketAvailability);
 
 // Like/Unlike event (PROTECTED)
 router.post("/:id/like", protect, toggleLikeEvent);
@@ -119,35 +100,6 @@ router.post(
   checkInAttendee
 );
 
-// Live location sharing (Organizer only)
-router.post(
-  "/:id/start-location-sharing",
-  protect,
-  authorize("organizer", "superadmin"),
-  startLocationSharing
-);
-
-router.put(
-  "/:id/update-location",
-  protect,
-  authorize("organizer", "superadmin"),
-  updateLiveLocation
-);
-
-router.post(
-  "/:id/stop-location-sharing",
-  protect,
-  authorize("organizer", "superadmin"),
-  stopLocationSharing
-);
-
-// Delete event image (Organizer only)
-router.delete(
-  "/:id/images/:imageIndex",
-  protect,
-  authorize("organizer", "superadmin"),
-  deleteEventImage
-);
 
 // Cancel event (Organizer only)
 router.patch(
@@ -166,7 +118,7 @@ router.put(
 );
 
 // Update event (Organizer only)
-router.patch(
+router.put(
   "/:id",
   protect,
   authorize("organizer", "superadmin"),

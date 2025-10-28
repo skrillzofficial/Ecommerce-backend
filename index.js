@@ -18,6 +18,7 @@ const eventRoutes = require("./routes/eventRoute");
 const transactionRoutes = require("./routes/transactionRoutes");
 const notificationRoutes = require('./routes/notificationRoute'); 
 const ticketRoutes = require("./routes/ticketRoute"); 
+const bookingRoutes = require("./routes/bookingRoute"); // Added booking routes
 
 // Middleware
 const errorHandler = require("./middleware/errorHandler");
@@ -62,7 +63,6 @@ cloudinary.config({
 // Cookie parser
 app.use(cookieParser());
 
-
 // FILE UPLOAD MIDDLEWARE
 app.use(
   fileUpload({
@@ -80,8 +80,6 @@ app.use('/api/v1/transactions/webhook', express.raw({ type: 'application/json' }
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-
-
 
 // INPUT SANITIZATION
 app.use(sanitizeInput);
@@ -141,6 +139,7 @@ app.get("/", (req, res) => {
       events: "/api/v1/events",
       transactions: "/api/v1/transactions", 
       tickets: "/api/v1/tickets",
+      bookings: "/api/v1/bookings",
       admin: "/api/v1/admin",
       notifications: "/api/v1/notifications",
     },
@@ -148,13 +147,13 @@ app.get("/", (req, res) => {
 });
 
 // Main API routes
-app.use("/api/v1/", authRouter);
+app.use("/api/v1/auth", authRouter); // Fixed: added /auth to match your auth routes
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/transactions", transactionRoutes); 
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/tickets", ticketRoutes);
+app.use("/api/v1/bookings", bookingRoutes); // Added booking routes
 app.use("/api/v1/admin", superAdminRoutes);
-
 
 // ERROR HANDLING
 // 404 handler
@@ -216,6 +215,16 @@ const startServer = async () => {
       console.log(` Paystack Mode: ${process.env.PAYSTACK_SECRET_KEY?.startsWith('sk_live') ? '🔴 LIVE' : '🟢 TEST'}`);
       console.log(`Cleanup scheduled: Daily at 2:00 AM`);
       console.log(" Server ready to accept connections");
+      
+      // Log all available routes
+      console.log("\n Available Routes:");
+      console.log(" - Auth: /api/v1/auth");
+      console.log(" - Events: /api/v1/events");
+      console.log(" - Transactions: /api/v1/transactions");
+      console.log(" - Tickets: /api/v1/tickets");
+      console.log(" - Bookings: /api/v1/bookings");
+      console.log(" - Notifications: /api/v1/notifications");
+      console.log(" - Admin: /api/v1/admin");
     });
   } catch (error) {
     console.error("Error connecting to the database:", error);

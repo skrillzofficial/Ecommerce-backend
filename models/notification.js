@@ -1,4 +1,3 @@
-// models/Notification.js
 const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
@@ -6,7 +5,7 @@ const notificationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    index: true // For faster queries
+    index: true
   },
   type: {
     type: String,
@@ -14,9 +13,15 @@ const notificationSchema = new mongoose.Schema({
       'ticket_purchase', 
       'event_reminder', 
       'event_update', 
+      'event_cancelled', // ADDED: For cancelled events
+      'booking_confirmed', // ADDED: Booking status updates
+      'booking_cancelled', // ADDED: Booking cancellations
+      'payment_success', // ADDED: Payment confirmations
+      'payment_failed', // ADDED: Payment failures
+      'refund_processed', // ADDED: Refund notifications
       'system', 
       'promotional',
-      'login_alert', // New type for login notifications
+      'login_alert',
       'security_alert',
       'profile_update'
     ],
@@ -39,7 +44,7 @@ const notificationSchema = new mongoose.Schema({
   isRead: {
     type: Boolean,
     default: false,
-    index: true // For faster unread notifications queries
+    index: true
   },
   priority: {
     type: String,
@@ -52,11 +57,18 @@ const notificationSchema = new mongoose.Schema({
   },
   relatedEntityModel: {
     type: String,
-    enum: ['Event', 'Ticket', 'User', 'LoginSession', null]
+    enum: ['Event', 'Ticket', 'Booking', 'Transaction', 'User', 'LoginSession', null]
   },
   expiresAt: {
     type: Date,
-    default: null // For temporary notifications that auto-delete
+    default: null
+  },
+  // ADDED: Delivery status for push/email notifications
+  deliveryStatus: {
+    inApp: { type: Boolean, default: true },
+    email: { type: Boolean, default: false },
+    push: { type: Boolean, default: false },
+    sms: { type: Boolean, default: false }
   }
 }, {
   timestamps: true,
@@ -64,15 +76,23 @@ const notificationSchema = new mongoose.Schema({
   toObject: { virtuals: true }
 });
 
-// Index for better query performance
+// Indexes
 notificationSchema.index({ user: 1, createdAt: -1 });
 notificationSchema.index({ user: 1, isRead: 1, createdAt: -1 });
-notificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // Auto-delete expired notifications
+notificationSchema.index({ type: 1, createdAt: -1 }); // ADDED: For type-based queries
+notificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Virtual for checking if notification is expired
 notificationSchema.virtual('isExpired').get(function() {
   return this.expiresAt && this.expiresAt < new Date();
 });
+
+// Virtual for notification age in hours
+notificationSchema.virtual('ageInHours').get(function() {
+  return (new Date() - this.createdAt) / (1000 * 60 * 60);
+});
+
+// ============ STATIC METHODS ============
 
 // Static method to create login notification
 notificationSchema.statics.createLoginNotification = async function(userId, loginData) {
@@ -106,28 +126,29 @@ notificationSchema.statics.createLoginNotification = async function(userId, logi
   });
 };
 
-// Static method to create ticket purchase notification
-notificationSchema.statics.createTicketPurchaseNotification = async function(userId, ticketData, eventData) {
+// UPDATED: Ticket purchase notification to match your schemas
+notificationSchema.statics.createTicketPurchaseNotification = async function(userId, bookingData, eventData) {
   return await this.create({
     user: userId,
     type: 'ticket_purchase',
     title: '🎉 Ticket Purchase Confirmed!',
-    message: `You successfully purchased ${ticketData.quantity} ticket(s) for "${eventData.title}"`,
+    message: `You successfully purchased ${bookingData.totalTickets} ticket(s) for "${eventData.title}"`,
     data: {
-      ticketId: ticketData._id,
+      bookingId: bookingData._id,
       eventId: eventData._id,
       eventTitle: eventData.title,
-      ticketQuantity: ticketData.quantity,
-      totalAmount: ticketData.totalAmount,
-      eventDate: eventData.date
+      ticketQuantity: bookingData.totalTickets,
+      totalAmount: bookingData.totalAmount,
+      eventStartDate: eventData.startDate, // UPDATED: Use startDate
+      orderNumber: bookingData.orderNumber
     },
-    relatedEntity: ticketData._id,
-    relatedEntityModel: 'Ticket',
+    relatedEntity: bookingData._id,
+    relatedEntityModel: 'Booking',
     priority: 'medium'
   });
 };
 
-// Static method to create event reminder notification
+// UPDATED: Event reminder notification to match your schemas
 notificationSchema.statics.createEventReminderNotification = async function(userId, eventData, daysUntil) {
   return await this.create({
     user: userId,
@@ -137,13 +158,106 @@ notificationSchema.statics.createEventReminderNotification = async function(user
     data: {
       eventId: eventData._id,
       eventTitle: eventData.title,
-      eventDate: eventData.date,
+      eventStartDate: eventData.startDate, // UPDATED: Use startDate
+      eventEndDate: eventData.endDate, // ADDED: For multi-day events
       daysUntil: daysUntil
     },
     relatedEntity: eventData._id,
     relatedEntityModel: 'Event',
     priority: 'medium',
-    expiresAt: new Date(eventData.date) // Auto-delete after event
+    expiresAt: new Date(eventData.startDate) // UPDATED: Use startDate
+  });
+};
+
+// NEW: Booking confirmation notification
+notificationSchema.statics.createBookingConfirmationNotification = async function(userId, bookingData) {
+  return await this.create({
+    user: userId,
+    type: 'booking_confirmed',
+    title: '✅ Booking Confirmed',
+    message: `Your booking #${bookingData.orderNumber} has been confirmed.`,
+    data: {
+      bookingId: bookingData._id,
+      orderNumber: bookingData.orderNumber,
+      totalTickets: bookingData.totalTickets,
+      totalAmount: bookingData.totalAmount
+    },
+    relatedEntity: bookingData._id,
+    relatedEntityModel: 'Booking',
+    priority: 'medium'
+  });
+};
+
+// NEW: Payment success notification
+notificationSchema.statics.createPaymentSuccessNotification = async function(userId, transactionData) {
+  return await this.create({
+    user: userId,
+    type: 'payment_success',
+    title: '💳 Payment Successful',
+    message: `Your payment of ${transactionData.currency} ${transactionData.totalAmount} was processed successfully.`,
+    data: {
+      transactionId: transactionData._id,
+      reference: transactionData.reference,
+      amount: transactionData.totalAmount,
+      currency: transactionData.currency
+    },
+    relatedEntity: transactionData._id,
+    relatedEntityModel: 'Transaction',
+    priority: 'medium'
+  });
+};
+
+// NEW: Payment failed notification
+notificationSchema.statics.createPaymentFailedNotification = async function(userId, transactionData) {
+  return await this.create({
+    user: userId,
+    type: 'payment_failed',
+    title: '❌ Payment Failed',
+    message: `Your payment failed. Reason: ${transactionData.failureReason || 'Unknown error'}`,
+    data: {
+      transactionId: transactionData._id,
+      reference: transactionData.reference,
+      failureReason: transactionData.failureReason,
+      attempts: transactionData.attempts
+    },
+    relatedEntity: transactionData._id,
+    relatedEntityModel: 'Transaction',
+    priority: 'high'
+  });
+};
+
+// NEW: Refund processed notification
+notificationSchema.statics.createRefundNotification = async function(userId, refundData) {
+  return await this.create({
+    user: userId,
+    type: 'refund_processed',
+    title: '💰 Refund Processed',
+    message: `Your refund of ${refundData.currency} ${refundData.amount} has been processed.`,
+    data: {
+      refundAmount: refundData.amount,
+      currency: refundData.currency,
+      refundDate: refundData.processedAt,
+      reason: refundData.reason
+    },
+    priority: 'medium'
+  });
+};
+
+// NEW: Event cancellation notification
+notificationSchema.statics.createEventCancellationNotification = async function(userId, eventData) {
+  return await this.create({
+    user: userId,
+    type: 'event_cancelled',
+    title: '🚫 Event Cancelled',
+    message: `"${eventData.title}" has been cancelled. Your tickets will be refunded automatically.`,
+    data: {
+      eventId: eventData._id,
+      eventTitle: eventData.title,
+      cancellationReason: eventData.cancellationReason
+    },
+    relatedEntity: eventData._id,
+    relatedEntityModel: 'Event',
+    priority: 'high'
   });
 };
 
@@ -172,11 +286,27 @@ notificationSchema.statics.createSecurityAlertNotification = async function(user
   });
 };
 
+// ============ INSTANCE METHODS ============
+
 // Instance method to mark as read
 notificationSchema.methods.markAsRead = function() {
   this.isRead = true;
   return this.save();
 };
+
+// NEW: Mark for email delivery
+notificationSchema.methods.markEmailSent = function() {
+  this.deliveryStatus.email = true;
+  return this.save();
+};
+
+// NEW: Mark for push delivery
+notificationSchema.methods.markPushSent = function() {
+  this.deliveryStatus.push = true;
+  return this.save();
+};
+
+// ============ QUERY METHODS ============
 
 // Static method to get user notifications with pagination
 notificationSchema.statics.getUserNotifications = async function(userId, options = {}) {
@@ -221,6 +351,33 @@ notificationSchema.statics.getUserNotifications = async function(userId, options
       isRead: false 
     })
   };
+};
+
+// NEW: Get unread notifications count
+notificationSchema.statics.getUnreadCount = async function(userId) {
+  return await this.countDocuments({ 
+    user: userId, 
+    isRead: false 
+  });
+};
+
+// NEW: Mark all as read for user
+notificationSchema.statics.markAllAsRead = async function(userId) {
+  return await this.updateMany(
+    { user: userId, isRead: false },
+    { $set: { isRead: true } }
+  );
+};
+
+// NEW: Clean up old notifications (for cron job)
+notificationSchema.statics.cleanupOldNotifications = async function(daysOld = 90) {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+
+  return await this.deleteMany({
+    createdAt: { $lt: cutoffDate },
+    priority: { $in: ['low', 'medium'] } // Keep high/critical notifications longer
+  });
 };
 
 module.exports = mongoose.model('Notification', notificationSchema);

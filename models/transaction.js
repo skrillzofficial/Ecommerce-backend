@@ -7,7 +7,7 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      index: true,
+      index: true, // ✅ KEEP this - remove the separate index below
     },
     transactionId: {
       type: String,
@@ -20,75 +20,62 @@ const transactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true,
-    },
-    email: {
-      type: String,
-      required: true,
-      lowercase: true,
-      trim: true,
-    },
-    userName: {
-      type: String,
-      trim: true,
-    },
-    userPhone: {
-      type: String,
-      trim: true,
+      index: true, // ✅ KEEP this
     },
 
-    // Event & Ticket Information
+    // Event & Booking Information
     eventId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
       required: true,
-      index: true,
+      index: true, // ✅ KEEP this
     },
+    bookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Booking",
+      required: true,
+      index: true, // ✅ KEEP this - remove the separate index below
+    },
+
+    // Event Snapshot
     eventTitle: {
       type: String,
       required: true,
     },
-    eventDate: {
+    eventStartDate: {
       type: Date,
       required: true,
+    },
+    eventEndDate: {
+      type: Date,
     },
     eventOrganizer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
 
-    // Ticket Details with Types Support
-    tickets: [
-      {
-        ticketId: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Ticket",
-        },
-        ticketType: {
-          type: String,
-          enum: ["Regular", "VIP", "VVIP"],
-          required: true,
-        },
-        quantity: {
-          type: Number,
-          required: true,
-          min: 1,
-        },
-        unitPrice: {
-          type: Number,
-          required: true,
-          min: 0,
-        },
-        subtotal: {
-          type: Number,
-          required: true,
-          min: 0,
-        },
-      },
-    ],
-
     // Pricing
-    amount: {
+    subtotalAmount: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    serviceFee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    taxAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    discountAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalAmount: {
       type: Number,
       required: true,
       min: 0,
@@ -99,47 +86,29 @@ const transactionSchema = new mongoose.Schema(
       uppercase: true,
       enum: ["NGN", "USD", "EUR", "GBP"],
     },
-    serviceFee: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    totalAmount: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
 
     // Payment Status
     status: {
       type: String,
       enum: [
         "pending",
-        "success",
+        "processing",
+        "completed",
         "failed",
-        "abandoned",
         "refunded",
         "partially_refunded",
       ],
       default: "pending",
-      index: true,
-    },
-    paymentChannel: {
-      type: String,
-      enum: [
-        "card",
-        "bank",
-        "ussd",
-        "qr",
-        "mobile_money",
-        "bank_transfer",
-        "eft",
-      ],
-      default: null,
+      index: true, // ✅ KEEP this
     },
     paymentMethod: {
       type: String,
-      default: null,
+      enum: ["card", "bank_transfer", "wallet", "free"],
+      required: true,
+    },
+    paymentGateway: {
+      type: String,
+      default: "paystack",
     },
 
     // Paystack Integration
@@ -191,80 +160,64 @@ const transactionSchema = new mongoose.Schema(
 
     authorizationUrl: {
       type: String,
-      default: null,
     },
     accessCode: {
       type: String,
-      default: null,
     },
 
-    // Transaction Metadata
-    metadata: {
-      orderId: String,
-      ticketNumbers: [String],
-      qrCodes: [String],
-      bookingReference: String,
-      customFields: mongoose.Schema.Types.Mixed,
+    // Transaction Timeline
+    transactionDate: {
+      type: Date,
+      default: Date.now,
+      index: true, // ✅ KEEP this
     },
-
-    // Timestamps
     paidAt: {
       type: Date,
-      default: null,
-      index: true,
+      index: true, // ✅ KEEP this
     },
-    verifiedAt: {
+    failedAt: {
       type: Date,
-      default: null,
+    },
+
+    // Refund Information
+    refundStatus: {
+      type: String,
+      enum: ["none", "requested", "approved", "processing", "completed", "denied"],
+      default: "none",
+    },
+    refundAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    refundReason: {
+      type: String,
+      maxlength: [500, "Refund reason cannot exceed 500 characters"],
+    },
+    refundedAt: {
+      type: Date,
+    },
+    refundDetails: {
+      gatewayRefundId: String,
+      refundMethod: String,
+      notes: String,
     },
 
     // Failure Tracking
     failureReason: {
       type: String,
-      default: null,
     },
     attempts: {
       type: Number,
       default: 0,
     },
 
-    // Refund Information
-    refund: {
-      status: {
-        type: String,
-        enum: [
-          "not_requested",
-          "requested",
-          "processing",
-          "completed",
-          "rejected",
-        ],
-        default: "not_requested",
-      },
-      requestedAt: Date,
-      processedAt: Date,
-      amount: Number,
-      reason: String,
-      refundReference: String,
-      refundedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-      rejectionReason: String,
-    },
-
     // Tracking
     ipAddress: {
       type: String,
-      default: null,
     },
     userAgent: {
       type: String,
-      default: null,
-    },
-    deviceInfo: {
-      type: String,
-      default: null,
     },
 
     // Notification
@@ -284,20 +237,20 @@ const transactionSchema = new mongoose.Schema(
   }
 );
 
-// ============ INDEXES ============
-transactionSchema.index({ email: 1, status: 1 });
-transactionSchema.index({ createdAt: -1 });
-transactionSchema.index({ userId: 1, status: 1 });
+// Indexes - REMOVED DUPLICATES
+// ❌ REMOVED: transactionSchema.index({ reference: 1 }); // Duplicate of field definition
+// ❌ REMOVED: transactionSchema.index({ bookingId: 1 }); // Duplicate of field definition
+
+transactionSchema.index({ userId: 1, transactionDate: -1 });
 transactionSchema.index({ eventId: 1, status: 1 });
-transactionSchema.index({ "tickets.ticketId": 1 });
-transactionSchema.index({ paidAt: -1 });
-transactionSchema.index({ reference: 1, status: 1 });
+transactionSchema.index({ status: 1, transactionDate: -1 });
+transactionSchema.index({ "refundStatus": 1 });
 
 // ============ VIRTUALS ============
 
 // Amount in main currency (not kobo)
 transactionSchema.virtual("amountInCurrency").get(function () {
-  return this.amount / 100;
+  return this.subtotalAmount / 100;
 });
 
 // Total amount in main currency
@@ -305,46 +258,39 @@ transactionSchema.virtual("totalAmountInCurrency").get(function () {
   return this.totalAmount / 100;
 });
 
-// Total tickets count
-transactionSchema.virtual("totalTickets").get(function () {
-  return this.tickets.reduce((sum, ticket) => sum + ticket.quantity, 0);
+// Is successful transaction
+transactionSchema.virtual("isSuccessful").get(function () {
+  return this.status === "completed";
+});
+
+// Is pending transaction
+transactionSchema.virtual("isPending").get(function () {
+  return this.status === "pending" || this.status === "processing";
 });
 
 // Is refundable
 transactionSchema.virtual("isRefundable").get(function () {
   return (
-    this.status === "success" &&
-    this.refund.status === "not_requested" &&
-    this.eventDate > new Date()
+    this.status === "completed" &&
+    this.refundStatus === "none" &&
+    this.eventStartDate > new Date()
   );
+});
+
+// Payment age in hours
+transactionSchema.virtual("paymentAge").get(function () {
+  if (!this.paidAt) return null;
+  return (new Date() - this.paidAt) / (1000 * 60 * 60);
 });
 
 // ============ INSTANCE METHODS ============
 
-// Check if transaction is pending
-transactionSchema.methods.isPending = function () {
-  return this.status === "pending";
-};
-
-// Check if transaction is successful
-transactionSchema.methods.isSuccessful = function () {
-  return this.status === "success";
-};
-
-// Check if transaction is refunded
-transactionSchema.methods.isRefunded = function () {
-  return this.status === "refunded" || this.status === "partially_refunded";
-};
-
-// Mark as paid
-transactionSchema.methods.markAsPaid = async function (paystackData) {
-  this.status = "success";
+// Mark as completed
+transactionSchema.methods.markAsCompleted = async function (paystackData) {
+  this.status = "completed";
   this.paidAt = new Date();
-  this.verifiedAt = new Date();
   this.paystackData = paystackData;
-  this.paymentChannel = paystackData.channel;
-  this.paymentMethod =
-    paystackData.authorization?.card_type || paystackData.channel;
+  this.paymentMethod = paystackData.channel;
 
   return await this.save();
 };
@@ -353,65 +299,51 @@ transactionSchema.methods.markAsPaid = async function (paystackData) {
 transactionSchema.methods.markAsFailed = async function (reason) {
   this.status = "failed";
   this.failureReason = reason;
+  this.failedAt = new Date();
   this.attempts += 1;
 
   return await this.save();
 };
 
 // Request refund
-transactionSchema.methods.requestRefund = async function (reason, requestedBy) {
+transactionSchema.methods.requestRefund = async function (reason) {
   if (!this.isRefundable) {
     throw new Error("Transaction is not eligible for refund");
   }
 
-  this.refund = {
-    status: "requested",
-    requestedAt: new Date(),
-    reason: reason,
-    amount: this.totalAmount,
-  };
+  this.refundStatus = "requested";
+  this.refundReason = reason;
+  this.refundAmount = this.totalAmount;
 
   return await this.save();
 };
 
 // Process refund
-transactionSchema.methods.processRefund = async function (
-  refundedBy,
-  refundReference
-) {
-  if (this.refund.status !== "requested") {
-    throw new Error("No refund request found");
+transactionSchema.methods.processRefund = async function (refundData = {}) {
+  if (this.refundStatus !== "requested" && this.refundStatus !== "approved") {
+    throw new Error("Refund must be requested or approved before processing");
   }
 
-  this.refund.status = "completed";
-  this.refund.processedAt = new Date();
-  this.refund.refundedBy = refundedBy;
-  this.refund.refundReference = refundReference;
+  this.refundStatus = "processing";
+  this.refundDetails = {
+    gatewayRefundId: refundData.gatewayRefundId,
+    refundMethod: refundData.refundMethod || this.paymentMethod,
+    notes: refundData.notes,
+  };
+
+  return await this.save();
+};
+
+// Complete refund
+transactionSchema.methods.completeRefund = async function () {
+  if (this.refundStatus !== "processing") {
+    throw new Error("Refund must be processing to complete");
+  }
+
+  this.refundStatus = "completed";
   this.status = "refunded";
+  this.refundedAt = new Date();
 
-  return await this.save();
-};
-
-// Reject refund
-transactionSchema.methods.rejectRefund = async function (
-  rejectionReason,
-  rejectedBy
-) {
-  if (this.refund.status !== "requested") {
-    throw new Error("No refund request found");
-  }
-
-  this.refund.status = "rejected";
-  this.refund.processedAt = new Date();
-  this.refund.rejectionReason = rejectionReason;
-  this.refund.refundedBy = rejectedBy;
-
-  return await this.save();
-};
-
-// Update metadata
-transactionSchema.methods.updateMetadata = async function (newMetadata) {
-  this.metadata = { ...this.metadata, ...newMetadata };
   return await this.save();
 };
 
@@ -423,91 +355,78 @@ transactionSchema.statics.findByReference = function (reference) {
 };
 
 // Get user transactions
-transactionSchema.statics.getUserTransactions = function (
-  userId,
-  options = {}
-) {
-  const { limit = 10, status, eventId } = options;
+transactionSchema.statics.findByUser = function (userId, options = {}) {
+  const { status, page = 1, limit = 20, sort = "-transactionDate" } = options;
 
   const query = { userId };
   if (status) query.status = status;
-  if (eventId) query.eventId = eventId;
 
   return this.find(query)
-    .sort({ createdAt: -1 })
-    .limit(limit)
-    .populate("eventId", "title date venue city")
-    .populate("tickets.ticketId", "ticketNumber qrCode status");
+    .populate("eventId", "title startDate venue city images")
+    .populate("bookingId", "orderNumber totalTickets")
+    .sort(sort)
+    .skip((page - 1) * limit)
+    .limit(limit);
 };
 
 // Get event transactions
-transactionSchema.statics.getEventTransactions = function (
-  eventId,
-  options = {}
-) {
-  const { status, limit } = options;
+transactionSchema.statics.findByEvent = function (eventId, options = {}) {
+  const { status, page = 1, limit = 50 } = options;
 
   const query = { eventId };
   if (status) query.status = status;
 
-  const queryBuilder = this.find(query)
-    .sort({ createdAt: -1 })
-    .populate("userId", "firstName lastName email phone");
-
-  if (limit) queryBuilder.limit(limit);
-
-  return queryBuilder;
+  return this.find(query)
+    .populate("userId", "firstName lastName email phone")
+    .populate("bookingId", "orderNumber totalTickets")
+    .sort({ transactionDate: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit);
 };
 
-// Get successful transactions
-transactionSchema.statics.getSuccessfulTransactions = function (filters = {}) {
-  return this.find({ ...filters, status: "success" })
-    .sort({ paidAt: -1 })
-    .populate("eventId", "title date venue")
+// Get transactions by booking
+transactionSchema.statics.findByBooking = function (bookingId) {
+  return this.find({ bookingId })
+    .populate("eventId", "title startDate venue")
     .populate("userId", "firstName lastName email");
 };
 
-// Get transactions by ticket
-transactionSchema.statics.getByTicketId = function (ticketId) {
-  return this.findOne({ "tickets.ticketId": ticketId });
-};
-
 // Get revenue statistics
-transactionSchema.statics.getRevenueStats = async function (filters = {}) {
-  const matchQuery = { status: "success" };
-
-  if (filters.eventId)
-    matchQuery.eventId = new mongoose.Types.ObjectId(filters.eventId);
-  if (filters.organizerId)
-    matchQuery.eventOrganizer = new mongoose.Types.ObjectId(
-      filters.organizerId
-    );
-  if (filters.startDate || filters.endDate) {
-    matchQuery.paidAt = {};
-    if (filters.startDate) matchQuery.paidAt.$gte = new Date(filters.startDate);
-    if (filters.endDate) matchQuery.paidAt.$lte = new Date(filters.endDate);
-  }
+transactionSchema.statics.getRevenueStats = async function (organizerId, period = "month") {
+  const dateFilter = getDateFilter(period);
 
   const stats = await this.aggregate([
-    { $match: matchQuery },
+    {
+      $match: {
+        status: "completed",
+        transactionDate: dateFilter,
+      },
+    },
+    {
+      $lookup: {
+        from: "events",
+        localField: "eventId",
+        foreignField: "_id",
+        as: "event",
+      },
+    },
+    {
+      $unwind: "$event",
+    },
+    {
+      $match: {
+        "event.organizer": new mongoose.Types.ObjectId(organizerId),
+      },
+    },
     {
       $group: {
         _id: null,
         totalRevenue: { $sum: "$totalAmount" },
         totalTransactions: { $sum: 1 },
-        totalTickets: {
-          $sum: {
-            $reduce: {
-              input: "$tickets",
-              initialValue: 0,
-              in: { $add: ["$$value", "$$this.quantity"] },
-            },
-          },
-        },
-        avgTransactionValue: { $avg: "$totalAmount" },
-        revenueByChannel: {
+        averageTransactionValue: { $avg: "$totalAmount" },
+        revenueByPaymentMethod: {
           $push: {
-            channel: "$paymentChannel",
+            method: "$paymentMethod",
             amount: "$totalAmount",
           },
         },
@@ -519,21 +438,21 @@ transactionSchema.statics.getRevenueStats = async function (filters = {}) {
     stats[0] || {
       totalRevenue: 0,
       totalTransactions: 0,
-      totalTickets: 0,
-      avgTransactionValue: 0,
-      revenueByChannel: [],
+      averageTransactionValue: 0,
+      revenueByPaymentMethod: [],
     }
   );
 };
 
-// Get pending refunds
-transactionSchema.statics.getPendingRefunds = function () {
+// Get pending transactions (for cleanup)
+transactionSchema.statics.getPendingTransactions = function (hoursOld = 24) {
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() - hoursOld);
+
   return this.find({
-    "refund.status": "requested",
-  })
-    .sort({ "refund.requestedAt": 1 })
-    .populate("userId", "firstName lastName email")
-    .populate("eventId", "title date");
+    status: "pending",
+    createdAt: { $lt: cutoff },
+  });
 };
 
 // ============ MIDDLEWARE ============
@@ -544,25 +463,45 @@ transactionSchema.pre("save", function (next) {
   if (this.isNew && !this.transactionId) {
     this.transactionId = `TXN-${Date.now()}-${Math.random()
       .toString(36)
-      .substr(2, 9)
+      .substring(2, 8)
       .toUpperCase()}`;
   }
 
-  // Calculate total amount if not set
-  if (!this.totalAmount && this.amount) {
-    this.totalAmount = this.amount + (this.serviceFee || 0);
+  // Set transaction date
+  if (!this.transactionDate) {
+    this.transactionDate = new Date();
   }
 
   next();
 });
 
-// Post-save hook for notifications
-transactionSchema.post("save", async function (doc) {
-  // You can emit events here for email notifications, webhooks, etc.
-  if (doc.status === "success" && !doc.notificationSent) {
-    // Trigger email notification
-    // EventEmitter or Queue system can be used here
+// Helper function for date filtering
+function getDateFilter(period) {
+  const now = new Date();
+  const filter = {};
+
+  switch (period) {
+    case "today":
+      filter.$gte = new Date(now.setHours(0, 0, 0, 0));
+      filter.$lte = new Date(now.setHours(23, 59, 59, 999));
+      break;
+    case "week":
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - now.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+      filter.$gte = startOfWeek;
+      break;
+    case "month":
+      filter.$gte = new Date(now.getFullYear(), now.getMonth(), 1);
+      break;
+    case "year":
+      filter.$gte = new Date(now.getFullYear(), 0, 1);
+      break;
+    default:
+      filter.$gte = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   }
-});
+
+  return filter;
+}
 
 module.exports = mongoose.model("Transaction", transactionSchema);

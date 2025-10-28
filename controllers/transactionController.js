@@ -1,883 +1,585 @@
 const Transaction = require('../models/transaction');
+const Booking = require('../models/booking');
 const Event = require('../models/event');
-const Ticket = require('../models/ticket');
 const User = require('../models/user');
 const { initializePayment, verifyPayment } = require('../service/paystackService');
-const { sendPaymentEmail, sendBookingEmail } = require('../utils/sendEmail');
+const ErrorResponse = require('../utils/errorResponse');
 const crypto = require('crypto');
-const Paystack = require('../service/paystackService');
 
-// Helper functions for webhook
-async function handleSuccessfulCharge(data) {
-  const transaction = await Transaction.findByReference(data.reference);
-  if (transaction && transaction.status === 'pending') {
-    await transaction.markAsPaid(data);
-  }
-}
-
-async function handleFailedCharge(data) {
-  const transaction = await Transaction.findByReference(data.reference);
-  if (transaction) {
-    await transaction.markAsFailed(data.gateway_response);
-  }
-}
-
-async function handleRefundProcessed(data) {
-  const transaction = await Transaction.findByReference(data.reference);
-  if (transaction) {
-    await transaction.processRefund(null, data.refund_reference);
-  }
-}
-
-// @desc    Initialize payment for event booking
-// @route   POST /api/transactions/initialize
+// @desc    Initialize transaction for booking
+// @route   POST /api/v1/transactions/initialize
 // @access  Private
-const initializeTransaction = async (req, res) => {
+const initializeTransaction = async (req, res, next) => {
   try {
-    const { eventId, tickets, userInfo } = req.body;
-    const userId = req.user._id;
+    const { bookingId, amount, email, ticketDetails } = req.body;
 
-    // Validate input
-    if (!eventId || !tickets || tickets.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Event ID and tickets are required'
-      });
+    // Validate required fields
+    if (!bookingId || !amount || !email) {
+      return next(new ErrorResponse('Booking ID, amount, and email are required', 400));
     }
 
-    // Get event
-    const event = await Event.findById(eventId);
-    if (!event) {
-      return res.status(404).json({
-        success: false,
-        message: 'Event not found'
-      });
+    // Verify booking exists and belongs to user
+    const booking = await Booking.findOne({
+      _id: bookingId,
+      userId: req.user.userId
+    });
+
+    if (!booking) {
+      return next(new ErrorResponse('Booking not found', 404));
     }
-
-    // Validate event is bookable
-    if (event.status !== 'published') {
-      return res.status(400).json({
-        success: false,
-        message: 'Event is not available for booking'
-      });
-    }
-
-    if (event.date < new Date()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot book tickets for past events'
-      });
-    }
-
-    // Calculate total amount and validate tickets
-    let totalAmount = 0;
-    const ticketDetails = [];
-
-    for (const ticket of tickets) {
-      const ticketType = event.ticketTypes.find(
-        tt => tt.name === ticket.ticketType
-      );
-
-      if (!ticketType) {
-        return res.status(400).json({
-          success: false,
-          message: `Ticket type ${ticket.ticketType} not found`
-        });
-      }
-
-      if (ticketType.availableTickets < ticket.quantity) {
-        return res.status(400).json({
-          success: false,
-          message: `Not enough ${ticket.ticketType} tickets available`
-        });
-      }
-
-      const subtotal = ticketType.price * ticket.quantity;
-      totalAmount += subtotal;
-
-      ticketDetails.push({
-        ticketType: ticket.ticketType,
-        quantity: ticket.quantity,
-        unitPrice: ticketType.price,
-        subtotal: subtotal
-      });
-    }
-
-    // Calculate service fee (2.5% + 100 NGN flat fee)
-    const serviceFee = Math.round((totalAmount * 0.025) + 100);
-    const finalAmount = totalAmount + serviceFee;
-
-    // Generate unique reference
-    const reference = `TXN-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
     // Create transaction record
-    const transaction = new Transaction({
-      reference,
-      userId,
-      email: userInfo?.email || req.user.email,
-      userName: userInfo?.name || `${req.user.firstName} ${req.user.lastName}`,
-      userPhone: userInfo?.phone || req.user.phone,
-      eventId: event._id,
-      eventTitle: event.title,
-      eventDate: event.date,
-      eventOrganizer: event.organizer,
-      tickets: ticketDetails,
-      amount: totalAmount,
-      serviceFee,
-      totalAmount: finalAmount,
-      currency: event.currency,
+    const transaction = await Transaction.create({
+      userId: req.user.userId,
+      bookingId: bookingId,
+      eventId: booking.eventId,
+      amount: amount,
+      currency: 'NGN',
+      type: 'event_booking',
       status: 'pending',
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
+      paymentMethod: 'paystack'
     });
 
-    await transaction.save();
-
-    // Initialize Paystack payment
-    const paystackResponse = await initializePayment({
-      email: transaction.email,
-      amount: finalAmount * 1, 
-      reference: reference,
+    // Initialize payment with Paystack
+    const paymentData = {
+      email: email,
+      amount: Math.round(amount * 100), // Convert to kobo
+      reference: transaction.reference,
       metadata: {
-        transactionId: transaction._id,
-        eventId: event._id,
-        eventTitle: event.title,
-        userId: userId,
-        tickets: ticketDetails
-      },
-      callback_url: `${process.env.FRONTEND_URL}/payment/verify?reference=${reference}`
-    });
+        bookingId: bookingId,
+        userId: req.user.userId,
+        ticketDetails: ticketDetails
+      }
+    };
 
-    // Update transaction with Paystack data
-    transaction.authorizationUrl = paystackResponse.data.authorization_url;
-    transaction.accessCode = paystackResponse.data.access_code;
+    const paymentResponse = await initializePayment(paymentData);
+
+    // Update transaction with payment authorization URL
+    transaction.paymentUrl = paymentResponse.data.authorization_url;
     await transaction.save();
 
     res.status(200).json({
       success: true,
       message: 'Payment initialized successfully',
       data: {
-        transactionId: transaction._id,
-        reference: transaction.reference,
-        authorizationUrl: transaction.authorizationUrl,
-        accessCode: transaction.accessCode,
-        amount: transaction.totalAmount,
-        currency: transaction.currency
+        transaction: transaction,
+        paymentUrl: paymentResponse.data.authorization_url,
+        reference: transaction.reference
       }
     });
 
   } catch (error) {
-    console.error('Initialize transaction error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to initialize payment',
-      error: error.message
-    });
+    next(error);
   }
 };
 
-// @desc    Verify payment
-// @route   GET /api/transactions/verify/:reference
+// @desc    Verify transaction payment
+// @route   GET /api/v1/transactions/verify/:reference
 // @access  Public
-const verifyTransaction = async (req, res) => {
+const verifyTransaction = async (req, res, next) => {
   try {
     const { reference } = req.params;
 
-    // Find transaction
-    const transaction = await Transaction.findByReference(reference);
+    const transaction = await Transaction.findOne({ reference });
     if (!transaction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
+      return next(new ErrorResponse('Transaction not found', 404));
     }
 
-    // Check if already verified
-    if (transaction.status === 'success') {
-      return res.status(200).json({
-        success: true,
-        message: 'Transaction already verified',
-        data: {
-          transaction,
-          alreadyVerified: true
-        }
-      });
-    }
+    // Verify payment with Paystack
+    const verification = await verifyPayment(reference);
 
-    // Verify with Paystack
-    const paystackResponse = await verifyPayment(reference);
+    if (verification.data.status === 'success') {
+      // Update transaction status
+      await transaction.markAsCompleted(verification.data);
 
-    if (paystackResponse.data.status === 'success') {
-      // Mark transaction as paid
-      await transaction.markAsPaid(paystackResponse.data);
-
-      // Get event
-      const event = await Event.findById(transaction.eventId);
-      
-      // Book tickets for each ticket type
-      const bookedTickets = [];
-      for (const ticketItem of transaction.tickets) {
-        const bookingResult = await event.bookTicket(
-          transaction.userId,
-          {
-            name: transaction.userName,
-            email: transaction.email,
-            phone: transaction.userPhone
-          },
-          ticketItem.ticketType,
-          ticketItem.quantity
-        );
-
-        bookedTickets.push(bookingResult);
-      }
-
-      // Update transaction with ticket IDs
-      await transaction.updateMetadata({
-        ticketIds: bookedTickets.map(t => t.ticketId),
-        ticketNumbers: bookedTickets.map(t => t.ticketNumber),
-        qrCodes: bookedTickets.map(t => t.qrCode),
-        bookingReference: `BK-${Date.now()}`
+      // Update booking status
+      await Booking.findByIdAndUpdate(transaction.bookingId, {
+        paymentStatus: 'completed',
+        status: 'confirmed'
       });
 
-      // Format payment date for email
-      const paymentDate = new Date().toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-
-      // Format amount for email
-      const formattedAmount = `₦${transaction.totalAmount.toLocaleString()}`;
-
-      // Send payment confirmation email
-      try {
-        await sendPaymentEmail({
-          fullName: transaction.userName,
-          email: transaction.email,
-          eventName: event.title,
-          paymentId: transaction.reference,
-          paymentDate: paymentDate,
-          amount: formattedAmount,
-          paymentMethod: 'Paystack',
-          bookingId: bookedTickets[0]?.ticketId?.toString() || transaction._id.toString(),
-          clientUrl: `${process.env.FRONTEND_URL}/bookings/${bookedTickets[0]?.ticketId || transaction._id}`
-        });
-      } catch (emailError) {
-        console.error("Failed to send payment email:", emailError);
-      }
-
-      // Send booking confirmation email with ticket details
-      try {
-        const eventDate = new Date(event.date).toLocaleDateString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric'
-        });
-
-        // Prepare detailed ticket information for email
-        const totalTicketDetails = `
-          <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="padding: 5px 0;"><strong>Ticket Summary:</strong></td>
-              <td style="padding: 5px 0; text-align: right;"></td>
-            </tr>
-            ${transaction.tickets.map(ticket => `
-              <tr>
-                <td style="padding: 5px 0;">${ticket.ticketType} x ${ticket.quantity}</td>
-                <td style="padding: 5px 0; text-align: right;">₦${(ticket.unitPrice * ticket.quantity).toLocaleString()}</td>
-              </tr>
-            `).join('')}
-            <tr>
-              <td style="padding: 5px 0;">Service Fee</td>
-              <td style="padding: 5px 0; text-align: right;">₦${transaction.serviceFee.toLocaleString()}</td>
-            </tr>
-            <tr style="border-top: 1px solid #e0e0e0;">
-              <td style="padding: 5px 0;"><strong>Total Amount</strong></td>
-              <td style="padding: 5px 0; text-align: right;"><strong>${formattedAmount}</strong></td>
-            </tr>
-          </table>
-        `;
-
-        await sendBookingEmail({
-          fullName: transaction.userName,
-          email: transaction.email,
-          eventName: event.title,
-          eventDate: eventDate,
-          eventTime: event.time,
-          eventVenue: event.venue,
-          eventAddress: event.address,
-          bookingId: bookedTickets[0]?.ticketId?.toString() || transaction._id.toString(),
-          ticketDetails: totalTicketDetails,
-          totalAmount: formattedAmount,
-          clientUrl: `${process.env.FRONTEND_URL}/bookings/${bookedTickets[0]?.ticketId || transaction._id}`
-        });
-      } catch (bookingEmailError) {
-        console.error("Failed to send booking confirmation email:", bookingEmailError);
+      // Update event ticket counts
+      const booking = await Booking.findById(transaction.bookingId);
+      if (booking && booking.eventId) {
+        await Event.updateTicketAvailability(booking.eventId, booking.totalTickets, 'decrement');
       }
 
       return res.status(200).json({
         success: true,
-        message: 'Payment verified and tickets booked successfully',
+        message: 'Payment verified successfully',
         data: {
-          transaction,
-          tickets: bookedTickets,
-          event: {
-            title: event.title,
-            date: event.date,
-            venue: event.venue,
-            address: event.address
-          }
+          transaction: transaction,
+          booking: booking
         }
       });
-
     } else {
-      // Payment failed
-      await transaction.markAsFailed(paystackResponse.data.gateway_response);
+      await transaction.markAsFailed('Payment verification failed');
+      
+      await Booking.findByIdAndUpdate(transaction.bookingId, {
+        paymentStatus: 'failed',
+        status: 'cancelled'
+      });
 
       return res.status(400).json({
         success: false,
         message: 'Payment verification failed',
         data: {
-          transaction,
-          reason: paystackResponse.data.gateway_response
+          transaction: transaction
         }
       });
     }
 
   } catch (error) {
-    console.error('Verify transaction error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to verify payment',
-      error: error.message
-    });
+    next(error);
   }
 };
-// Add this to your transaction controller
-// @desc    Initialize service fee payment for free events
-// @route   POST /api/transactions/initialize-service-fee
+
+// @desc    Get user transactions
+// @route   GET /api/v1/transactions/my-transactions
 // @access  Private
-const initializeServiceFeePayment = async (req, res) => {
+const getUserTransactions = async (req, res, next) => {
   try {
-    const { 
-      eventId, 
-      serviceFee, 
-      attendanceRange, 
-      userInfo,
-      eventData 
-    } = req.body;
-    const userId = req.user._id;
+    const { page = 1, limit = 10, status, type } = req.query;
+    const userId = req.user.userId;
 
-    // Validate input
-    if (!eventId || !serviceFee) {
-      return res.status(400).json({
-        success: false,
-        message: 'Event ID and service fee are required'
-      });
+    const query = { userId };
+    
+    // Add filters if provided
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (type && type !== 'all') {
+      query.type = type;
     }
 
-    // Get event (or create if it doesn't exist yet for drafts)
-    let event;
-    if (eventId.startsWith('draft-')) {
-      // This is a draft event being published
-      event = {
-        _id: eventId,
-        title: eventData?.title || 'New Event',
-        organizer: userId
-      };
-    } else {
-      event = await Event.findById(eventId);
-      if (!event) {
-        return res.status(404).json({
-          success: false,
-          message: 'Event not found'
-        });
-      }
-    }
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
 
-    // Generate unique reference for service fee
-    const reference = `SRV-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const [transactions, total] = await Promise.all([
+      Transaction.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .populate('eventId', 'title startDate venue images')
+        .populate('bookingId', 'orderNumber totalTickets'),
+      Transaction.countDocuments(query)
+    ]);
 
-    // Create service fee transaction record
-    const transaction = new Transaction({
-      reference,
-      userId,
-      email: userInfo?.email || req.user.email,
-      userName: userInfo?.name || `${req.user.firstName} ${req.user.lastName}`,
-      userPhone: userInfo?.phone || req.user.phone,
-      eventId: event._id,
-      eventTitle: eventData?.title || event.title,
-      eventOrganizer: event.organizer,
-      // Service fee specific fields
-      tickets: [{
-        ticketType: 'Platform Service Fee',
-        quantity: 1,
-        unitPrice: serviceFee,
-        subtotal: serviceFee
-      }],
-      amount: serviceFee,
-      serviceFee: 0, // No additional service fee on service fees
-      totalAmount: serviceFee,
-      currency: 'NGN',
-      status: 'pending',
-      paymentType: 'service_fee', // Differentiate from ticket payments
-      metadata: {
-        serviceType: 'free_event_publishing',
-        attendanceRange: attendanceRange,
-        eventData: eventData,
-        isFreeEvent: true
-      },
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
+    res.status(200).json({
+      success: true,
+      count: transactions.length,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+      data: transactions
     });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get single transaction
+// @route   GET /api/v1/transactions/:id
+// @access  Private
+const getTransaction = async (req, res, next) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id)
+      .populate('eventId', 'title startDate venue city images organizerInfo')
+      .populate('bookingId', 'orderNumber totalTickets ticketDetails attendeeInfo')
+      .populate('userId', 'firstName lastName email phone');
+
+    if (!transaction) {
+      return next(new ErrorResponse('Transaction not found', 404));
+    }
+
+    // Check authorization - user can view their own transactions or organizers can view their event transactions
+    const isOwner = transaction.userId._id.toString() === req.user.userId;
+    const isOrganizer = transaction.eventId?.organizerInfo?.organizerId?.toString() === req.user.userId;
+    
+    if (!isOwner && !isOrganizer && req.user.role !== 'superadmin') {
+      return next(new ErrorResponse('Not authorized to view this transaction', 403));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: transaction
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get event transactions
+// @route   GET /api/v1/transactions/event/:eventId
+// @access  Private (Organizer/Admin)
+const getEventTransactions = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+    const { page = 1, limit = 10, status } = req.query;
+
+    // Verify event exists and belongs to organizer
+    const event = await Event.findOne({
+      _id: eventId,
+      organizer: req.user.userId
+    });
+
+    if (!event && req.user.role !== 'superadmin') {
+      return next(new ErrorResponse('Event not found or not authorized', 404));
+    }
+
+    const query = { eventId };
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [transactions, total] = await Promise.all([
+      Transaction.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .populate('userId', 'firstName lastName email')
+        .populate('bookingId', 'orderNumber totalTickets ticketDetails'),
+      Transaction.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      count: transactions.length,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+      data: transactions
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Request refund
+// @route   POST /api/v1/transactions/:id/refund
+// @access  Private
+const requestRefund = async (req, res, next) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id);
+    
+    if (!transaction) {
+      return next(new ErrorResponse('Transaction not found', 404));
+    }
+
+    // Check if user owns the transaction
+    if (transaction.userId.toString() !== req.user.userId) {
+      return next(new ErrorResponse('Not authorized to request refund for this transaction', 403));
+    }
+
+    // Check if transaction is eligible for refund
+    if (transaction.status !== 'completed') {
+      return next(new ErrorResponse('Only completed transactions can be refunded', 400));
+    }
+
+    if (transaction.refundStatus && transaction.refundStatus !== 'none') {
+      return next(new ErrorResponse('Refund already requested or processed', 400));
+    }
+
+    // Check event refund policy
+    const event = await Event.findById(transaction.eventId);
+    if (!event) {
+      return next(new ErrorResponse('Event not found', 404));
+    }
+
+    const eventStartDate = new Date(event.startDate);
+    const daysUntilEvent = Math.ceil((eventStartDate - new Date()) / (1000 * 60 * 60 * 24));
+
+    if (daysUntilEvent < event.refundPolicy.minDaysBeforeEvent) {
+      return next(new ErrorResponse(`Refunds only allowed ${event.refundPolicy.minDaysBeforeEvent} days before event`, 400));
+    }
+
+    // Create refund request
+    transaction.refundStatus = 'requested';
+    transaction.refundRequestedAt = new Date();
+    transaction.refundReason = req.body.reason || 'Customer request';
+    await transaction.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Refund requested successfully',
+      data: transaction
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Process refund
+// @route   PUT /api/v1/transactions/:id/refund/process
+// @access  Private (Organizer/Admin)
+const processRefund = async (req, res, next) => {
+  try {
+    const { action, reason } = req.body; // action: 'approve' or 'reject'
+
+    const transaction = await Transaction.findById(req.params.id)
+      .populate('eventId')
+      .populate('bookingId');
+
+    if (!transaction) {
+      return next(new ErrorResponse('Transaction not found', 404));
+    }
+
+    // Check if user is event organizer or admin
+    const isOrganizer = transaction.eventId.organizer.toString() === req.user.userId;
+    if (!isOrganizer && req.user.role !== 'superadmin') {
+      return next(new ErrorResponse('Not authorized to process refunds for this event', 403));
+    }
+
+    if (transaction.refundStatus !== 'requested') {
+      return next(new ErrorResponse('No refund request pending', 400));
+    }
+
+    if (action === 'approve') {
+      // Process refund with Paystack
+      // This would typically call Paystack's refund API
+      transaction.refundStatus = 'approved';
+      transaction.refundProcessedAt = new Date();
+      transaction.refundAmount = transaction.amount * 0.8; // 80% refund as example
+      transaction.status = 'refunded';
+
+      // Update booking status
+      await Booking.findByIdAndUpdate(transaction.bookingId, {
+        status: 'refunded',
+        refundAmount: transaction.refundAmount
+      });
+
+      // Update event ticket availability
+      await Event.updateTicketAvailability(
+        transaction.eventId._id, 
+        transaction.bookingId.totalTickets, 
+        'increment'
+      );
+
+    } else if (action === 'reject') {
+      transaction.refundStatus = 'rejected';
+      transaction.refundRejectionReason = reason;
+    }
 
     await transaction.save();
 
-    // Initialize Paystack payment
-    const paystackResponse = await initializePayment({
-      email: transaction.email,
-      amount: serviceFee * 100, // Convert to kobo
-      reference: reference,
-      metadata: {
-        transactionId: transaction._id,
-        eventId: event._id,
-        eventTitle: event.title,
-        userId: userId,
-        paymentType: 'service_fee',
-        attendanceRange: attendanceRange
-      },
-      callback_url: `${process.env.FRONTEND_URL}/payment/verify?reference=${reference}&type=service_fee`
+    res.status(200).json({
+      success: true,
+      message: `Refund ${action}d successfully`,
+      data: transaction
     });
 
-    // Update transaction with Paystack data
-    transaction.authorizationUrl = paystackResponse.data.authorization_url;
-    transaction.accessCode = paystackResponse.data.access_code;
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get revenue statistics
+// @route   GET /api/v1/transactions/stats/revenue
+// @access  Private (Organizer/Admin)
+const getRevenueStats = async (req, res, next) => {
+  try {
+    const { period = 'month', eventId } = req.query;
+    const organizerId = req.user.userId;
+
+    let matchQuery = { 
+      status: 'completed',
+      type: 'event_booking'
+    };
+
+    // If not superadmin, only show organizer's events
+    if (req.user.role !== 'superadmin') {
+      const organizerEvents = await Event.find({ organizer: organizerId }).select('_id');
+      const eventIds = organizerEvents.map(event => event._id);
+      matchQuery.eventId = { $in: eventIds };
+    }
+
+    // Filter by specific event if provided
+    if (eventId) {
+      matchQuery.eventId = eventId;
+    }
+
+    // Date range based on period
+    let dateRange = {};
+    const now = new Date();
+    
+    switch (period) {
+      case 'week':
+        dateRange.startDate = new Date(now.setDate(now.getDate() - 7));
+        break;
+      case 'month':
+        dateRange.startDate = new Date(now.setMonth(now.getMonth() - 1));
+        break;
+      case 'quarter':
+        dateRange.startDate = new Date(now.setMonth(now.getMonth() - 3));
+        break;
+      case 'year':
+        dateRange.startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+        break;
+      default:
+        dateRange.startDate = new Date(now.setMonth(now.getMonth() - 1));
+    }
+
+    matchQuery.createdAt = { $gte: dateRange.startDate };
+
+    const stats = await Transaction.aggregate([
+      { $match: matchQuery },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$amount' },
+          totalTransactions: { $sum: 1 },
+          averageTransaction: { $avg: '$amount' }
+        }
+      }
+    ]);
+
+    const result = stats[0] || {
+      totalRevenue: 0,
+      totalTransactions: 0,
+      averageTransaction: 0
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        period,
+        ...result,
+        startDate: dateRange.startDate,
+        endDate: new Date()
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Initialize service fee payment
+// @route   POST /api/v1/transactions/initialize-service-fee
+// @access  Private (Organizer only)
+const initializeServiceFeePayment = async (req, res, next) => {
+  try {
+    const { eventId, amount, email } = req.body;
+
+    if (!eventId || !amount || !email) {
+      return next(new ErrorResponse('Event ID, amount, and email are required', 400));
+    }
+
+    // Verify event exists and belongs to organizer
+    const event = await Event.findOne({
+      _id: eventId,
+      organizer: req.user.userId
+    });
+
+    if (!event) {
+      return next(new ErrorResponse('Event not found', 404));
+    }
+
+    // Create service fee transaction
+    const transaction = await Transaction.create({
+      userId: req.user.userId,
+      eventId: eventId,
+      amount: amount,
+      currency: 'NGN',
+      type: 'service_fee',
+      status: 'pending',
+      paymentMethod: 'paystack'
+    });
+
+    // Initialize payment with Paystack
+    const paymentData = {
+      email: email,
+      amount: Math.round(amount * 100),
+      reference: transaction.reference,
+      metadata: {
+        eventId: eventId,
+        userId: req.user.userId,
+        type: 'service_fee'
+      }
+    };
+
+    const paymentResponse = await initializePayment(paymentData);
+
+    transaction.paymentUrl = paymentResponse.data.authorization_url;
     await transaction.save();
 
     res.status(200).json({
       success: true,
       message: 'Service fee payment initialized successfully',
       data: {
-        transactionId: transaction._id,
-        reference: transaction.reference,
-        authorizationUrl: transaction.authorizationUrl,
-        accessCode: transaction.accessCode,
-        amount: transaction.totalAmount,
-        currency: transaction.currency,
-        paymentType: 'service_fee'
+        transaction: transaction,
+        paymentUrl: paymentResponse.data.authorization_url,
+        reference: transaction.reference
       }
     });
 
   } catch (error) {
-    console.error('Initialize service fee payment error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to initialize service fee payment',
-      error: error.message
-    });
+    next(error);
   }
 };
 
-// @desc    Verify service fee payment and publish event
-// @route   POST /api/transactions/verify-service-fee/:reference
-// @access  Private
-const verifyServiceFeePayment = async (req, res) => {
+// @desc    Verify service fee payment
+// @route   POST /api/v1/transactions/verify-service-fee/:reference
+// @access  Public
+const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
-    const { eventData, agreementData } = req.body;
 
-    // Find transaction
-    const transaction = await Transaction.findByReference(reference);
+    const transaction = await Transaction.findOne({ 
+      reference,
+      type: 'service_fee'
+    });
+
     if (!transaction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
+      return next(new ErrorResponse('Service fee transaction not found', 404));
     }
 
-    // Verify with Paystack
-    const paystackResponse = await verifyPayment(reference);
+    const verification = await verifyPayment(reference);
 
-    if (paystackResponse.data.status === 'success') {
-      // Mark transaction as paid
-      await transaction.markAsPaid(paystackResponse.data);
+    if (verification.data.status === 'success') {
+      await transaction.markAsCompleted(verification.data);
 
-      // Update transaction with event publishing data
-      await transaction.updateMetadata({
-        ...transaction.metadata,
-        eventPublished: true,
-        agreementData: agreementData,
-        publishedAt: new Date()
+      // Update event status if this was for event publishing
+      await Event.findByIdAndUpdate(transaction.eventId, {
+        status: 'published',
+        isActive: true
       });
-
-      // Here you would publish the event
-      // This depends on your event publishing logic
-      let publishedEvent;
-      
-      if (eventData._id && !eventData._id.startsWith('draft-')) {
-        // Update existing draft to published
-        publishedEvent = await Event.findByIdAndUpdate(
-          eventData._id,
-          { 
-            status: 'published',
-            publishedAt: new Date(),
-            agreement: agreementData
-          },
-          { new: true }
-        );
-      } else {
-        // Create new published event
-        publishedEvent = new Event({
-          ...eventData,
-          status: 'published',
-          publishedAt: new Date(),
-          agreement: agreementData,
-          organizer: req.user._id
-        });
-        await publishedEvent.save();
-      }
-
-      // Send service fee payment confirmation email
-      try {
-        const paymentDate = new Date().toLocaleDateString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-
-        await sendPaymentEmail({
-          fullName: transaction.userName,
-          email: transaction.email,
-          eventName: eventData.title,
-          paymentId: transaction.reference,
-          paymentDate: paymentDate,
-          amount: `₦${transaction.totalAmount.toLocaleString()}`,
-          paymentMethod: 'Paystack',
-          bookingId: `SRV-${transaction._id}`,
-          clientUrl: `${process.env.FRONTEND_URL}/dashboard/organizer`,
-          isServiceFee: true
-        });
-      } catch (emailError) {
-        console.error("Failed to send service fee email:", emailError);
-      }
 
       return res.status(200).json({
         success: true,
-        message: 'Service fee paid and event published successfully',
+        message: 'Service fee payment verified successfully',
         data: {
-          transaction,
-          event: publishedEvent,
-          published: true
+          transaction: transaction
         }
       });
-
     } else {
-      // Payment failed
-      await transaction.markAsFailed(paystackResponse.data.gateway_response);
-
+      await transaction.markAsFailed('Service fee payment verification failed');
+      
       return res.status(400).json({
         success: false,
-        message: 'Service fee payment failed',
+        message: 'Service fee payment verification failed',
         data: {
-          transaction,
-          reason: paystackResponse.data.gateway_response
+          transaction: transaction
         }
       });
     }
 
   } catch (error) {
-    console.error('Verify service fee payment error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to verify service fee payment',
-      error: error.message
-    });
+    next(error);
   }
 };
 
-// @desc    Get user transactions
-// @route   GET /api/transactions/my-transactions
-// @access  Private
-const getUserTransactions = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const { limit = 20, status, eventId } = req.query;
-
-    const transactions = await Transaction.getUserTransactions(userId, {
-      limit: parseInt(limit),
-      status,
-      eventId
-    });
-
-    res.status(200).json({
-      success: true,
-      count: transactions.length,
-      data: transactions
-    });
-
-  } catch (error) {
-    console.error('Get user transactions error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch transactions',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get single transaction
-// @route   GET /api/transactions/:id
-// @access  Private
-const getTransaction = async (req, res) => {
-  try {
-    const transaction = await Transaction.findById(req.params.id)
-      .populate('eventId', 'title date venue address city category')
-      .populate('userId', 'firstName lastName email phone')
-      .populate('tickets.ticketId');
-
-    if (!transaction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
-    }
-
-    // Check authorization
-    if (transaction.userId._id.toString() !== req.user._id.toString() &&
-        transaction.eventOrganizer?.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view this transaction'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: transaction
-    });
-
-  } catch (error) {
-    console.error('Get transaction error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch transaction',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get event transactions (for organizers)
-// @route   GET /api/transactions/event/:eventId
-// @access  Private
-const getEventTransactions = async (req, res) => {
-  try {
-    const { eventId } = req.params;
-    const { status, limit } = req.query;
-
-    // Verify user is event organizer
-    const event = await Event.findById(eventId);
-    if (!event) {
-      return res.status(404).json({
-        success: false,
-        message: 'Event not found'
-      });
-    }
-
-    if (event.organizer.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view event transactions'
-      });
-    }
-
-    const transactions = await Transaction.getEventTransactions(eventId, {
-      status,
-      limit: limit ? parseInt(limit) : undefined
-    });
-
-    res.status(200).json({
-      success: true,
-      count: transactions.length,
-      data: transactions
-    });
-
-  } catch (error) {
-    console.error('Get event transactions error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch event transactions',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Request refund
-// @route   POST /api/transactions/:id/refund
-// @access  Private
-const requestRefund = async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const transaction = await Transaction.findById(req.params.id);
-
-    if (!transaction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
-    }
-
-    // Verify user owns transaction
-    if (transaction.userId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized'
-      });
-    }
-
-    // Check if refundable
-    if (!transaction.isRefundable) {
-      return res.status(400).json({
-        success: false,
-        message: 'Transaction is not eligible for refund'
-      });
-    }
-
-    await transaction.requestRefund(reason, req.user._id);
-
-    res.status(200).json({
-      success: true,
-      message: 'Refund request submitted successfully',
-      data: transaction
-    });
-
-  } catch (error) {
-    console.error('Request refund error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to request refund',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Process refund (Admin/Organizer)
-// @route   PUT /api/transactions/:id/refund/process
-// @access  Private (Admin/Organizer)
-const processRefund = async (req, res) => {
-  try {
-    const { action, rejectionReason } = req.body;
-    const transaction = await Transaction.findById(req.params.id)
-      .populate('eventId');
-
-    if (!transaction) {
-      return res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
-    }
-
-    // Verify user is event organizer or admin
-    if (transaction.eventOrganizer.toString() !== req.user._id.toString() &&
-        req.user.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized'
-      });
-    }
-
-    if (action === 'approve') {
-      // Process refund with Paystack (implement Paystack refund API)
-      const refundReference = `REFUND-${Date.now()}`;
-      await transaction.processRefund(req.user._id, refundReference);
-
-      // Cancel booking in event
-      await transaction.eventId.cancelBooking(transaction.userId);
-
-      res.status(200).json({
-        success: true,
-        message: 'Refund processed successfully',
-        data: transaction
-      });
-
-    } else if (action === 'reject') {
-      await transaction.rejectRefund(rejectionReason, req.user._id);
-
-      res.status(200).json({
-        success: true,
-        message: 'Refund request rejected',
-        data: transaction
-      });
-
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid action. Use "approve" or "reject"'
-      });
-    }
-
-  } catch (error) {
-    console.error('Process refund error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to process refund',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get revenue statistics
-// @route   GET /api/transactions/stats/revenue
-// @access  Private (Organizer/Admin)
-const getRevenueStats = async (req, res) => {
-  try {
-    const { eventId, startDate, endDate } = req.query;
-    const filters = {};
-
-    if (eventId) {
-      // Verify user is organizer
-      const event = await Event.findById(eventId);
-      if (event.organizer.toString() !== req.user._id.toString() &&
-          req.user.role !== 'admin') {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized'
-        });
-      }
-      filters.eventId = eventId;
-    } else {
-      // Get stats for all user's events
-      filters.organizerId = req.user._id;
-    }
-
-    if (startDate) filters.startDate = startDate;
-    if (endDate) filters.endDate = endDate;
-
-    const stats = await Transaction.getRevenueStats(filters);
-
-    res.status(200).json({
-      success: true,
-      data: stats
-    });
-
-  } catch (error) {
-    console.error('Get revenue stats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch revenue statistics',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Webhook handler for Paystack
-// @route   POST /api/transactions/webhook
+// @desc    Paystack webhook handler
+// @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
 const paystackWebhook = async (req, res) => {
   try {
@@ -917,6 +619,74 @@ const paystackWebhook = async (req, res) => {
   }
 };
 
+// Webhook helper functions
+async function handleSuccessfulCharge(data) {
+  try {
+    const transaction = await Transaction.findOne({ reference: data.reference });
+    if (transaction && transaction.status === 'pending') {
+      await transaction.markAsCompleted(data);
+      
+      if (transaction.type === 'event_booking') {
+        // Update associated booking status
+        await Booking.findOneAndUpdate(
+          { _id: transaction.bookingId },
+          { 
+            paymentStatus: 'completed',
+            status: 'confirmed'
+          }
+        );
+
+        // Update event ticket counts
+        const booking = await Booking.findById(transaction.bookingId);
+        if (booking && booking.eventId) {
+          await Event.updateTicketAvailability(booking.eventId, booking.totalTickets, 'decrement');
+        }
+      } else if (transaction.type === 'service_fee') {
+        // Update event status for service fee payments
+        await Event.findByIdAndUpdate(transaction.eventId, {
+          status: 'published',
+          isActive: true
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Handle successful charge error:', error);
+  }
+}
+
+async function handleFailedCharge(data) {
+  try {
+    const transaction = await Transaction.findOne({ reference: data.reference });
+    if (transaction) {
+      await transaction.markAsFailed(data.gateway_response);
+      
+      if (transaction.type === 'event_booking') {
+        // Update associated booking status
+        await Booking.findOneAndUpdate(
+          { _id: transaction.bookingId },
+          { 
+            paymentStatus: 'failed',
+            status: 'cancelled'
+          }
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Handle failed charge error:', error);
+  }
+}
+
+async function handleRefundProcessed(data) {
+  try {
+    const transaction = await Transaction.findOne({ reference: data.reference });
+    if (transaction) {
+      await transaction.completeRefund();
+    }
+  } catch (error) {
+    console.error('Handle refund processed error:', error);
+  }
+}
+
 module.exports = {
   initializeTransaction,
   verifyTransaction,
@@ -926,11 +696,7 @@ module.exports = {
   requestRefund,
   processRefund,
   getRevenueStats,
-  paystackWebhook,
   initializeServiceFeePayment,
   verifyServiceFeePayment,
-  initializeServiceFeePayment,
-  handleSuccessfulCharge,
-  handleFailedCharge,
-  handleRefundProcessed
+  paystackWebhook
 };

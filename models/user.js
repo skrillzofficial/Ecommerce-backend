@@ -28,27 +28,25 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
+    unique: true, // ✅ KEEP this - remove the separate index below
     lowercase: true,
     trim: true,
     match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Please provide a valid email address"],
   },
-   phone: {
+  phone: {
     type: String,
     trim: true,
     match: [/^\+?[\d\s\-\(\)]{10,}$/, "Please provide a valid phone number"],
   },
-  
   location: {
     type: String,
     trim: true,
     maxlength: [100, "Location cannot be more than 100 characters"],
   },
-  
   profilePicture: {
     type: String,
     default: "",
   },
-  
   bio: {
     type: String,
     default: "",
@@ -70,11 +68,7 @@ const userSchema = new mongoose.Schema({
   },
   googleId: {
     type: String,
-    sparse: true,
-  },
-  profilePicture: {
-    type: String,
-    default: "",
+    sparse: true, // ✅ KEEP this - remove the separate index below
   },
   isVerified: {
     type: Boolean,
@@ -107,7 +101,7 @@ const userSchema = new mongoose.Schema({
     default: 0,
   },
   
-  // NEW: Enhanced login tracking for notifications
+  // Enhanced login tracking for notifications
   loginHistory: [{
     ipAddress: String,
     userAgent: String,
@@ -156,9 +150,14 @@ const userSchema = new mongoose.Schema({
     },
     verificationNotes: String,
     verifiedAt: Date,
+    businessRegistration: {
+      number: String,
+      document: String,
+      verified: { type: Boolean, default: false }
+    }
   },
   
-  // UPDATED: Enhanced notification preferences
+  // Enhanced notification preferences
   preferences: {
     emailNotifications: { type: Boolean, default: true },
     pushNotifications: { type: Boolean, default: true },
@@ -166,7 +165,7 @@ const userSchema = new mongoose.Schema({
     eventReminders: { type: Boolean, default: true },
     marketingEmails: { type: Boolean, default: false },
     
-    // NEW: Granular notification preferences
+    // Granular notification preferences
     notifications: {
       email: {
         ticketPurchases: { type: Boolean, default: true },
@@ -174,7 +173,10 @@ const userSchema = new mongoose.Schema({
         loginAlerts: { type: Boolean, default: true },
         securityAlerts: { type: Boolean, default: true },
         promotional: { type: Boolean, default: false },
-        eventUpdates: { type: Boolean, default: true }
+        eventUpdates: { type: Boolean, default: true },
+        bookingConfirmations: { type: Boolean, default: true },
+        paymentReceipts: { type: Boolean, default: true },
+        refundUpdates: { type: Boolean, default: true }
       },
       push: {
         ticketPurchases: { type: Boolean, default: true },
@@ -182,11 +184,30 @@ const userSchema = new mongoose.Schema({
         loginAlerts: { type: Boolean, default: true },
         securityAlerts: { type: Boolean, default: true },
         promotional: { type: Boolean, default: false },
-        eventUpdates: { type: Boolean, default: true }
+        eventUpdates: { type: Boolean, default: true },
+        bookingConfirmations: { type: Boolean, default: true },
+        paymentReceipts: { type: Boolean, default: true },
+        refundUpdates: { type: Boolean, default: true }
       }
     }
   },
-  
+
+  // Wallet/balance for organizers
+  wallet: {
+    balance: { type: Number, default: 0, min: 0 },
+    currency: { type: String, default: "NGN", enum: ["NGN", "USD", "EUR", "GBP"] },
+    lastPayoutAt: Date
+  },
+
+  // Social links for organizers
+  socialLinks: {
+    website: String,
+    facebook: String,
+    twitter: String,
+    instagram: String,
+    linkedin: String
+  },
+
   deletedAt: Date,
 }, {
   timestamps: true,
@@ -199,9 +220,25 @@ userSchema.virtual("fullName").get(function() {
   return `${this.firstName} ${this.lastName}`.trim();
 });
 
-// Indexes
-userSchema.index({ email: 1 });
-userSchema.index({ userName: 1 });
+// Virtual for organizer display name
+userSchema.virtual("organizerDisplayName").get(function() {
+  if (this.role === "organizer" && this.organizerInfo?.companyName) {
+    return this.organizerInfo.companyName;
+  }
+  return this.fullName;
+});
+
+// Virtual to check if user can create events
+userSchema.virtual("canCreateEvents").get(function() {
+  return this.role === "organizer" && 
+         this.isVerified && 
+         this.status === "active" &&
+         this.organizerInfo?.verified === true;
+});
+
+// Indexes - REMOVED DUPLICATES
+// ❌ REMOVED: userSchema.index({ email: 1 }, { unique: true }); // Duplicate of field definition
+userSchema.index({ userName: 1 }, { unique: true, sparse: true });
 userSchema.index({ role: 1 });
 userSchema.index({ "organizerInfo.verificationStatus": 1 });
 userSchema.index({ status: 1 });
@@ -209,13 +246,13 @@ userSchema.index({ emailVerificationToken: 1 });
 userSchema.index({ passwordResetToken: 1 });
 userSchema.index({ createdAt: 1 });
 userSchema.index({ isVerified: 1, status: 1 });
-
-// NEW: Index for login history queries
 userSchema.index({ "loginHistory.loginTime": -1 });
+// ❌ REMOVED: userSchema.index({ googleId: 1 }, { sparse: true }); // Duplicate of field definition
 
 // Compound indexes
 userSchema.index({ email: 1, status: 1 });
 userSchema.index({ role: 1, status: 1 });
+userSchema.index({ "organizerInfo.verified": 1, status: 1 });
 
 // Pre-save middleware for password hashing
 userSchema.pre("save", async function(next) {
@@ -327,7 +364,7 @@ userSchema.methods.verifyEmail = function() {
   return this.save();
 };
 
-// NEW: Method to record login and create notification
+// Method to record login and create notification
 userSchema.methods.recordLogin = async function(loginData) {
   const { ipAddress, userAgent, device, location } = loginData;
   
@@ -358,7 +395,7 @@ userSchema.methods.recordLogin = async function(loginData) {
   if (this.preferences.notifications?.push?.loginAlerts || 
       this.preferences.notifications?.email?.loginAlerts) {
     
-    const Notification = require('./notification');
+    const Notification = mongoose.model('Notification');
     await Notification.createLoginNotification(this._id, {
       ipAddress,
       device: device || this._detectDevice(userAgent),
@@ -370,7 +407,7 @@ userSchema.methods.recordLogin = async function(loginData) {
   return { isSuspicious };
 };
 
-// NEW: Helper method to detect device from user agent
+// Helper method to detect device from user agent
 userSchema.methods._detectDevice = function(userAgent) {
   if (!userAgent) return 'Unknown Device';
   
@@ -388,7 +425,7 @@ userSchema.methods._detectDevice = function(userAgent) {
   return 'Desktop';
 };
 
-// NEW: Method to check for suspicious login
+// Method to check for suspicious login
 userSchema.methods._checkSuspiciousLogin = async function(currentLogin) {
   if (this.loginHistory.length < 2) {
     return false; // Not enough history to determine
@@ -439,6 +476,38 @@ userSchema.methods.ban = function() {
   return this.save();
 };
 
+// Method to verify organizer
+userSchema.methods.verifyOrganizer = function(notes = "") {
+  if (this.role !== "organizer") {
+    throw new Error("Only organizers can be verified");
+  }
+  
+  this.organizerInfo.verified = true;
+  this.organizerInfo.verificationStatus = "approved";
+  this.organizerInfo.verificationNotes = notes;
+  this.organizerInfo.verifiedAt = new Date();
+  
+  return this.save();
+};
+
+// Method to update wallet balance
+userSchema.methods.updateWallet = async function(amount, type = "add") {
+  if (this.role !== "organizer") {
+    throw new Error("Only organizers have wallets");
+  }
+  
+  if (type === "add") {
+    this.wallet.balance += amount;
+  } else if (type === "subtract") {
+    if (this.wallet.balance < amount) {
+      throw new Error("Insufficient wallet balance");
+    }
+    this.wallet.balance -= amount;
+  }
+  
+  return this.save();
+};
+
 // Method to get public profile (safe for public viewing)
 userSchema.methods.getPublicProfile = function() {
   return {
@@ -448,11 +517,13 @@ userSchema.methods.getPublicProfile = function() {
     lastName: this.lastName,
     profilePicture: this.profilePicture,
     bio: this.bio,
+    role: this.role,
     organizerInfo: this.organizerInfo ? {
       companyName: this.organizerInfo.companyName,
       website: this.organizerInfo.website,
       verified: this.organizerInfo.verified,
     } : undefined,
+    socialLinks: this.socialLinks,
     createdAt: this.createdAt,
   };
 };
@@ -465,6 +536,8 @@ userSchema.methods.getProfile = function() {
     lastName: this.lastName,
     userName: this.userName,
     email: this.email,
+    phone: this.phone,
+    location: this.location,
     role: this.role,
     profilePicture: this.profilePicture,
     bio: this.bio,
@@ -472,10 +545,11 @@ userSchema.methods.getProfile = function() {
     isActive: this.isActive,
     organizerInfo: this.organizerInfo,
     preferences: this.preferences,
+    socialLinks: this.socialLinks,
+    wallet: this.wallet,
     status: this.status,
     lastLogin: this.lastLogin,
     loginCount: this.loginCount,
-    // NEW: Include recent login history (last 3)
     recentLogins: this.loginHistory.slice(0, 3),
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
@@ -491,8 +565,8 @@ userSchema.methods.getDetailedProfile = function() {
     emailVerificationToken: this.emailVerificationToken ? "***" : undefined,
     passwordResetToken: this.passwordResetToken ? "***" : undefined,
     deletedAt: this.deletedAt,
-    // NEW: Include full login history for admin
     loginHistory: this.loginHistory,
+    verificationResendAttempts: this.verificationResendAttempts?.length || 0,
   };
 };
 
@@ -509,6 +583,15 @@ userSchema.statics.findByEmail = function(email) {
 // Static method to find by username
 userSchema.statics.findByUsername = function(userName) {
   return this.findOne({ userName: userName.trim() });
+};
+
+// Static method to find verified organizers
+userSchema.statics.findVerifiedOrganizers = function() {
+  return this.find({ 
+    role: "organizer", 
+    status: "active",
+    "organizerInfo.verified": true 
+  });
 };
 
 // Static method to get user statistics
@@ -568,6 +651,23 @@ userSchema.statics.getUserStats = async function() {
             $cond: [{ $ne: ["$googleId", null] }, 1, 0]
           }
         },
+        totalOrganizers: {
+          $sum: {
+            $cond: [{ $eq: ["$role", "organizer"] }, 1, 0]
+          }
+        },
+        verifiedOrganizers: {
+          $sum: {
+            $cond: [
+              { 
+                $and: [
+                  { $eq: ["$role", "organizer"] },
+                  { $eq: ["$organizerInfo.verified", true] }
+                ]
+              }, 1, 0
+            ]
+          }
+        },
         avgLoginCount: { $avg: "$loginCount" }
       }
     }
@@ -598,6 +698,8 @@ userSchema.statics.getUserStats = async function() {
       totalActive: 0, 
       totalVerified: 0, 
       totalGoogleUsers: 0,
+      totalOrganizers: 0,
+      verifiedOrganizers: 0,
       avgLoginCount: 0 
     },
     recentRegistrations: recentUsers
@@ -660,6 +762,15 @@ userSchema.query.activeOnly = function() {
 // Query helper for verified users only
 userSchema.query.verifiedOnly = function() {
   return this.where({ isVerified: true });
+};
+
+// Query helper for verified organizers only
+userSchema.query.verifiedOrganizers = function() {
+  return this.where({ 
+    role: "organizer", 
+    status: "active",
+    "organizerInfo.verified": true 
+  });
 };
 
 module.exports = mongoose.model("User", userSchema);
