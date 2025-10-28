@@ -20,6 +20,25 @@ const {
   validateOrganizerRole
 } = require("../utils/validationHelpers");
 
+// ==================== FLEXIBLE DATE HELPER ====================
+// This helper builds queries that work with BOTH date and startDate fields
+const buildFlexibleDateQuery = (operator, dateValue) => {
+  const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  
+  return {
+    $or: [
+      { 
+        startDate: { [operator]: date },
+        startDate: { $exists: true }
+      },
+      { 
+        date: { [operator]: date },
+        startDate: { $exists: false }
+      }
+    ]
+  };
+};
+
 // @desc    Create new event
 // @route   POST /api/v1/events
 // @access  Private (Organizer only)
@@ -209,7 +228,7 @@ const createEvent = async (req, res, next) => {
 // @access  Public
 const getAllEvents = async (req, res, next) => {
   try {
-    let { search, isVoiceSearch, page = 1, limit = 12, sort = "date", ...filters } = req.query;
+    let { search, isVoiceSearch, page = 1, limit = 12, sort = "date", timeFilter, ...filters } = req.query;
 
     if (isVoiceSearch === "true" && search) {
       const voiceParams = parseVoiceQuery(search);
@@ -220,8 +239,32 @@ const getAllEvents = async (req, res, next) => {
     // ✅ Build flexible query (supports both date and startDate)
     const query = buildEventSearchQuery({ ...filters, search }, req.user?.role);
     
-    console.log("Final Query:", JSON.stringify(query, null, 2));
-    console.log("User authenticated:", !!req.user);
+    // ✅ CRITICAL FIX: Apply time filter SEPARATELY (not in buildEventSearchQuery)
+    const now = new Date();
+    if (timeFilter === "upcoming") {
+      const upcomingQuery = buildFlexibleDateQuery("$gte", now);
+      if (query.$and) {
+        query.$and.push(upcomingQuery);
+      } else if (query.$or) {
+        query.$and = [{ $or: query.$or }, upcomingQuery];
+        delete query.$or;
+      } else {
+        Object.assign(query, upcomingQuery);
+      }
+    } else if (timeFilter === "past") {
+      const pastQuery = buildFlexibleDateQuery("$lt", now);
+      if (query.$and) {
+        query.$and.push(pastQuery);
+      } else if (query.$or) {
+        query.$and = [{ $or: query.$or }, pastQuery];
+        delete query.$or;
+      } else {
+        Object.assign(query, pastQuery);
+      }
+    }
+    
+    console.log("📍 Final Query:", JSON.stringify(query, null, 2));
+    console.log("🔐 User authenticated:", !!req.user);
     
     const sortOption = getSortOptions(sort);
 
@@ -259,7 +302,7 @@ const getAllEvents = async (req, res, next) => {
     res.status(200).json(response);
 
   } catch (error) {
-    console.error("getAllEvents Error:", error);
+    console.error("❌ getAllEvents Error:", error);
     next(error);
   }
 };
@@ -271,34 +314,32 @@ const getPastEvents = async (req, res, next) => {
   try {
     const { page = 1, limit = 12, sort = "-date", ...filters } = req.query;
 
+    // ✅ CRITICAL FIX: Build base query WITHOUT date filter
     const baseQuery = buildEventSearchQuery(filters, req.user?.role);
     
-    // ✅ FLEXIBLE: Support both date and startDate
-    const pastDateCondition = {
-      $or: [
-        { date: { $lt: new Date() } },
-        { startDate: { $lt: new Date() } }
-      ]
-    };
+    // ✅ Build flexible past date condition
+    const now = new Date();
+    const pastDateQuery = buildFlexibleDateQuery("$lt", now);
 
-    let query = {
-      ...baseQuery,
+    // ✅ Combine queries properly
+    let finalQuery = {
       status: "published",
-      isActive: true
+      isActive: true,
+      ...baseQuery
     };
 
-    // Handle combining with existing $or conditions from baseQuery
+    // Handle combining with existing $or conditions
     if (baseQuery.$or) {
-      query.$and = [
+      finalQuery.$and = [
         { $or: baseQuery.$or },
-        pastDateCondition
+        pastDateQuery
       ];
-      delete query.$or;
+      delete finalQuery.$or;
     } else {
-      query = { ...query, ...pastDateCondition };
+      Object.assign(finalQuery, pastDateQuery);
     }
 
-    console.log('📅 Past Events Query:', JSON.stringify(query, null, 2));
+    console.log('📅 Past Events Query:', JSON.stringify(finalQuery, null, 2));
 
     const sortOption = getSortOptions(sort);
     const pageNum = parseInt(page);
@@ -306,12 +347,12 @@ const getPastEvents = async (req, res, next) => {
     const skip = (pageNum - 1) * limitNum;
 
     const [events, total] = await Promise.all([
-      Event.find(query)
+      Event.find(finalQuery)
         .sort(sortOption)
         .skip(skip)
         .limit(limitNum)
         .populate("organizer", "firstName lastName userName profilePicture organizerInfo"),
-      Event.countDocuments(query)
+      Event.countDocuments(finalQuery)
     ]);
 
     console.log(`✅ Found ${events.length} past events out of ${total} total`);
@@ -327,6 +368,81 @@ const getPastEvents = async (req, res, next) => {
 
   } catch (error) {
     console.error('❌ getPastEvents Error:', error);
+    next(error);
+  }
+};
+
+// @desc    Get upcoming events
+// @route   GET /api/v1/events/upcoming
+// @access  Public
+const getUpcomingEvents = async (req, res, next) => {
+  try {
+    const { limit = 10, category, city, state, eventType } = req.query;
+
+    // ✅ Use flexible date query
+    const now = new Date();
+    const query = {
+      status: "published",
+      isActive: true,
+      ...buildFlexibleDateQuery("$gte", now)
+    };
+
+    if (category) query.category = category;
+    if (city) query.city = new RegExp(city, "i");
+    if (state) query.state = state;
+    if (eventType) query.eventType = eventType;
+
+    const events = await Event.find(query)
+      .sort({ startDate: 1, date: 1 })
+      .limit(parseInt(limit))
+      .populate("organizer", "firstName lastName userName profilePicture organizerInfo");
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      events,
+    });
+
+  } catch (error) {
+    console.error('❌ getUpcomingEvents Error:', error);
+    next(error);
+  }
+};
+
+// @desc    Get featured events
+// @route   GET /api/v1/events/featured
+// @access  Public
+const getFeaturedEvents = async (req, res, next) => {
+  try {
+    const { limit = 6, timeFilter = "upcoming" } = req.query;
+
+    const now = new Date();
+    const query = {
+      status: "published",
+      isFeatured: true,
+      isActive: true,
+    };
+
+    // ✅ Add time filter
+    if (timeFilter === "upcoming") {
+      Object.assign(query, buildFlexibleDateQuery("$gte", now));
+    } else if (timeFilter === "past") {
+      Object.assign(query, buildFlexibleDateQuery("$lt", now));
+    }
+
+    const events = await Event.find(query)
+      .sort({ startDate: 1, date: 1 })
+      .limit(parseInt(limit))
+      .populate("organizer", "firstName lastName userName profilePicture organizerInfo");
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      events,
+    });
+
+  } catch (error) {
+    console.error('❌ getFeaturedEvents Error:', error);
     next(error);
   }
 };
@@ -499,44 +615,6 @@ const deleteEvent = async (req, res, next) => {
   }
 };
 
-// @desc    Get featured events
-// @route   GET /api/v1/events/featured
-// @access  Public
-const getFeaturedEvents = async (req, res, next) => {
-  try {
-    const { limit = 6 } = req.query;
-    const events = await Event.findFeatured(parseInt(limit));
-
-    res.status(200).json({
-      success: true,
-      count: events.length,
-      events,
-    });
-
-  } catch (error) {
-    next(error);
-  }
-};
-
-// @desc    Get upcoming events
-// @route   GET /api/v1/events/upcoming
-// @access  Public
-const getUpcomingEvents = async (req, res, next) => {
-  try {
-    const { limit = 10 } = req.query;
-    const events = await Event.findUpcoming(parseInt(limit));
-
-    res.status(200).json({
-      success: true,
-      count: events.length,
-      events,
-    });
-
-  } catch (error) {
-    next(error);
-  }
-};
-
 // @desc    Get ticket availability
 // @route   GET /api/v1/events/:id/ticket-availability
 // @access  Public
@@ -628,12 +706,22 @@ const completeEvent = async (req, res, next) => {
 // @access  Private (Organizer only)
 const getOrganizerEvents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 12, status, sort = "-createdAt" } = req.query;
+    const { page = 1, limit = 12, status, sort = "-createdAt", timeFilter } = req.query;
     
     const query = { organizer: req.user.userId };
     
     if (status && status !== 'all') {
       query.status = status;
+    }
+
+    // ✅ Add time filter for organizer's events
+    if (timeFilter) {
+      const now = new Date();
+      if (timeFilter === "upcoming") {
+        Object.assign(query, buildFlexibleDateQuery("$gte", now));
+      } else if (timeFilter === "past") {
+        Object.assign(query, buildFlexibleDateQuery("$lt", now));
+      }
     }
 
     const pageNum = parseInt(page);
@@ -744,10 +832,22 @@ const deleteEventImage = async (req, res, next) => {
 // @access  Public
 const searchEventsAdvanced = async (req, res, next) => {
   try {
-    const { query, category, city, state, priceMin, priceMax, date, eventType, page = 1, limit = 12 } = req.query;
+    const { 
+      query: searchQuery, 
+      category, 
+      city, 
+      state, 
+      priceMin, 
+      priceMax, 
+      date, 
+      eventType, 
+      page = 1, 
+      limit = 12,
+      timeFilter 
+    } = req.query;
 
-    const searchQuery = buildEventSearchQuery({
-      search: query,
+    const query = buildEventSearchQuery({
+      search: searchQuery,
       category,
       city,
       state,
@@ -757,17 +857,43 @@ const searchEventsAdvanced = async (req, res, next) => {
       eventType
     }, req.user?.role);
 
+    // ✅ Add time filter
+    if (timeFilter) {
+      const now = new Date();
+      if (timeFilter === "upcoming") {
+        const upcomingQuery = buildFlexibleDateQuery("$gte", now);
+        if (query.$and) {
+          query.$and.push(upcomingQuery);
+        } else if (query.$or) {
+          query.$and = [{ $or: query.$or }, upcomingQuery];
+          delete query.$or;
+        } else {
+          Object.assign(query, upcomingQuery);
+        }
+      } else if (timeFilter === "past") {
+        const pastQuery = buildFlexibleDateQuery("$lt", now);
+        if (query.$and) {
+          query.$and.push(pastQuery);
+        } else if (query.$or) {
+          query.$and = [{ $or: query.$or }, pastQuery];
+          delete query.$or;
+        } else {
+          Object.assign(query, pastQuery);
+        }
+      }
+    }
+
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
     const [events, total] = await Promise.all([
-      Event.find(searchQuery)
-        .sort({ createdAt: -1 })
+      Event.find(query)
+        .sort({ startDate: 1, date: 1 })
         .skip(skip)
         .limit(limitNum)
         .populate("organizer", "firstName lastName userName profilePicture"),
-      Event.countDocuments(searchQuery)
+      Event.countDocuments(query)
     ]);
 
     res.status(200).json({
