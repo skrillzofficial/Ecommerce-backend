@@ -46,7 +46,7 @@ router.get("/past", optionalAuth, validateQueryParams, getPastEvents);
 router.get("/search/advanced", validateQueryParams, searchEventsAdvanced);
 
 // Get all events with filtering
-router.get("/", optionalAuth, validateQueryParams, getAllEvents);
+router.get("/all", optionalAuth, validateQueryParams, getAllEvents);
 
 // ============================================
 // PROTECTED ROUTES (Authentication required)
