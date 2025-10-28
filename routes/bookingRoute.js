@@ -12,7 +12,7 @@ const { protect } = require("../middleware/auth");
 const { validateBooking } = require("../middleware/validation");
 
 // Get user's bookings
-router.get("/", protect, getMyBookings);
+router.get("/my-bookings", protect, getMyBookings);
 
 // Get single booking
 router.get("/:id", protect, getBooking);
