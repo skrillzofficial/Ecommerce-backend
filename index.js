@@ -147,7 +147,7 @@ app.get("/", (req, res) => {
 });
 
 // Main API routes
-app.use("/api/v1/", authRouter); // Fixed: added /auth to match your auth routes
+app.use("/api/v1", authRouter); // Fixed: added /auth to match your auth routes
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/transactions", transactionRoutes); 
 app.use("/api/v1/notifications", notificationRoutes);
