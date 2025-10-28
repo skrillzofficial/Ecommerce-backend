@@ -218,7 +218,7 @@ const startServer = async () => {
       
       // Log all available routes
       console.log("\n Available Routes:");
-      console.log(" - Auth: /api/v1/auth");
+      console.log(" - Auth: /api/v1");
       console.log(" - Events: /api/v1/events");
       console.log(" - Transactions: /api/v1/transactions");
       console.log(" - Tickets: /api/v1/tickets");

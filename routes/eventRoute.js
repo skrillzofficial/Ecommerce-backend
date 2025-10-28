@@ -71,7 +71,7 @@ router.get(
 
 // Create new event
 router.post(
-  "/",
+  "/create",
   protect,
   authorize("organizer", "superadmin"),
   validateImages,
@@ -118,7 +118,7 @@ router.put(
 );
 
 // Update event (Organizer only)
-router.put(
+router.patch(
   "/:id",
   protect,
   authorize("organizer", "superadmin"),
