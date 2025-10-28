@@ -187,13 +187,15 @@ const validateTicketTypes = (ticketTypes) => {
 };
 
 // ============================================
-// FLEXIBLE: Build event search query supporting BOTH date and startDate
+// ✅ FIXED: Build event search query WITHOUT automatic date filtering
+// Date filtering should be handled by the controller based on the endpoint
 // ============================================
 const buildEventSearchQuery = (filters = {}, userRole = null) => {
   const {
     search,
     category,
     city,
+    state,
     minPrice,
     maxPrice,
     startDate,
@@ -208,14 +210,10 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
 
   const query = { isActive: true };
 
-  // Show published upcoming events to everyone except organizers viewing their own events
+  // ✅ CRITICAL FIX: Only set status, DO NOT add automatic date filter
+  // The controller will handle date filtering based on the endpoint (upcoming/past/all)
   if (!userRole || userRole !== "organizer") {
     query.status = "published";
-    // ✅ FLEXIBLE: Support both date and startDate fields using $or
-    query.$or = [
-      { date: { $gte: new Date() } },
-      { startDate: { $gte: new Date() } }
-    ];
   } else if (status) {
     query.status = status;
   }
@@ -229,25 +227,19 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
       { city: { $regex: search, $options: 'i' } }
     ];
     
-    // If $or already exists (from date filter), combine them using $and
-    if (query.$or) {
-      query.$and = [
-        { $or: query.$or },
-        { $or: searchOr }
-      ];
-      delete query.$or;
-    } else {
-      query.$or = searchOr;
-    }
+    query.$or = searchOr;
   }
 
   // Basic filters
   if (category) query.category = category;
   if (city) query.city = city;
+  if (state) query.state = state;
   if (eventType) query.eventType = eventType;
-  if (isFeatured === "true") query.isFeatured = true;
+  if (isFeatured === "true" || isFeatured === true) query.isFeatured = true;
+  if (organizer) query.organizer = organizer;
 
   // ✅ FLEXIBLE: Date range filter supporting both date and startDate
+  // This is for explicit date range filtering (not upcoming/past)
   if (startDate || endDate) {
     const dateRangeOr = [];
     
@@ -291,13 +283,17 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
     const legacyQuery = { price: {} };
     if (minPrice !== undefined) legacyQuery.price.$gte = safeParseNumber(minPrice);
     if (maxPrice !== undefined) legacyQuery.price.$lte = safeParseNumber(maxPrice);
-    priceQueries.push(legacyQuery);
+    if (Object.keys(legacyQuery.price).length > 0) {
+      priceQueries.push(legacyQuery);
+    }
 
     // Ticket types price
     const ticketQuery = { "ticketTypes.price": {} };
     if (minPrice !== undefined) ticketQuery["ticketTypes.price"].$gte = safeParseNumber(minPrice);
     if (maxPrice !== undefined) ticketQuery["ticketTypes.price"].$lte = safeParseNumber(maxPrice);
-    priceQueries.push(ticketQuery);
+    if (Object.keys(ticketQuery["ticketTypes.price"]).length > 0) {
+      priceQueries.push(ticketQuery);
+    }
 
     if (priceQueries.length > 0) {
       if (query.$and) {
@@ -315,7 +311,7 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
   }
 
   // Free tickets filter
-  if (hasFreeTickets === "true") {
+  if (hasFreeTickets === "true" || hasFreeTickets === true) {
     const freeTicketQueries = [
       { price: 0 }, 
       { "ticketTypes.price": 0 }
@@ -335,11 +331,11 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
   }
 
   // Online events filter
-  if (isOnline === "true") {
+  if (isOnline === "true" || isOnline === true) {
     query.eventType = "virtual";
   }
 
-  console.log('🔍 Built Event Query:', JSON.stringify(query, null, 2));
+  console.log('🔍 Built Base Event Query (no date filter):', JSON.stringify(query, null, 2));
   
   return query;
 };
@@ -347,9 +343,11 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
 // ✅ FLEXIBLE: Get sort options supporting both date and startDate
 const getSortOptions = (sort = "date") => {
   const sortOptions = {
-    // Try date first, fallback to startDate
+    // Sort by date, fallback to startDate
     "date": { date: 1, startDate: 1 },
     "-date": { date: -1, startDate: -1 },
+    "startDate": { startDate: 1, date: 1 },
+    "-startDate": { startDate: -1, date: -1 },
     "price": { price: 1 },
     "-price": { price: -1 },
     "popular": { totalLikes: -1, views: -1 },
