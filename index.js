@@ -135,7 +135,7 @@ app.get("/", (req, res) => {
     version: "1.0.0",
     endpoints: {
       health: "/api/v1/health",
-      auth: "/api/v1/auth",
+      auth: "/api/v1/",
       events: "/api/v1/events",
       transactions: "/api/v1/transactions", 
       tickets: "/api/v1/tickets",
@@ -147,7 +147,7 @@ app.get("/", (req, res) => {
 });
 
 // Main API routes
-app.use("/api/v1/auth", authRouter); // Fixed: added /auth to match your auth routes
+app.use("/api/v1/", authRouter); // Fixed: added /auth to match your auth routes
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/transactions", transactionRoutes); 
 app.use("/api/v1/notifications", notificationRoutes);
