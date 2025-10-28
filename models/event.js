@@ -138,6 +138,7 @@ const eventSchema = new mongoose.Schema(
         },
         message: "Event date cannot be in the past",
       },
+      index: true,
     },
 
     // Location Information
@@ -243,7 +244,6 @@ const eventSchema = new mongoose.Schema(
             return this.price === 0;
           },
         },
-        // Access type for hybrid events
         accessType: {
           type: String,
           enum: ["physical", "virtual", "both"],
@@ -285,12 +285,10 @@ const eventSchema = new mongoose.Schema(
         return this.capacity;
       },
     },
-    // Legacy ticket description
     ticketDescription: {
       type: String,
       maxlength: [500, "Ticket description cannot exceed 500 characters"],
     },
-    // Legacy ticket benefits
     ticketBenefits: [{
       type: String,
       trim: true,
@@ -427,7 +425,7 @@ const eventSchema = new mongoose.Schema(
         amount: {
           type: Number,
           min: 0,
-          default: 5 // 5% default service fee
+          default: 5
         }
       },
       estimatedAttendance: {
@@ -574,9 +572,10 @@ const eventSchema = new mongoose.Schema(
   }
 );
 
-// Indexes
+// ==================== INDEXES ====================
 eventSchema.index({ title: "text", description: "text", tags: "text" });
 eventSchema.index({ startDate: 1, status: 1 });
+eventSchema.index({ date: 1, status: 1 });
 eventSchema.index({ endDate: 1, status: 1 });
 eventSchema.index({ eventType: 1, status: 1 });
 eventSchema.index({ category: 1, city: 1 });
@@ -589,14 +588,15 @@ eventSchema.index({ "communityEnabled": 1, "status": 1 });
 eventSchema.index({ "socialBannerEnabled": 1 });
 eventSchema.index({ "agreement.acceptedTerms": 1 });
 
-// Virtuals
+// ==================== VIRTUALS ====================
 eventSchema.virtual("eventUrl").get(function () {
   return `/event/${this.slug || this._id}`;
 });
 
 eventSchema.virtual("isAvailable").get(function () {
   const now = new Date();
-  const isFutureDate = this.startDate > now;
+  const eventDate = this.startDate || this.date;
+  const isFutureDate = eventDate > now;
   const isPublished = this.status === "published";
 
   if (this.ticketTypes && this.ticketTypes.length > 0) {
@@ -644,7 +644,7 @@ eventSchema.virtual("attendancePercentage").get(function () {
 
 eventSchema.virtual("daysUntilEvent").get(function () {
   const now = new Date();
-  const eventDate = new Date(this.startDate);
+  const eventDate = new Date(this.startDate || this.date);
   const diffTime = eventDate - now;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   return diffDays > 0 ? diffDays : 0;
@@ -700,7 +700,6 @@ eventSchema.virtual("isPaidEvent").get(function () {
   return this.price > 0;
 });
 
-// NEW Virtual Fields
 eventSchema.virtual("isMultiDay").get(function () {
   return this.startDate && this.endDate && this.startDate.getTime() !== this.endDate.getTime();
 });
@@ -720,36 +719,56 @@ eventSchema.virtual("isPhysical").get(function () {
 eventSchema.virtual("eventDuration").get(function () {
   if (!this.startDate || !this.endDate) return 0;
   const diffTime = Math.abs(this.endDate - this.startDate);
-  return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end days
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 });
 
-// PRE-SAVE MIDDLEWARE
+// ==================== PRE-SAVE MIDDLEWARE ====================
+
+// Ensure slug is never null
 eventSchema.pre("save", function (next) {
-  // Ensure slug is NEVER null
   if (!this.slug || this.slug === null || this.slug === "") {
     this.slug = `event-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 11)}`;
   }
+  next();
+});
 
-  // Handle multi-day events - ensure endDate is set
-  if (!this.endDate && this.startDate) {
-    this.endDate = this.startDate;
-  }
-
-  // Handle legacy date field for backward compatibility
-  if (!this.date && this.startDate) {
+// FLEXIBLE DATE SYNC - Handle both date systems
+eventSchema.pre("save", function (next) {
+  // If startDate is provided but date is not, sync date from startDate
+  if (this.startDate && !this.date) {
     this.date = this.startDate;
   }
+  
+  // If date is provided but startDate is not (legacy events), sync startDate from date
+  if (this.date && !this.startDate) {
+    this.startDate = this.date;
+    if (!this.endDate) {
+      this.endDate = this.date;
+    }
+  }
+  
+  // Ensure endDate defaults to startDate if not provided
+  if (this.startDate && !this.endDate) {
+    this.endDate = this.startDate;
+  }
+  
+  next();
+});
 
-  // Validate virtual event link for virtual/hybrid events
+// Validate virtual event link
+eventSchema.pre("save", function (next) {
   if ((this.eventType === "virtual" || this.eventType === "hybrid") && 
       this.status === "published" && 
       !this.virtualEventLink) {
     return next(new Error("Virtual event link is required for virtual and hybrid events"));
   }
+  next();
+});
 
-  // Initialize and validate ALL number fields to prevent NaN
+// Initialize and validate number fields
+eventSchema.pre("save", function (next) {
   const safeNumber = (value, defaultValue = 0) => {
     if (value === undefined || value === null || isNaN(value)) {
       return defaultValue;
@@ -757,7 +776,6 @@ eventSchema.pre("save", function (next) {
     return Number(value);
   };
 
-  // Validate ticket types
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     this.ticketTypes.forEach((ticketType) => {
       ticketType.price = safeNumber(ticketType.price, 0);
@@ -768,26 +786,22 @@ eventSchema.pre("save", function (next) {
       );
       ticketType.isFree = ticketType.price === 0;
       
-      // Set default accessType for hybrid events
       if (this.eventType === "hybrid" && !ticketType.accessType) {
         ticketType.accessType = "both";
       }
     });
   } else {
-    // Legacy system
     this.price = safeNumber(this.price, 0);
     this.capacity = safeNumber(this.capacity, 1);
     this.availableTickets = safeNumber(this.availableTickets, this.capacity);
   }
 
-  // Validate statistics
   this.totalAttendees = safeNumber(this.totalAttendees, 0);
   this.totalBookings = safeNumber(this.totalBookings, 0);
   this.totalRevenue = safeNumber(this.totalRevenue, 0);
   this.views = safeNumber(this.views, 0);
   this.totalLikes = safeNumber(this.totalLikes, 0);
 
-  // Validate coordinates
   if (this.coordinates) {
     this.coordinates.latitude = safeNumber(this.coordinates.latitude, 0);
     this.coordinates.longitude = safeNumber(this.coordinates.longitude, 0);
@@ -884,7 +898,6 @@ eventSchema.pre("save", function (next) {
 
 // Validate community and agreement
 eventSchema.pre("save", function (next) {
-  // Validate community links
   if (this.communityEnabled) {
     const communityPlatforms = ['whatsapp', 'telegram', 'discord', 'slack'];
     let hasValidLink = false;
@@ -901,7 +914,6 @@ eventSchema.pre("save", function (next) {
     }
   }
   
-  // Validate agreement for paid events
   if (this.status === "published" && this.isPaidEvent) {
     if (!this.agreement?.acceptedTerms) {
       return next(new Error("Terms must be accepted for paid events"));
@@ -911,9 +923,8 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// INSTANCE METHODS
+// ==================== INSTANCE METHODS ====================
 
-// Method to regenerate slug manually
 eventSchema.methods.regenerateSlug = async function () {
   const baseSlug = this.title
     .toLowerCase()
@@ -935,7 +946,6 @@ eventSchema.methods.regenerateSlug = async function () {
   return this.slug;
 };
 
-// Method to accept agreement
 eventSchema.methods.acceptAgreement = async function (termsData = {}) {
   this.agreement = {
     acceptedTerms: true,
@@ -951,7 +961,6 @@ eventSchema.methods.acceptAgreement = async function (termsData = {}) {
   return this.agreement;
 };
 
-// Method to enable community
 eventSchema.methods.enableCommunity = async function (platform, link, description = "") {
   if (!this.community) {
     this.community = {};
@@ -970,12 +979,10 @@ eventSchema.methods.enableCommunity = async function (platform, link, descriptio
   return this.community;
 };
 
-// Method to disable community platform
 eventSchema.methods.disableCommunity = async function (platform) {
   if (this.community?.[platform]) {
     this.community[platform].enabled = false;
     
-    // Check if any platforms are still enabled
     const hasEnabledPlatforms = Object.values(this.community).some(
       platformConfig => platformConfig && platformConfig.enabled
     );
@@ -987,7 +994,6 @@ eventSchema.methods.disableCommunity = async function (platform) {
   return this.community;
 };
 
-// Method to set social banner
 eventSchema.methods.setSocialBanner = async function (bannerData) {
   this.socialBanner = {
     url: bannerData.url,
@@ -1000,13 +1006,11 @@ eventSchema.methods.setSocialBanner = async function (bannerData) {
   return this.socialBanner;
 };
 
-// Method to increment views
 eventSchema.methods.incrementViews = async function () {
   this.views = (Number(this.views) || 0) + 1;
   await this.save({ validateBeforeSave: false });
 };
 
-// Method to toggle like
 eventSchema.methods.toggleLike = async function (userId) {
   const index = this.likes.indexOf(userId);
 
@@ -1021,13 +1025,11 @@ eventSchema.methods.toggleLike = async function (userId) {
   await this.save({ validateBeforeSave: false });
 };
 
-// Method to cancel event
 eventSchema.methods.cancelEvent = async function (reason) {
   this.status = "cancelled";
   this.cancelledAt = new Date();
   this.isActive = false;
 
-  // Cancel all tickets for this event
   const Ticket = mongoose.model("Ticket");
   await Ticket.updateMany(
     { eventId: this._id, status: "confirmed" },
@@ -1040,12 +1042,10 @@ eventSchema.methods.cancelEvent = async function (reason) {
   await this.save();
 };
 
-// Method to complete event
 eventSchema.methods.completeEvent = async function () {
   this.status = "completed";
   this.completedAt = new Date();
 
-  // Expire all confirmed tickets
   const Ticket = mongoose.model("Ticket");
   await Ticket.updateMany(
     { eventId: this._id, status: "confirmed" },
@@ -1055,9 +1055,26 @@ eventSchema.methods.completeEvent = async function () {
   await this.save();
 };
 
-// STATIC METHODS
+eventSchema.methods.getEffectiveDate = function () {
+  return this.startDate || this.date;
+};
 
-// Static method to find upcoming events
+eventSchema.methods.getEffectiveEndDate = function () {
+  if (this.endDate) return this.endDate;
+  if (this.startDate) return this.startDate;
+  return this.date;
+};
+
+eventSchema.methods.usesLegacyDate = function () {
+  return this.date && !this.startDate;
+};
+
+eventSchema.methods.usesNewDateSystem = function () {
+  return !!this.startDate;
+};
+
+// ==================== STATIC METHODS (LEGACY - Original) ====================
+
 eventSchema.statics.findUpcoming = function (limit = 10) {
   return this.find({
     status: "published",
@@ -1069,7 +1086,6 @@ eventSchema.statics.findUpcoming = function (limit = 10) {
     .populate("organizer", "firstName lastName userName companyName profilePicture");
 };
 
-// Static method to find featured events
 eventSchema.statics.findFeatured = function (limit = 6) {
   return this.find({
     status: "published",
@@ -1082,7 +1098,6 @@ eventSchema.statics.findFeatured = function (limit = 6) {
     .populate("organizer", "firstName lastName userName profilePicture");
 };
 
-// Static method to search events
 eventSchema.statics.searchEvents = function (query, filters = {}) {
   const searchQuery = {
     status: "published",
@@ -1151,7 +1166,6 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
     .populate("organizer", "firstName lastName userName companyName profilePicture");
 };
 
-// Static method to get event statistics
 eventSchema.statics.getStatistics = async function (organizerId) {
   const stats = await this.aggregate([
     {
@@ -1193,37 +1207,198 @@ eventSchema.statics.getStatistics = async function (organizerId) {
   );
 };
 
-// Query helper for active events
+// ==================== FLEXIBLE DATE STATIC METHODS ====================
+
+eventSchema.statics.findUpcomingFlexible = function (limit = 10) {
+  const now = new Date();
+  return this.find({
+    status: "published",
+    isActive: true,
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ],
+  })
+    .sort({ startDate: 1, date: 1 })
+    .limit(limit)
+    .populate("organizer", "firstName lastName userName companyName profilePicture");
+};
+
+eventSchema.statics.findFeaturedFlexible = function (limit = 6) {
+  const now = new Date();
+  return this.find({
+    status: "published",
+    isFeatured: true,
+    isActive: true,
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ],
+  })
+    .sort({ startDate: 1, date: 1 })
+    .limit(limit)
+    .populate("organizer", "firstName lastName userName profilePicture");
+};
+
+eventSchema.statics.searchEventsFlexible = function (query, filters = {}) {
+  const now = new Date();
+  
+  const searchQuery = {
+    status: "published",
+    isActive: true,
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ],
+  };
+
+  if (query) {
+    searchQuery.$text = { $search: query };
+  }
+
+  if (filters.category) {
+    searchQuery.category = filters.category;
+  }
+
+  if (filters.city) {
+    searchQuery.city = filters.city;
+  }
+
+  if (filters.state) {
+    searchQuery.state = filters.state;
+  }
+
+  if (filters.eventType) {
+    searchQuery.eventType = filters.eventType;
+  }
+
+  if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
+    const priceConditions = [];
+
+    const legacyPriceQuery = { price: {} };
+    if (filters.minPrice !== undefined)
+      legacyPriceQuery.price.$gte = parseFloat(filters.minPrice);
+    if (filters.maxPrice !== undefined)
+      legacyPriceQuery.price.$lte = parseFloat(filters.maxPrice);
+    priceConditions.push(legacyPriceQuery);
+
+    const ticketTypePriceQuery = { "ticketTypes.price": {} };
+    if (filters.minPrice !== undefined)
+      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(filters.minPrice);
+    if (filters.maxPrice !== undefined)
+      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(filters.maxPrice);
+    priceConditions.push(ticketTypePriceQuery);
+
+    if (!searchQuery.$and) searchQuery.$and = [];
+    searchQuery.$and.push({ $or: priceConditions });
+  }
+
+  if (filters.startDate || filters.endDate) {
+    const dateConditions = [];
+    
+    const startDateQuery = { startDate: {} };
+    if (filters.startDate) startDateQuery.startDate.$gte = new Date(filters.startDate);
+    if (filters.endDate) startDateQuery.startDate.$lte = new Date(filters.endDate);
+    dateConditions.push(startDateQuery);
+    
+    const legacyDateQuery = { 
+      date: {},
+      startDate: { $exists: false }
+    };
+    if (filters.startDate) legacyDateQuery.date.$gte = new Date(filters.startDate);
+    if (filters.endDate) legacyDateQuery.date.$lte = new Date(filters.endDate);
+    dateConditions.push(legacyDateQuery);
+    
+    if (!searchQuery.$and) searchQuery.$and = [];
+    searchQuery.$and.push({ $or: dateConditions });
+  }
+
+  return this.find(searchQuery)
+    .sort(filters.sort || { startDate: 1, date: 1 })
+    .populate("organizer", "firstName lastName userName companyName profilePicture");
+};
+
+eventSchema.statics.getFlexibleDateMatch = function (dateFilter = {}) {
+  const match = {};
+  
+  if (dateFilter.$gte || dateFilter.$lte || dateFilter.$gt || dateFilter.$lt) {
+    match.$or = [
+      { startDate: dateFilter },
+      { 
+        date: { ...dateFilter, $exists: true },
+        startDate: { $exists: false }
+      }
+    ];
+  }
+  
+  return match;
+};
+
+eventSchema.statics.migrateToFlexibleDates = async function () {
+  try {
+    const eventsToMigrate = await this.find({
+      date: { $exists: true },
+      startDate: { $exists: false }
+    });
+
+    console.log(`Found ${eventsToMigrate.length} events to migrate`);
+
+    let migrated = 0;
+    for (const event of eventsToMigrate) {
+      event.startDate = event.date;
+      event.endDate = event.date;
+      await event.save({ validateBeforeSave: false });
+      migrated++;
+    }
+
+    console.log(`Successfully migrated ${migrated} events`);
+    return { success: true, migrated };
+  } catch (error) {
+    console.error("Migration error:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+eventSchema.statics.getDateFieldName = function (event) {
+  return event && event.startDate ? 'startDate' : 'date';
+};
+
+// ==================== QUERY HELPERS ====================
+
 eventSchema.query.active = function () {
   return this.where({ isActive: true, status: "published" });
 };
 
-// Query helper for upcoming events
 eventSchema.query.upcoming = function () {
   return this.where({ startDate: { $gte: new Date() } });
 };
 
-// Query helper for featured events
+eventSchema.query.upcomingFlexible = function () {
+  const now = new Date();
+  return this.where({
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ]
+  });
+};
+
 eventSchema.query.featured = function () {
   return this.where({ isFeatured: true, status: "published" });
 };
 
-// Query helper for events with community
 eventSchema.query.withCommunity = function () {
   return this.where({ communityEnabled: true });
 };
 
-// Query helper for virtual events
 eventSchema.query.virtual = function () {
   return this.where({ eventType: "virtual" });
 };
 
-// Query helper for hybrid events
 eventSchema.query.hybrid = function () {
   return this.where({ eventType: "hybrid" });
 };
 
-// Query helper for physical events
 eventSchema.query.physical = function () {
   return this.where({ eventType: "physical" });
 };

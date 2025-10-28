@@ -73,8 +73,6 @@ const createEvent = async (req, res, next) => {
     }
 
     validateRequiredFields(parsedBody, requiredFields);
-
-    // Validate organizer role
     validateOrganizerRole(req.user.role);
 
     // Validate ticket types or legacy pricing
@@ -116,14 +114,19 @@ const createEvent = async (req, res, next) => {
       uploadedImages = await uploadImages(imageFiles);
     }
 
+    // ✅ FLEXIBLE: Store in both date and startDate for compatibility
+    const eventDate = new Date(startDate);
+    const eventEndDate = endDate ? new Date(endDate) : eventDate;
+
     // Prepare event data
     const eventData = {
       title,
       description,
       longDescription: longDescription || description,
       category,
-      startDate: new Date(startDate),
-      endDate: endDate ? new Date(endDate) : new Date(startDate),
+      date: eventDate,              // ✅ For backwards compatibility
+      startDate: eventDate,          // ✅ For new code
+      endDate: eventEndDate,
       time,
       endTime,
       eventType,
@@ -166,12 +169,10 @@ const createEvent = async (req, res, next) => {
         isFree: safeParseNumber(ticket.price, 0) === 0,
       }));
 
-      // Set legacy fields for compatibility
       eventData.price = Math.min(...parsedTicketTypes.map(t => safeParseNumber(t.price, 0)));
       eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + safeParseNumber(t.capacity, 1), 0);
       eventData.availableTickets = eventData.capacity;
     } else {
-      // Legacy single ticket type
       eventData.price = safeParseNumber(price, 0);
       eventData.capacity = safeParseNumber(capacity, 1);
       eventData.availableTickets = safeParseNumber(capacity, 1);
@@ -179,10 +180,8 @@ const createEvent = async (req, res, next) => {
       eventData.ticketBenefits = safeParseArray(ticketBenefits);
     }
 
-    // Create event
     const event = await Event.create(eventData);
 
-    // Send notification
     try {
       await NotificationService.createSystemNotification(req.user.userId, {
         title: "🎉 Event Created Successfully!",
@@ -206,35 +205,30 @@ const createEvent = async (req, res, next) => {
 };
 
 // @desc    Get all events with filtering and pagination
-// @route   GET /api/v1/events
+// @route   GET /api/v1/events/all
 // @access  Public
 const getAllEvents = async (req, res, next) => {
   try {
     let { search, isVoiceSearch, page = 1, limit = 12, sort = "date", ...filters } = req.query;
 
-    // Parse voice search
     if (isVoiceSearch === "true" && search) {
       const voiceParams = parseVoiceQuery(search);
       Object.assign(filters, voiceParams);
       search = voiceParams.search || search;
     }
 
-    // Build query and sort
+    // ✅ Build flexible query (supports both date and startDate)
     const query = buildEventSearchQuery({ ...filters, search }, req.user?.role);
     
-    // 🔍 DEBUG: Log the final query
     console.log("Final Query:", JSON.stringify(query, null, 2));
+    console.log("User authenticated:", !!req.user);
     
     const sortOption = getSortOptions(sort);
-    
-    console.log("Sort Option:", sortOption);
 
-    // Pagination
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    // Execute query
     const [events, total] = await Promise.all([
       Event.find(query)
         .sort(sortOption)
@@ -244,7 +238,7 @@ const getAllEvents = async (req, res, next) => {
       Event.countDocuments(query)
     ]);
 
-    console.log(`Found ${events.length} events out of ${total} total`);
+    console.log(`✅ Found ${events.length} events out of ${total} total`);
 
     const response = {
       success: true,
@@ -275,16 +269,38 @@ const getAllEvents = async (req, res, next) => {
 // @access  Public
 const getPastEvents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 12, sort = "-startDate", ...filters } = req.query;
+    const { page = 1, limit = 12, sort = "-date", ...filters } = req.query;
 
-    const query = {
-      ...buildEventSearchQuery(filters),
-      startDate: { $lt: new Date() },
-      status: "published",
+    const baseQuery = buildEventSearchQuery(filters, req.user?.role);
+    
+    // ✅ FLEXIBLE: Support both date and startDate
+    const pastDateCondition = {
+      $or: [
+        { date: { $lt: new Date() } },
+        { startDate: { $lt: new Date() } }
+      ]
     };
 
-    const sortOption = getSortOptions(sort);
+    let query = {
+      ...baseQuery,
+      status: "published",
+      isActive: true
+    };
 
+    // Handle combining with existing $or conditions from baseQuery
+    if (baseQuery.$or) {
+      query.$and = [
+        { $or: baseQuery.$or },
+        pastDateCondition
+      ];
+      delete query.$or;
+    } else {
+      query = { ...query, ...pastDateCondition };
+    }
+
+    console.log('📅 Past Events Query:', JSON.stringify(query, null, 2));
+
+    const sortOption = getSortOptions(sort);
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
@@ -298,6 +314,8 @@ const getPastEvents = async (req, res, next) => {
       Event.countDocuments(query)
     ]);
 
+    console.log(`✅ Found ${events.length} past events out of ${total} total`);
+
     res.status(200).json({
       success: true,
       count: events.length,
@@ -308,6 +326,7 @@ const getPastEvents = async (req, res, next) => {
     });
 
   } catch (error) {
+    console.error('❌ getPastEvents Error:', error);
     next(error);
   }
 };
@@ -319,7 +338,6 @@ const getEventById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // Try to find by ID first, then by slug
     let event = await Event.findOne({
       $or: [{ _id: id }, { slug: id }]
     })
@@ -330,7 +348,6 @@ const getEventById = async (req, res, next) => {
       return next(new ErrorResponse("Event not found", 404));
     }
 
-    // Increment views for published events
     if (event.status === "published") {
       await event.incrementViews();
     }
@@ -357,17 +374,14 @@ const updateEvent = async (req, res, next) => {
       return next(new ErrorResponse("Event not found", 404));
     }
 
-    // Check ownership
     validateEventOwnership(event, req.user.userId, req.user.role);
 
-    // Process form data
     const processedBody = processFormDataArrays(req.body);
     const parsedBody = parseJSONFields(processedBody, [
       'ticketTypes', 'tags', 'includes', 'requirements', 
       'existingImages', 'imagesToDelete'
     ]);
 
-    // Handle new image uploads
     if (req.files && req.files.images) {
       const imageFiles = Array.isArray(req.files.images) 
         ? req.files.images 
@@ -381,7 +395,6 @@ const updateEvent = async (req, res, next) => {
       event.images.push(...newImages);
     }
 
-    // Handle image deletions
     if (parsedBody.imagesToDelete && Array.isArray(parsedBody.imagesToDelete)) {
       const publicIdsToDelete = [];
       
@@ -398,7 +411,6 @@ const updateEvent = async (req, res, next) => {
       }
     }
 
-    // Update allowed fields
     const allowedUpdates = [
       'title', 'description', 'longDescription', 'category',
       'startDate', 'endDate', 'time', 'endTime', 'venue', 
@@ -411,7 +423,12 @@ const updateEvent = async (req, res, next) => {
     allowedUpdates.forEach(field => {
       if (parsedBody[field] !== undefined) {
         if (field === 'startDate' || field === 'endDate') {
-          event[field] = new Date(parsedBody[field]);
+          const dateValue = new Date(parsedBody[field]);
+          event[field] = dateValue;
+          // ✅ Sync both date and startDate
+          if (field === 'startDate') {
+            event.date = dateValue;
+          }
         } else if (field === 'price' || field === 'capacity') {
           event[field] = safeParseNumber(parsedBody[field], field === 'capacity' ? 1 : 0);
         } else if (field === 'ticketTypes' && Array.isArray(parsedBody[field])) {
@@ -455,7 +472,6 @@ const deleteEvent = async (req, res, next) => {
 
     validateEventOwnership(event, req.user.userId, req.user.role);
 
-    // Check for existing bookings
     if (event.totalBookings > 0) {
       return next(new ErrorResponse(
         "Cannot delete event with existing bookings. Please cancel the event instead.",
@@ -463,13 +479,11 @@ const deleteEvent = async (req, res, next) => {
       ));
     }
 
-    // Delete images from Cloudinary
     const publicIds = event.images.map(img => img.publicId).filter(Boolean);
     if (publicIds.length > 0) {
       await deleteImages(publicIds);
     }
 
-    // Soft delete
     event.deletedAt = new Date();
     event.isActive = false;
     event.status = "cancelled";
@@ -595,7 +609,6 @@ const completeEvent = async (req, res, next) => {
 
     validateEventOwnership(event, req.user.userId, req.user.role);
     
-    // Mark event as completed
     event.status = "completed";
     event.isActive = false;
     await event.save();
@@ -619,7 +632,6 @@ const getOrganizerEvents = async (req, res, next) => {
     
     const query = { organizer: req.user.userId };
     
-    // Filter by status if provided
     if (status && status !== 'all') {
       query.status = status;
     }
@@ -650,7 +662,6 @@ const getOrganizerEvents = async (req, res, next) => {
   }
 };
 
-
 // @desc    Cancel event
 // @route   PATCH /api/v1/events/:id/cancel
 // @access  Private (Organizer only - own events)
@@ -665,14 +676,11 @@ const cancelEvent = async (req, res, next) => {
 
     validateEventOwnership(event, req.user.userId, req.user.role);
     
-    // Cancel event
     event.status = "cancelled";
     event.isActive = false;
     await event.save();
 
-    // Send notifications to attendees
     try {
-      // You would implement notification logic here for attendees
       await NotificationService.createSystemNotification(req.user.userId, {
         title: "Event Cancelled",
         message: `Your event "${event.title}" has been cancelled.`,
@@ -692,7 +700,6 @@ const cancelEvent = async (req, res, next) => {
     next(error);
   }
 };
-
 
 // @desc    Delete event image
 // @route   DELETE /api/v1/events/:id/images/:imageIndex
@@ -715,11 +722,9 @@ const deleteEventImage = async (req, res, next) => {
 
     const imageToDelete = event.images[index];
     
-    // Remove image from array
     event.images.splice(index, 1);
     await event.save();
 
-    // Delete from Cloudinary
     if (imageToDelete.publicId) {
       await deleteImages([imageToDelete.publicId]);
     }
@@ -750,7 +755,7 @@ const searchEventsAdvanced = async (req, res, next) => {
       priceMax,
       date,
       eventType
-    });
+    }, req.user?.role);
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
