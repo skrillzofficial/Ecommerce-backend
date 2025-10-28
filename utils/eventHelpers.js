@@ -1,6 +1,5 @@
 const cloudinary = require("cloudinary").v2;
 const fs = require("fs");
-const path = require("path");
 
 // Safe number parsing
 const safeParseNumber = (value, defaultValue = 0) => {
@@ -55,7 +54,6 @@ const parseJSONFields = (body, fields) => {
         parsed[field] = JSON.parse(parsed[field]);
       } catch (e) {
         console.warn(`Failed to parse ${field}:`, e.message);
-        // Fallback to safe array parsing
         parsed[field] = safeParseArray(parsed[field]);
       }
     }
@@ -70,7 +68,6 @@ const uploadImages = async (imageFiles, folder = "eventry/events") => {
   
   for (const image of imageFiles) {
     try {
-      // Validate image file
       if (!image.tempFilePath || !fs.existsSync(image.tempFilePath)) {
         throw new Error('Invalid image file');
       }
@@ -81,7 +78,7 @@ const uploadImages = async (imageFiles, folder = "eventry/events") => {
         unique_filename: true,
         resource_type: "auto",
         transformation: [
-          { width: 1200, height: 600, crop: "limit" }, // Changed to limit to maintain aspect ratio
+          { width: 1200, height: 600, crop: "limit" },
           { quality: "auto" },
           { format: "auto" },
         ],
@@ -95,14 +92,12 @@ const uploadImages = async (imageFiles, folder = "eventry/events") => {
         format: result.format
       });
 
-      // Clean up temp file
       if (fs.existsSync(image.tempFilePath)) {
         fs.unlinkSync(image.tempFilePath);
       }
     } catch (uploadError) {
       console.error("Image upload error:", uploadError);
       
-      // Cleanup uploaded images on failure
       for (const uploadedImg of uploadedImages) {
         try {
           await cloudinary.uploader.destroy(uploadedImg.publicId);
@@ -180,7 +175,6 @@ const validateTicketTypes = (ticketTypes) => {
       };
     }
 
-    // Validate access type for hybrid events
     if (ticket.accessType && !['physical', 'virtual', 'both'].includes(ticket.accessType)) {
       return {
         isValid: false,
@@ -192,7 +186,9 @@ const validateTicketTypes = (ticketTypes) => {
   return { isValid: true };
 };
 
-// Build event search query
+// ============================================
+// FIXED: Build event search query
+// ============================================
 const buildEventSearchQuery = (filters = {}, userRole = null) => {
   const {
     search,
@@ -212,18 +208,13 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
 
   const query = { isActive: true };
 
-  // Only show published events to non-organizers
+  // ✅ FIXED: Show published upcoming events to everyone except organizers viewing their own events
   if (!userRole || userRole !== "organizer") {
     query.status = "published";
-    query.startDate = { $gte: new Date() };
+    // ✅ FIXED: Changed from startDate to date (matches your DB schema)
+    query.date = { $gte: new Date() };
   } else if (status) {
     query.status = status;
-  }
-
-  // Organizer filter
-  if (organizer === 'me' && userRole === 'organizer') {
-    // This would be handled in the controller by adding organizer ID
-    // query.organizer = userId;
   }
 
   // Text search across multiple fields
@@ -242,11 +233,11 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
   if (eventType) query.eventType = eventType;
   if (isFeatured === "true") query.isFeatured = true;
 
-  // Date range
+  // ✅ FIXED: Date range filter using 'date' field instead of 'startDate'
   if (startDate || endDate) {
-    query.startDate = query.startDate || {};
-    if (startDate) query.startDate.$gte = new Date(startDate);
-    if (endDate) query.startDate.$lte = new Date(endDate);
+    query.date = query.date || {};
+    if (startDate) query.date.$gte = new Date(startDate);
+    if (endDate) query.date.$lte = new Date(endDate);
   }
 
   // Price range - handle both legacy price and ticket types
@@ -254,27 +245,23 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
     const priceQueries = [];
 
     // Legacy price field
-    if (minPrice !== undefined || maxPrice !== undefined) {
-      const legacyQuery = { price: {} };
-      if (minPrice !== undefined) legacyQuery.price.$gte = safeParseNumber(minPrice);
-      if (maxPrice !== undefined) legacyQuery.price.$lte = safeParseNumber(maxPrice);
-      priceQueries.push(legacyQuery);
-    }
+    const legacyQuery = { price: {} };
+    if (minPrice !== undefined) legacyQuery.price.$gte = safeParseNumber(minPrice);
+    if (maxPrice !== undefined) legacyQuery.price.$lte = safeParseNumber(maxPrice);
+    priceQueries.push(legacyQuery);
 
     // Ticket types price
-    if (minPrice !== undefined || maxPrice !== undefined) {
-      const ticketQuery = { "ticketTypes.price": {} };
-      if (minPrice !== undefined) ticketQuery["ticketTypes.price"].$gte = safeParseNumber(minPrice);
-      if (maxPrice !== undefined) ticketQuery["ticketTypes.price"].$lte = safeParseNumber(maxPrice);
-      priceQueries.push(ticketQuery);
-    }
+    const ticketQuery = { "ticketTypes.price": {} };
+    if (minPrice !== undefined) ticketQuery["ticketTypes.price"].$gte = safeParseNumber(minPrice);
+    if (maxPrice !== undefined) ticketQuery["ticketTypes.price"].$lte = safeParseNumber(maxPrice);
+    priceQueries.push(ticketQuery);
 
     if (priceQueries.length > 0) {
       query.$or = [...(query.$or || []), ...priceQueries];
     }
   }
 
-  // Additional filters
+  // Free tickets filter
   if (hasFreeTickets === "true") {
     query.$or = query.$or || [];
     query.$or.push(
@@ -283,18 +270,22 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
     );
   }
 
+  // Online events filter
   if (isOnline === "true") {
     query.eventType = "virtual";
   }
 
+  console.log('🔍 Built Event Query:', JSON.stringify(query, null, 2));
+  
   return query;
 };
 
 // Get sort options
 const getSortOptions = (sort = "date") => {
   const sortOptions = {
-    "date": { startDate: 1 },
-    "-date": { startDate: -1 },
+    // ✅ FIXED: Changed from startDate to date
+    "date": { date: 1 },
+    "-date": { date: -1 },
     "price": { price: 1 },
     "-price": { price: -1 },
     "popular": { totalLikes: -1, views: -1 },
@@ -305,7 +296,7 @@ const getSortOptions = (sort = "date") => {
     "-name": { title: -1 }
   };
 
-  return sortOptions[sort] || { startDate: 1 };
+  return sortOptions[sort] || { date: 1 };
 };
 
 // Calculate service fee for free events
