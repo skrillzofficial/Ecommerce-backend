@@ -187,7 +187,7 @@ const validateTicketTypes = (ticketTypes) => {
 };
 
 // ============================================
-// FIXED: Build event search query
+// FLEXIBLE: Build event search query supporting BOTH date and startDate
 // ============================================
 const buildEventSearchQuery = (filters = {}, userRole = null) => {
   const {
@@ -208,23 +208,37 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
 
   const query = { isActive: true };
 
-  // ✅ FIXED: Show published upcoming events to everyone except organizers viewing their own events
+  // Show published upcoming events to everyone except organizers viewing their own events
   if (!userRole || userRole !== "organizer") {
     query.status = "published";
-    // ✅ FIXED: Changed from startDate to date (matches your DB schema)
-    query.date = { $gte: new Date() };
+    // ✅ FLEXIBLE: Support both date and startDate fields using $or
+    query.$or = [
+      { date: { $gte: new Date() } },
+      { startDate: { $gte: new Date() } }
+    ];
   } else if (status) {
     query.status = status;
   }
 
   // Text search across multiple fields
   if (search && search.trim().length > 0) {
-    query.$or = [
+    const searchOr = [
       { title: { $regex: search, $options: 'i' } },
       { description: { $regex: search, $options: 'i' } },
       { venue: { $regex: search, $options: 'i' } },
       { city: { $regex: search, $options: 'i' } }
     ];
+    
+    // If $or already exists (from date filter), combine them using $and
+    if (query.$or) {
+      query.$and = [
+        { $or: query.$or },
+        { $or: searchOr }
+      ];
+      delete query.$or;
+    } else {
+      query.$or = searchOr;
+    }
   }
 
   // Basic filters
@@ -233,11 +247,40 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
   if (eventType) query.eventType = eventType;
   if (isFeatured === "true") query.isFeatured = true;
 
-  // ✅ FIXED: Date range filter using 'date' field instead of 'startDate'
+  // ✅ FLEXIBLE: Date range filter supporting both date and startDate
   if (startDate || endDate) {
-    query.date = query.date || {};
-    if (startDate) query.date.$gte = new Date(startDate);
-    if (endDate) query.date.$lte = new Date(endDate);
+    const dateRangeOr = [];
+    
+    if (startDate && endDate) {
+      dateRangeOr.push(
+        { date: { $gte: new Date(startDate), $lte: new Date(endDate) } },
+        { startDate: { $gte: new Date(startDate), $lte: new Date(endDate) } }
+      );
+    } else if (startDate) {
+      dateRangeOr.push(
+        { date: { $gte: new Date(startDate) } },
+        { startDate: { $gte: new Date(startDate) } }
+      );
+    } else if (endDate) {
+      dateRangeOr.push(
+        { date: { $lte: new Date(endDate) } },
+        { startDate: { $lte: new Date(endDate) } }
+      );
+    }
+
+    if (dateRangeOr.length > 0) {
+      if (query.$and) {
+        query.$and.push({ $or: dateRangeOr });
+      } else if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          { $or: dateRangeOr }
+        ];
+        delete query.$or;
+      } else {
+        query.$or = dateRangeOr;
+      }
+    }
   }
 
   // Price range - handle both legacy price and ticket types
@@ -257,17 +300,38 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
     priceQueries.push(ticketQuery);
 
     if (priceQueries.length > 0) {
-      query.$or = [...(query.$or || []), ...priceQueries];
+      if (query.$and) {
+        query.$and.push({ $or: priceQueries });
+      } else if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          { $or: priceQueries }
+        ];
+        delete query.$or;
+      } else {
+        query.$or = priceQueries;
+      }
     }
   }
 
   // Free tickets filter
   if (hasFreeTickets === "true") {
-    query.$or = query.$or || [];
-    query.$or.push(
+    const freeTicketQueries = [
       { price: 0 }, 
       { "ticketTypes.price": 0 }
-    );
+    ];
+
+    if (query.$and) {
+      query.$and.push({ $or: freeTicketQueries });
+    } else if (query.$or) {
+      query.$and = [
+        { $or: query.$or },
+        { $or: freeTicketQueries }
+      ];
+      delete query.$or;
+    } else {
+      query.$or = freeTicketQueries;
+    }
   }
 
   // Online events filter
@@ -280,12 +344,12 @@ const buildEventSearchQuery = (filters = {}, userRole = null) => {
   return query;
 };
 
-// Get sort options
+// ✅ FLEXIBLE: Get sort options supporting both date and startDate
 const getSortOptions = (sort = "date") => {
   const sortOptions = {
-    // ✅ FIXED: Changed from startDate to date
-    "date": { date: 1 },
-    "-date": { date: -1 },
+    // Try date first, fallback to startDate
+    "date": { date: 1, startDate: 1 },
+    "-date": { date: -1, startDate: -1 },
     "price": { price: 1 },
     "-price": { price: -1 },
     "popular": { totalLikes: -1, views: -1 },
@@ -296,7 +360,7 @@ const getSortOptions = (sort = "date") => {
     "-name": { title: -1 }
   };
 
-  return sortOptions[sort] || { date: 1 };
+  return sortOptions[sort] || { date: 1, startDate: 1 };
 };
 
 // Calculate service fee for free events
