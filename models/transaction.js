@@ -7,7 +7,7 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      index: true, // ✅ KEEP this - remove the separate index below
+      index: true,
     },
     transactionId: {
       type: String,
@@ -20,25 +20,40 @@ const transactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // Event & Booking Information
     eventId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
-      required: true,
-      index: true, // ✅ KEEP this
+      required: function() {
+        // ✅ NOT required for service_fee with draft events
+        return this.type !== 'service_fee' || !this.metadata?.isDraft;
+      },
+      index: true,
     },
+    
+    // ✅ ADD TYPE FIELD (should be at the top)
+    type: {
+      type: String,
+      enum: ['event_booking', 'service_fee', 'withdrawal', 'refund'],
+      default: 'event_booking',
+    },
+    
     metadata: {
-      type: mongoose.Schema.Types.Mixed, // ✅ Add this to store draft info
+      type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    
     bookingId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
-      required: true,
-      index: true, // ✅ KEEP this - remove the separate index below
+      required: function() {
+        // ✅ Only required for event_booking type
+        return this.type === 'event_booking';
+      },
+      index: true,
     },
 
     // Event Snapshot
@@ -103,7 +118,7 @@ const transactionSchema = new mongoose.Schema(
         "partially_refunded",
       ],
       default: "pending",
-      index: true, // ✅ KEEP this
+      index: true,
     },
     paymentMethod: {
       type: String,
@@ -173,11 +188,11 @@ const transactionSchema = new mongoose.Schema(
     transactionDate: {
       type: Date,
       default: Date.now,
-      index: true, // ✅ KEEP this
+      index: true,
     },
     paidAt: {
       type: Date,
-      index: true, // ✅ KEEP this
+      index: true,
     },
     failedAt: {
       type: Date,
@@ -248,14 +263,12 @@ const transactionSchema = new mongoose.Schema(
   }
 );
 
-// Indexes - REMOVED DUPLICATES
-// ❌ REMOVED: transactionSchema.index({ reference: 1 }); // Duplicate of field definition
-// ❌ REMOVED: transactionSchema.index({ bookingId: 1 }); // Duplicate of field definition
-
+// Indexes
 transactionSchema.index({ userId: 1, transactionDate: -1 });
 transactionSchema.index({ eventId: 1, status: 1 });
 transactionSchema.index({ status: 1, transactionDate: -1 });
 transactionSchema.index({ refundStatus: 1 });
+transactionSchema.index({ type: 1, status: 1 }); // ✅ Add index for type
 
 // ============ VIRTUALS ============
 
@@ -301,7 +314,9 @@ transactionSchema.methods.markAsCompleted = async function (paystackData) {
   this.status = "completed";
   this.paidAt = new Date();
   this.paystackData = paystackData;
-  this.paymentMethod = paystackData.channel;
+  if (paystackData.channel) {
+    this.paymentMethod = paystackData.channel;
+  }
 
   return await this.save();
 };
@@ -473,6 +488,14 @@ transactionSchema.statics.getPendingTransactions = function (hoursOld = 24) {
 
 // Pre-save hook
 transactionSchema.pre("save", function (next) {
+  // Generate reference if new and not provided
+  if (this.isNew && !this.reference) {
+    this.reference = `TXN-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 8)
+      .toUpperCase()}`;
+  }
+
   // Generate transaction ID if new
   if (this.isNew && !this.transactionId) {
     this.transactionId = `TXN-${Date.now()}-${Math.random()
