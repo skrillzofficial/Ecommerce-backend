@@ -30,6 +30,10 @@ const transactionSchema = new mongoose.Schema(
       required: true,
       index: true, // ✅ KEEP this
     },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed, // ✅ Add this to store draft info
+      default: {},
+    },
     bookingId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
@@ -182,7 +186,14 @@ const transactionSchema = new mongoose.Schema(
     // Refund Information
     refundStatus: {
       type: String,
-      enum: ["none", "requested", "approved", "processing", "completed", "denied"],
+      enum: [
+        "none",
+        "requested",
+        "approved",
+        "processing",
+        "completed",
+        "denied",
+      ],
       default: "none",
     },
     refundAmount: {
@@ -244,7 +255,7 @@ const transactionSchema = new mongoose.Schema(
 transactionSchema.index({ userId: 1, transactionDate: -1 });
 transactionSchema.index({ eventId: 1, status: 1 });
 transactionSchema.index({ status: 1, transactionDate: -1 });
-transactionSchema.index({ "refundStatus": 1 });
+transactionSchema.index({ refundStatus: 1 });
 
 // ============ VIRTUALS ============
 
@@ -392,7 +403,10 @@ transactionSchema.statics.findByBooking = function (bookingId) {
 };
 
 // Get revenue statistics
-transactionSchema.statics.getRevenueStats = async function (organizerId, period = "month") {
+transactionSchema.statics.getRevenueStats = async function (
+  organizerId,
+  period = "month"
+) {
   const dateFilter = getDateFilter(period);
 
   const stats = await this.aggregate([
