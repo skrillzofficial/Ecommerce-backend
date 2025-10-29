@@ -896,8 +896,9 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// Validate community and agreement
+// ✅ FIXED: Validate community and agreement - Only runs on save operations
 eventSchema.pre("save", function (next) {
+  // Community validation
   if (this.communityEnabled) {
     const communityPlatforms = ['whatsapp', 'telegram', 'discord', 'slack'];
     let hasValidLink = false;
@@ -914,8 +915,27 @@ eventSchema.pre("save", function (next) {
     }
   }
   
-  if (this.status === "published" && this.isPaidEvent) {
-    if (!this.agreement?.acceptedTerms) {
+  // ✅ CRITICAL FIX: Payment agreement validation
+  // Only check actual fields, not virtual properties
+  // Only validate when creating/modifying relevant fields
+  if (this.status === "published") {
+    // Determine if event has paid tickets by checking actual fields
+    let hasPaidTickets = false;
+    
+    if (this.ticketTypes && this.ticketTypes.length > 0) {
+      hasPaidTickets = this.ticketTypes.some(tt => tt.price > 0);
+    } else if (this.price > 0) {
+      hasPaidTickets = true;
+    }
+    
+    // Only validate when document is new or relevant fields are being modified
+    const isRelevantChange = this.isNew || 
+                             this.isModified('status') || 
+                             this.isModified('ticketTypes') || 
+                             this.isModified('price');
+    
+    // Check terms acceptance for paid events
+    if (hasPaidTickets && isRelevantChange && !this.agreement?.acceptedTerms) {
       return next(new Error("Terms must be accepted for paid events"));
     }
   }
@@ -1073,36 +1093,49 @@ eventSchema.methods.usesNewDateSystem = function () {
   return !!this.startDate;
 };
 
-// ==================== STATIC METHODS (LEGACY - Original) ====================
+// ==================== STATIC METHODS ====================
 
 eventSchema.statics.findUpcoming = function (limit = 10) {
+  const now = new Date();
   return this.find({
     status: "published",
-    startDate: { $gte: new Date() },
     isActive: true,
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ],
   })
-    .sort({ startDate: 1 })
+    .sort({ startDate: 1, date: 1 })
     .limit(limit)
     .populate("organizer", "firstName lastName userName companyName profilePicture");
 };
 
 eventSchema.statics.findFeatured = function (limit = 6) {
+  const now = new Date();
   return this.find({
     status: "published",
     isFeatured: true,
-    startDate: { $gte: new Date() },
     isActive: true,
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ],
   })
-    .sort({ startDate: 1 })
+    .sort({ startDate: 1, date: 1 })
     .limit(limit)
     .populate("organizer", "firstName lastName userName profilePicture");
 };
 
 eventSchema.statics.searchEvents = function (query, filters = {}) {
+  const now = new Date();
+  
   const searchQuery = {
     status: "published",
     isActive: true,
-    startDate: { $gte: new Date() },
+    $or: [
+      { startDate: { $gte: now } },
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ],
   };
 
   if (query) {
@@ -1125,44 +1158,51 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
     searchQuery.eventType = filters.eventType;
   }
 
+  // Price filtering
   if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
-    const priceQuery = [];
+    const priceConditions = [];
 
-    if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
-      const legacyPriceQuery = { price: {} };
-      if (filters.minPrice !== undefined)
-        legacyPriceQuery.price.$gte = parseFloat(filters.minPrice);
-      if (filters.maxPrice !== undefined)
-        legacyPriceQuery.price.$lte = parseFloat(filters.maxPrice);
-      priceQuery.push(legacyPriceQuery);
-    }
+    const legacyPriceQuery = { price: {} };
+    if (filters.minPrice !== undefined)
+      legacyPriceQuery.price.$gte = parseFloat(filters.minPrice);
+    if (filters.maxPrice !== undefined)
+      legacyPriceQuery.price.$lte = parseFloat(filters.maxPrice);
+    priceConditions.push(legacyPriceQuery);
 
-    if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
-      const ticketTypePriceQuery = { "ticketTypes.price": {} };
-      if (filters.minPrice !== undefined)
-        ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(
-          filters.minPrice
-        );
-      if (filters.maxPrice !== undefined)
-        ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(
-          filters.maxPrice
-        );
-      priceQuery.push(ticketTypePriceQuery);
-    }
+    const ticketTypePriceQuery = { "ticketTypes.price": {} };
+    if (filters.minPrice !== undefined)
+      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(filters.minPrice);
+    if (filters.maxPrice !== undefined)
+      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(filters.maxPrice);
+    priceConditions.push(ticketTypePriceQuery);
 
-    if (priceQuery.length > 0) {
-      searchQuery.$or = priceQuery;
-    }
+    if (!searchQuery.$and) searchQuery.$and = [];
+    searchQuery.$and.push({ $or: priceConditions });
   }
 
+  // Date range filtering
   if (filters.startDate || filters.endDate) {
-    searchQuery.startDate = {};
-    if (filters.startDate) searchQuery.startDate.$gte = new Date(filters.startDate);
-    if (filters.endDate) searchQuery.startDate.$lte = new Date(filters.endDate);
+    const dateConditions = [];
+    
+    const startDateQuery = { startDate: {} };
+    if (filters.startDate) startDateQuery.startDate.$gte = new Date(filters.startDate);
+    if (filters.endDate) startDateQuery.startDate.$lte = new Date(filters.endDate);
+    dateConditions.push(startDateQuery);
+    
+    const legacyDateQuery = { 
+      date: {},
+      startDate: { $exists: false }
+    };
+    if (filters.startDate) legacyDateQuery.date.$gte = new Date(filters.startDate);
+    if (filters.endDate) legacyDateQuery.date.$lte = new Date(filters.endDate);
+    dateConditions.push(legacyDateQuery);
+    
+    if (!searchQuery.$and) searchQuery.$and = [];
+    searchQuery.$and.push({ $or: dateConditions });
   }
 
   return this.find(searchQuery)
-    .sort(filters.sort || { startDate: 1 })
+    .sort(filters.sort || { startDate: 1, date: 1 })
     .populate("organizer", "firstName lastName userName companyName profilePicture");
 };
 
@@ -1205,117 +1245,6 @@ eventSchema.statics.getStatistics = async function (organizerId) {
       avgRevenue: 0,
     }
   );
-};
-
-// ==================== FLEXIBLE DATE STATIC METHODS ====================
-
-eventSchema.statics.findUpcomingFlexible = function (limit = 10) {
-  const now = new Date();
-  return this.find({
-    status: "published",
-    isActive: true,
-    $or: [
-      { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
-    ],
-  })
-    .sort({ startDate: 1, date: 1 })
-    .limit(limit)
-    .populate("organizer", "firstName lastName userName companyName profilePicture");
-};
-
-eventSchema.statics.findFeaturedFlexible = function (limit = 6) {
-  const now = new Date();
-  return this.find({
-    status: "published",
-    isFeatured: true,
-    isActive: true,
-    $or: [
-      { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
-    ],
-  })
-    .sort({ startDate: 1, date: 1 })
-    .limit(limit)
-    .populate("organizer", "firstName lastName userName profilePicture");
-};
-
-eventSchema.statics.searchEventsFlexible = function (query, filters = {}) {
-  const now = new Date();
-  
-  const searchQuery = {
-    status: "published",
-    isActive: true,
-    $or: [
-      { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
-    ],
-  };
-
-  if (query) {
-    searchQuery.$text = { $search: query };
-  }
-
-  if (filters.category) {
-    searchQuery.category = filters.category;
-  }
-
-  if (filters.city) {
-    searchQuery.city = filters.city;
-  }
-
-  if (filters.state) {
-    searchQuery.state = filters.state;
-  }
-
-  if (filters.eventType) {
-    searchQuery.eventType = filters.eventType;
-  }
-
-  if (filters.minPrice !== undefined || filters.maxPrice !== undefined) {
-    const priceConditions = [];
-
-    const legacyPriceQuery = { price: {} };
-    if (filters.minPrice !== undefined)
-      legacyPriceQuery.price.$gte = parseFloat(filters.minPrice);
-    if (filters.maxPrice !== undefined)
-      legacyPriceQuery.price.$lte = parseFloat(filters.maxPrice);
-    priceConditions.push(legacyPriceQuery);
-
-    const ticketTypePriceQuery = { "ticketTypes.price": {} };
-    if (filters.minPrice !== undefined)
-      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(filters.minPrice);
-    if (filters.maxPrice !== undefined)
-      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(filters.maxPrice);
-    priceConditions.push(ticketTypePriceQuery);
-
-    if (!searchQuery.$and) searchQuery.$and = [];
-    searchQuery.$and.push({ $or: priceConditions });
-  }
-
-  if (filters.startDate || filters.endDate) {
-    const dateConditions = [];
-    
-    const startDateQuery = { startDate: {} };
-    if (filters.startDate) startDateQuery.startDate.$gte = new Date(filters.startDate);
-    if (filters.endDate) startDateQuery.startDate.$lte = new Date(filters.endDate);
-    dateConditions.push(startDateQuery);
-    
-    const legacyDateQuery = { 
-      date: {},
-      startDate: { $exists: false }
-    };
-    if (filters.startDate) legacyDateQuery.date.$gte = new Date(filters.startDate);
-    if (filters.endDate) legacyDateQuery.date.$lte = new Date(filters.endDate);
-    dateConditions.push(legacyDateQuery);
-    
-    if (!searchQuery.$and) searchQuery.$and = [];
-    searchQuery.$and.push({ $or: dateConditions });
-  }
-
-  return this.find(searchQuery)
-    .sort(filters.sort || { startDate: 1, date: 1 })
-    .populate("organizer", "firstName lastName userName companyName profilePicture");
 };
 
 eventSchema.statics.getFlexibleDateMatch = function (dateFilter = {}) {
@@ -1370,15 +1299,21 @@ eventSchema.query.active = function () {
 };
 
 eventSchema.query.upcoming = function () {
-  return this.where({ startDate: { $gte: new Date() } });
-};
-
-eventSchema.query.upcomingFlexible = function () {
   const now = new Date();
   return this.where({
     $or: [
       { startDate: { $gte: now } },
       { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+    ]
+  });
+};
+
+eventSchema.query.past = function () {
+  const now = new Date();
+  return this.where({
+    $or: [
+      { startDate: { $lt: now } },
+      { date: { $lt: now, $exists: true }, startDate: { $exists: false } }
     ]
   });
 };
@@ -1403,4 +1338,38 @@ eventSchema.query.physical = function () {
   return this.where({ eventType: "physical" });
 };
 
-module.exports = mongoose.model("Event", eventSchema);
+eventSchema.query.byOrganizer = function (organizerId) {
+  return this.where({ organizer: organizerId });
+};
+
+eventSchema.query.byCategory = function (category) {
+  return this.where({ category });
+};
+
+eventSchema.query.byCity = function (city) {
+  return this.where({ city });
+};
+
+eventSchema.query.byState = function (state) {
+  return this.where({ state });
+};
+
+eventSchema.query.free = function () {
+  return this.where({
+    $or: [
+      { price: 0 },
+      { "ticketTypes.price": 0 }
+    ]
+  });
+};
+
+eventSchema.query.paid = function () {
+  return this.where({
+    $or: [
+      { price: { $gt: 0 } },
+      { "ticketTypes.price": { $gt: 0 } }
+    ]
+  });
+};
+
+module.exports = mongoose.model("Event", eventSchema)
