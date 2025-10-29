@@ -5,6 +5,129 @@ const ErrorResponse = require("../utils/errorResponse");
 const { sendTicketEmail } = require("../utils/sendEmail");
 const PDFService = require("../service/pdfService");
 
+
+// @desc    Get current user's tickets
+// @route   GET /api/v1/tickets/my-tickets
+// @access  Private (Authenticated user)
+const getUserTickets = async (req, res, next) => {
+  try {
+    const userId = req.user.userId;
+    const { 
+      status, 
+      eventType, 
+      timeFilter = 'all', // upcoming, past, all
+      page = 1, 
+      limit = 10, 
+      sort = "-purchaseDate" 
+    } = req.query;
+
+    // Build query
+    const query = { userId: userId };
+    
+    // Filter by status
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    // Time-based filtering
+    const now = new Date();
+    let eventQuery = {};
+    
+    if (timeFilter === 'upcoming') {
+      eventQuery.startDate = { $gte: now };
+    } else if (timeFilter === 'past') {
+      eventQuery.startDate = { $lt: now };
+    }
+
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Find tickets with populated event details
+    let ticketsQuery = Ticket.find(query)
+      .populate({
+        path: 'eventId',
+        select: 'title startDate endDate time venue address city state country eventType virtualEventLink images capacity organizer',
+        match: Object.keys(eventQuery).length > 0 ? eventQuery : null
+      })
+      .populate('organizerId', 'firstName lastName email companyName profilePicture')
+      .sort(sort)
+      .limit(limitNum)
+      .skip(skip);
+
+    const [tickets, totalBeforeFilter] = await Promise.all([
+      ticketsQuery,
+      Ticket.countDocuments(query)
+    ]);
+
+    // Filter out tickets where event was not matched (due to time filter)
+    const filteredTickets = tickets.filter(ticket => ticket.eventId !== null);
+
+    // Get statistics for user's tickets
+    const userStats = await Ticket.aggregate([
+      { $match: { userId: userId } },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+          totalSpent: { $sum: "$totalAmount" }
+        }
+      }
+    ]);
+
+    // Format statistics
+    const statistics = {
+      total: totalBeforeFilter,
+      byStatus: {
+        confirmed: 0,
+        pending: 0,
+        cancelled: 0,
+        'checked-in': 0
+      },
+      totalSpent: 0
+    };
+
+    userStats.forEach(stat => {
+      statistics.byStatus[stat._id] = stat.count;
+      statistics.totalSpent += stat.totalSpent;
+    });
+
+    // Count upcoming and past events
+    const upcomingCount = await Ticket.countDocuments({
+      userId: userId,
+      status: { $in: ['confirmed', 'pending'] }
+    }).then(async (count) => {
+      const tickets = await Ticket.find({
+        userId: userId,
+        status: { $in: ['confirmed', 'pending'] }
+      }).populate('eventId', 'startDate');
+      
+      return tickets.filter(t => t.eventId && new Date(t.eventId.startDate) >= now).length;
+    });
+
+    statistics.upcoming = upcomingCount;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        tickets: filteredTickets,
+        pagination: {
+          total: filteredTickets.length,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(filteredTickets.length / limitNum),
+          hasNext: pageNum < Math.ceil(filteredTickets.length / limitNum),
+          hasPrev: pageNum > 1
+        },
+        statistics
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
 // @desc    Get single ticket details
 // @route   GET /api/v1/tickets/:id
 // @access  Private (Ticket owner or event organizer)
@@ -366,6 +489,7 @@ const resendTicketEmail = async (req, res, next) => {
 };
 
 module.exports = {
+  getUserTickets,
   getTicketById,
   validateTicket,
   getEventTickets,

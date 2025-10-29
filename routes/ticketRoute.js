@@ -7,6 +7,7 @@ const {
   getTicketAnalytics,
   downloadTicket,
   resendTicketEmail,
+  getUserTickets, // Add this import
 } = require("../controllers/ticket.controller");
 
 const { protect, authorize } = require("../middleware/auth");
@@ -15,6 +16,11 @@ const { protect, authorize } = require("../middleware/auth");
 // USER TICKET ROUTES
 // ============================================
 
+// @desc    Get current user's tickets
+// @route   GET /api/v1/tickets/my-tickets
+// @access  Private (Authenticated user)
+// IMPORTANT: This must come BEFORE /:id route to avoid conflict
+router.get("/my-tickets", protect, getUserTickets);
 
 // @desc    Get specific ticket details
 // @route   GET /api/v1/tickets/:id
