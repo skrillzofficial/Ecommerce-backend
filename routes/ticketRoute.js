@@ -8,9 +8,13 @@ const {
   downloadTicket,
   resendTicketEmail,
   getUserTickets,
+  // ✅ ADD MISSING BANNER ROUTES
+  uploadUserPhoto,
+  generateShareableBanner,
 } = require("../controllers/ticket.controller");
 
 const { protect, authorize } = require("../middleware/auth");
+const { validateImages } = require("../middleware/fileUpload"); // Add for photo uploads
 
 // ============================================
 // USER TICKET ROUTES
@@ -36,6 +40,29 @@ router.get("/:id/download", protect, downloadTicket);
 // @route   POST /api/v1/tickets/:id/resend-email
 // @access  Private (Ticket owner or event organizer)
 router.post("/:id/resend-email", protect, resendTicketEmail);
+
+// ============================================
+// SHAREABLE BANNER ROUTES (Ticket Owner)
+// ============================================
+
+// @desc    Upload user photo for shareable banner
+// @route   POST /api/v1/tickets/:id/user-photo
+// @access  Private (Ticket owner only)
+router.post(
+  "/:id/user-photo",
+  protect,
+  validateImages, // Validate image uploads
+  uploadUserPhoto
+);
+
+// @desc    Generate shareable banner for ticket
+// @route   POST /api/v1/tickets/:id/generate-banner
+// @access  Private (Ticket owner only)
+router.post(
+  "/:id/generate-banner",
+  protect,
+  generateShareableBanner
+);
 
 // ============================================
 // ORGANIZER-ONLY ROUTES

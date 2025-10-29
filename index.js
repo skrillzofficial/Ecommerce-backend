@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 4000;
 const helmet = require("helmet");
 const morgan = require("morgan");
 const http = require("http");
+const { Server } = require("socket.io"); // ✅ ADD SOCKET.IO
 
 // Routes
 const authRouter = require("./routes/userRoute");
@@ -18,7 +19,7 @@ const eventRoutes = require("./routes/eventRoute");
 const transactionRoutes = require("./routes/transactionRoutes");
 const notificationRoutes = require('./routes/notificationRoute'); 
 const ticketRoutes = require("./routes/ticketRoute"); 
-const bookingRoutes = require("./routes/bookingRoute"); // Added booking routes
+const bookingRoutes = require("./routes/bookingRoute");
 
 // Middleware
 const errorHandler = require("./middleware/errorHandler");
@@ -35,6 +36,43 @@ const app = express();
 
 // CREATE HTTP SERVER 
 const server = http.createServer(app);
+
+// ✅ SOCKET.IO SETUP
+const io = new Server(server, {
+  cors: {
+    origin: [
+      "https://eventry-swart.vercel.app",
+      "http://localhost:5174",
+      "http://localhost:5173",
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+
+// Make io accessible globally for controllers
+global.io = io;
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+  
+  // Join user to their personal room
+  socket.on('join-user', (userId) => {
+    socket.join(`user-${userId}`);
+    console.log(`User ${userId} joined room: user-${userId}`);
+  });
+  
+  // Join organizer to their room
+  socket.on('join-organizer', (organizerId) => {
+    socket.join(`organizer-${organizerId}`);
+    console.log(`Organizer ${organizerId} joined room: organizer-${organizerId}`);
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+});
 
 // SECURITY MIDDLEWARE
 app.use(helmet());
@@ -114,7 +152,9 @@ app.get("/api/v1/health", (req, res) => {
     paystack: {
       configured: !!process.env.PAYSTACK_SECRET_KEY,
       mode: process.env.PAYSTACK_SECRET_KEY?.startsWith('sk_live') ? 'live' : 'test'
-    }
+    },
+    cloudinary: !!process.env.CLOUDINARY_CLOUD_NAME,
+    socket: io.engine.clientsCount // ✅ ADD SOCKET INFO
   });
 });
 
@@ -147,12 +187,12 @@ app.get("/", (req, res) => {
 });
 
 // Main API routes
-app.use("/api/v1", authRouter); // Fixed: added /auth to match your auth routes
+app.use("/api/v1", authRouter); // ✅ FIXED: Remove incorrect comment
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/transactions", transactionRoutes); 
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/tickets", ticketRoutes);
-app.use("/api/v1/bookings", bookingRoutes); // Added booking routes
+app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/admin", superAdminRoutes);
 
 // ERROR HANDLING
@@ -191,6 +231,14 @@ const startServer = async () => {
       }
     }
 
+    // Check optional environment variables
+    const optionalEnvVars = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
+    const missingOptionalVars = optionalEnvVars.filter(varName => !process.env[varName]);
+    if (missingOptionalVars.length > 0) {
+      console.warn(`  Warning: Missing optional environment variables: ${missingOptionalVars.join(', ')}`);
+      console.warn('  Image upload functionality may not work properly');
+    }
+
     // Connect to MongoDB
     await mongoose.connect(process.env.MONGODB_URL, {
       dbName: process.env.DB_NAME || "EventDB",
@@ -213,6 +261,7 @@ const startServer = async () => {
       console.log(`Environment: ${process.env.NODE_ENV || "production"}`);
       console.log(`Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
       console.log(` Paystack Mode: ${process.env.PAYSTACK_SECRET_KEY?.startsWith('sk_live') ? '🔴 LIVE' : '🟢 TEST'}`);
+      console.log(` Socket.IO: ✅ Enabled`);
       console.log(`Cleanup scheduled: Daily at 2:00 AM`);
       console.log(" Server ready to accept connections");
       
@@ -236,7 +285,13 @@ const startServer = async () => {
 process.on("SIGINT", async () => {
   console.log("Shutting down gracefully...");
   try {
-    // Close server first to stop accepting new connections
+    // Close Socket.IO first
+    if (global.io) {
+      global.io.close();
+      console.log(" Socket.IO server closed");
+    }
+
+    // Close server to stop accepting new connections
     server.close(() => {
       console.log(" HTTP server closed");
     });
@@ -256,6 +311,12 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   console.log(" Server termination signal received...");
   try {
+    // Close Socket.IO
+    if (global.io) {
+      global.io.close();
+      console.log(" Socket.IO server closed");
+    }
+
     server.close(() => {
       console.log(" HTTP server closed");
     });

@@ -7,18 +7,18 @@ const ticketSchema = new mongoose.Schema(
       type: String,
       required: [true, "Ticket number is required"],
       unique: true,
-      index: true, // ✅ KEEP this - remove the separate index below
+      index: true,
     },
     qrCode: {
       type: String,
       required: true,
       unique: true,
-      index: true, // ✅ KEEP this - remove the separate index below
+      index: true,
     },
     barcode: {
       type: String,
       unique: true,
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // Event Reference
@@ -26,7 +26,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
       required: [true, "Event ID is required"],
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // Event Snapshot
@@ -94,7 +94,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "User ID is required"],
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // User Snapshot
@@ -141,9 +141,51 @@ const ticketSchema = new mongoose.Schema(
     status: {
       type: String,
       required: true,
-      enum: ["confirmed", "checked-in", "cancelled", "expired", "refunded"],
+      enum: ["confirmed", "checked-in", "cancelled", "expired", "refunded", "pending-approval", "rejected"],
       default: "confirmed",
-      index: true, // ✅ KEEP this
+      index: true,
+    },
+
+    // NEW: Approval System Fields
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected", "not-required"],
+      default: "not-required",
+      index: true,
+    },
+    approvalSubmittedAt: {
+      type: Date,
+    },
+    approvalDecidedAt: {
+      type: Date,
+    },
+    approvalDecidedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    approvalQuestions: [
+      {
+        question: {
+          type: String,
+          required: true,
+        },
+        answer: {
+          type: String,
+          required: true,
+        },
+        required: {
+          type: Boolean,
+          default: false,
+        },
+      }
+    ],
+    approvalNotes: {
+      type: String,
+      maxlength: [1000, "Approval notes cannot exceed 1000 characters"],
+    },
+    rejectionReason: {
+      type: String,
+      maxlength: [500, "Rejection reason cannot exceed 500 characters"],
     },
 
     // Check-in Information
@@ -177,7 +219,7 @@ const ticketSchema = new mongoose.Schema(
     },
     transactionId: {
       type: String,
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // Booking Reference
@@ -185,7 +227,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
       required: true,
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // Organizer Information
@@ -193,7 +235,7 @@ const ticketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      index: true, // ✅ KEEP this
+      index: true,
     },
 
     // Organizer Snapshot
@@ -244,7 +286,7 @@ const ticketSchema = new mongoose.Schema(
     // Timestamps
     expiresAt: {
       type: Date,
-      index: true, // ✅ KEEP this
+      index: true,
     },
   },
   {
@@ -254,16 +296,17 @@ const ticketSchema = new mongoose.Schema(
   }
 );
 
-// Indexes - REMOVED DUPLICATES
-// ❌ REMOVED: ticketSchema.index({ ticketNumber: 1 }); // Duplicate of field definition
-// ❌ REMOVED: ticketSchema.index({ qrCode: 1 }); // Duplicate of field definition
-// ❌ REMOVED: ticketSchema.index({ bookingId: 1 }); // Duplicate of field definition
-
+// Indexes
 ticketSchema.index({ eventId: 1, userId: 1 });
 ticketSchema.index({ eventId: 1, status: 1 });
 ticketSchema.index({ userId: 1, status: 1 });
 ticketSchema.index({ organizerId: 1, status: 1 });
 ticketSchema.index({ purchaseDate: -1 });
+// NEW: Approval-related indexes
+ticketSchema.index({ approvalStatus: 1 });
+ticketSchema.index({ eventId: 1, approvalStatus: 1 });
+ticketSchema.index({ organizerId: 1, approvalStatus: 1 });
+ticketSchema.index({ approvalSubmittedAt: -1 });
 
 // Virtual Fields
 ticketSchema.virtual("isActive").get(function () {
@@ -303,6 +346,36 @@ ticketSchema.virtual("daysUntilEvent").get(function () {
   const eventDate = new Date(this.eventStartDate);
   const diffTime = eventDate - now;
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+});
+
+// NEW: Approval virtuals
+ticketSchema.virtual("requiresApproval").get(function () {
+  return this.approvalStatus === "pending" || this.approvalStatus === "not-required" ? false : true;
+});
+
+ticketSchema.virtual("isPendingApproval").get(function () {
+  return this.approvalStatus === "pending";
+});
+
+ticketSchema.virtual("isApproved").get(function () {
+  return this.approvalStatus === "approved";
+});
+
+ticketSchema.virtual("isRejected").get(function () {
+  return this.approvalStatus === "rejected";
+});
+
+ticketSchema.virtual("canBeCheckedIn").get(function () {
+  return this.status === "confirmed" && 
+         new Date() < this.expiresAt && 
+         (this.approvalStatus === "approved" || this.approvalStatus === "not-required");
+});
+
+ticketSchema.virtual("approvalPendingTime").get(function () {
+  if (!this.approvalSubmittedAt) return 0;
+  const now = new Date();
+  const submittedAt = new Date(this.approvalSubmittedAt);
+  return Math.ceil((now - submittedAt) / (1000 * 60 * 60 * 24)); // days
 });
 
 // PRE-SAVE MIDDLEWARE
@@ -350,6 +423,27 @@ ticketSchema.pre("save", function (next) {
     this.paymentStatus = "completed";
   }
 
+  // NEW: Handle approval status for free tickets
+  if (this.ticketPrice === 0 && this.approvalStatus === "not-required" && this.isNew) {
+    // For new free tickets, set to pending approval by default
+    this.approvalStatus = "pending";
+    this.approvalSubmittedAt = new Date();
+  }
+
+  // NEW: Sync status with approval status
+  if (this.isModified('approvalStatus')) {
+    if (this.approvalStatus === "rejected" && this.status === "confirmed") {
+      this.status = "rejected";
+    } else if (this.approvalStatus === "approved" && this.status === "pending-approval") {
+      this.status = "confirmed";
+    }
+  }
+
+  // NEW: Set approval submitted timestamp when questions are answered
+  if (this.isModified('approvalQuestions') && this.approvalQuestions.length > 0 && !this.approvalSubmittedAt) {
+    this.approvalSubmittedAt = new Date();
+  }
+
   next();
 });
 
@@ -363,6 +457,15 @@ ticketSchema.methods.checkIn = async function (checkedInBy, location = null) {
 
   if (new Date() > this.expiresAt) {
     throw new Error("Cannot check in expired ticket");
+  }
+
+  // NEW: Check if ticket requires and has approval
+  if (this.approvalStatus === "pending") {
+    throw new Error("Cannot check in ticket pending approval");
+  }
+
+  if (this.approvalStatus === "rejected") {
+    throw new Error("Cannot check in rejected ticket");
   }
 
   this.status = "checked-in";
@@ -383,7 +486,7 @@ ticketSchema.methods.checkIn = async function (checkedInBy, location = null) {
 
 // Method to cancel ticket
 ticketSchema.methods.cancel = async function (reason = "") {
-  if (this.status !== "confirmed") {
+  if (this.status !== "confirmed" && this.status !== "pending-approval") {
     throw new Error(`Cannot cancel ticket with status: ${this.status}`);
   }
 
@@ -394,6 +497,52 @@ ticketSchema.methods.cancel = async function (reason = "") {
   this.status = "cancelled";
   this.refundStatus = "requested";
   this.refundReason = reason;
+
+  await this.save();
+  return this;
+};
+
+// NEW: Method to submit approval answers
+ticketSchema.methods.submitApprovalAnswers = async function (answers) {
+  if (this.approvalStatus !== "pending") {
+    throw new Error("Cannot submit answers for ticket not pending approval");
+  }
+
+  this.approvalQuestions = answers;
+  this.approvalSubmittedAt = new Date();
+
+  await this.save();
+  return this;
+};
+
+// NEW: Method to approve ticket
+ticketSchema.methods.approve = async function (approvedBy, notes = "") {
+  if (this.approvalStatus !== "pending") {
+    throw new Error(`Cannot approve ticket with approval status: ${this.approvalStatus}`);
+  }
+
+  this.approvalStatus = "approved";
+  this.approvalDecidedAt = new Date();
+  this.approvalDecidedBy = approvedBy;
+  this.approvalNotes = notes;
+  this.status = "confirmed";
+
+  await this.save();
+  return this;
+};
+
+// NEW: Method to reject ticket
+ticketSchema.methods.reject = async function (rejectedBy, reason = "", notes = "") {
+  if (this.approvalStatus !== "pending") {
+    throw new Error(`Cannot reject ticket with approval status: ${this.approvalStatus}`);
+  }
+
+  this.approvalStatus = "rejected";
+  this.approvalDecidedAt = new Date();
+  this.approvalDecidedBy = rejectedBy;
+  this.rejectionReason = reason;
+  this.approvalNotes = notes;
+  this.status = "rejected";
 
   await this.save();
   return this;
@@ -423,6 +572,11 @@ ticketSchema.methods.getVirtualAccess = function () {
   if (!this.hasVirtualAccess) {
     throw new Error("This ticket does not include virtual access");
   }
+
+  // NEW: Check approval status for free tickets
+  if (this.ticketPrice === 0 && this.approvalStatus !== "approved") {
+    throw new Error("Virtual access not available - ticket pending approval");
+  }
   
   return {
     virtualLink: this.virtualEventLink,
@@ -432,18 +586,36 @@ ticketSchema.methods.getVirtualAccess = function () {
   };
 };
 
+// NEW: Method to get approval information
+ticketSchema.methods.getApprovalInfo = function () {
+  return {
+    status: this.approvalStatus,
+    submittedAt: this.approvalSubmittedAt,
+    decidedAt: this.approvalDecidedAt,
+    decidedBy: this.approvalDecidedBy,
+    questions: this.approvalQuestions,
+    notes: this.approvalNotes,
+    rejectionReason: this.rejectionReason,
+    isPending: this.isPendingApproval,
+    isApproved: this.isApproved,
+    isRejected: this.isRejected
+  };
+};
+
 // STATIC METHODS
 
 // Static method to find tickets by event with pagination
 ticketSchema.statics.findByEvent = function (eventId, options = {}) {
-  const { status, page = 1, limit = 50, sort = "-purchaseDate" } = options;
+  const { status, approvalStatus, page = 1, limit = 50, sort = "-purchaseDate" } = options;
   
   const query = { eventId };
   if (status) query.status = status;
+  if (approvalStatus) query.approvalStatus = approvalStatus;
 
   return this.find(query)
     .populate("userId", "firstName lastName email phone profilePicture")
     .populate("checkedInBy", "firstName lastName")
+    .populate("approvalDecidedBy", "firstName lastName")
     .sort(sort)
     .skip((page - 1) * limit)
     .limit(limit);
@@ -451,14 +623,16 @@ ticketSchema.statics.findByEvent = function (eventId, options = {}) {
 
 // Static method to find tickets by user
 ticketSchema.statics.findByUser = function (userId, options = {}) {
-  const { status, page = 1, limit = 20, sort = "-purchaseDate" } = options;
+  const { status, approvalStatus, page = 1, limit = 20, sort = "-purchaseDate" } = options;
   
   const query = { userId };
   if (status) query.status = status;
+  if (approvalStatus) query.approvalStatus = approvalStatus;
 
   return this.find(query)
     .populate("eventId", "title startDate endDate time venue city images organizer eventType")
     .populate("organizerId", "firstName lastName companyName profilePicture")
+    .populate("approvalDecidedBy", "firstName lastName")
     .sort(sort)
     .skip((page - 1) * limit)
     .limit(limit);
@@ -480,6 +654,19 @@ ticketSchema.statics.getEventStats = async function (eventId) {
     },
   ]);
 
+  const approvalStats = await this.aggregate([
+    {
+      $match: { eventId: new mongoose.Types.ObjectId(eventId) },
+    },
+    {
+      $group: {
+        _id: "$approvalStatus",
+        count: { $sum: 1 },
+        totalTickets: { $sum: "$quantity" },
+      },
+    },
+  ]);
+
   const total = await this.aggregate([
     {
       $match: { eventId: new mongoose.Types.ObjectId(eventId) },
@@ -494,16 +681,23 @@ ticketSchema.statics.getEventStats = async function (eventId) {
             $cond: [{ $eq: ["$status", "checked-in"] }, "$quantity", 0],
           },
         },
+        pendingApprovalTickets: {
+          $sum: {
+            $cond: [{ $eq: ["$approvalStatus", "pending"] }, "$quantity", 0],
+          },
+        },
       },
     },
   ]);
 
   return {
     byStatus: stats,
+    byApprovalStatus: approvalStats,
     total: total[0] || {
       totalTickets: 0,
       totalRevenue: 0,
       checkedInTickets: 0,
+      pendingApprovalTickets: 0,
     },
   };
 };
@@ -536,6 +730,107 @@ ticketSchema.statics.findCheckedInTickets = function (eventId, options = {}) {
     .sort(sort)
     .skip((page - 1) * limit)
     .limit(limit);
+};
+
+// NEW: Static method to find tickets pending approval
+ticketSchema.statics.findPendingApproval = function (organizerId, options = {}) {
+  const { page = 1, limit = 50, sort = "approvalSubmittedAt" } = options;
+  
+  return this.find({ 
+    organizerId,
+    approvalStatus: "pending"
+  })
+    .populate("userId", "firstName lastName email phone profilePicture")
+    .populate("eventId", "title startDate endDate time venue")
+    .sort(sort)
+    .skip((page - 1) * limit)
+    .limit(limit);
+};
+
+// NEW: Static method to get approval statistics for organizer
+ticketSchema.statics.getApprovalStats = async function (organizerId) {
+  const stats = await this.aggregate([
+    {
+      $match: { 
+        organizerId: new mongoose.Types.ObjectId(organizerId),
+        approvalStatus: { $in: ["pending", "approved", "rejected"] }
+      },
+    },
+    {
+      $group: {
+        _id: "$approvalStatus",
+        count: { $sum: 1 },
+        totalTickets: { $sum: "$quantity" },
+      },
+    },
+  ]);
+
+  const pendingTimeStats = await this.aggregate([
+    {
+      $match: { 
+        organizerId: new mongoose.Types.ObjectId(organizerId),
+        approvalStatus: "pending",
+        approvalSubmittedAt: { $exists: true }
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        avgPendingDays: {
+          $avg: {
+            $divide: [
+              { $subtract: [new Date(), "$approvalSubmittedAt"] },
+              1000 * 60 * 60 * 24 // Convert to days
+            ]
+          }
+        },
+        maxPendingDays: {
+          $max: {
+            $divide: [
+              { $subtract: [new Date(), "$approvalSubmittedAt"] },
+              1000 * 60 * 60 * 24
+            ]
+          }
+        },
+      },
+    },
+  ]);
+
+  return {
+    byStatus: stats,
+    pendingTime: pendingTimeStats[0] || { avgPendingDays: 0, maxPendingDays: 0 },
+  };
+};
+
+// NEW: Static method to auto-approve tickets based on event settings
+ticketSchema.statics.autoApproveTickets = async function (eventId) {
+  const Event = mongoose.model("Event");
+  const event = await Event.findById(eventId);
+  
+  if (!event || !event.attendanceApproval?.autoApprove) {
+    return { success: false, message: "Auto-approval not enabled for this event" };
+  }
+
+  const result = await this.updateMany(
+    {
+      eventId: new mongoose.Types.ObjectId(eventId),
+      approvalStatus: "pending",
+      approvalSubmittedAt: { $exists: true }
+    },
+    {
+      $set: { 
+        approvalStatus: "approved",
+        approvalDecidedAt: new Date(),
+        status: "confirmed"
+      }
+    }
+  );
+
+  return {
+    success: true,
+    approvedCount: result.modifiedCount,
+    message: `Auto-approved ${result.modifiedCount} tickets`
+  };
 };
 
 module.exports = mongoose.model("Ticket", ticketSchema);

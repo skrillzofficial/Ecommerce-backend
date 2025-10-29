@@ -1,5 +1,6 @@
 const Event = require("../models/event");
 const User = require("../models/user");
+const Ticket = require("../models/ticket");
 const ErrorResponse = require("../utils/errorResponse");
 const { parseVoiceQuery } = require("../utils/voiceSearchParser");
 const NotificationService = require("../service/notificationService");
@@ -17,26 +18,76 @@ const {
 const {
   validateRequiredFields,
   validateEventOwnership,
-  validateOrganizerRole
+  validateOrganizerRole,
 } = require("../utils/validationHelpers");
 
 // ==================== FLEXIBLE DATE HELPER ====================
 // This helper builds queries that work with BOTH date and startDate fields
 const buildFlexibleDateQuery = (operator, dateValue) => {
   const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
-  
+
   return {
     $or: [
-      { 
+      {
         startDate: { [operator]: date },
-        startDate: { $exists: true }
+        startDate: { $exists: true },
       },
-      { 
+      {
         date: { [operator]: date },
-        startDate: { $exists: false }
-      }
-    ]
+        startDate: { $exists: false },
+      },
+    ],
   };
+};
+
+// ==================== APPROVAL SYSTEM HELPERS ====================
+const validateApprovalQuestions = (questions) => {
+  if (!Array.isArray(questions)) {
+    return { isValid: false, error: "Approval questions must be an array" };
+  }
+
+  for (const question of questions) {
+    if (!question.question || typeof question.question !== "string") {
+      return {
+        isValid: false,
+        error: "Each approval question must have a question text",
+      };
+    }
+    if (question.question.length > 500) {
+      return {
+        isValid: false,
+        error: "Approval question cannot exceed 500 characters",
+      };
+    }
+    if (typeof question.required !== "boolean") {
+      return {
+        isValid: false,
+        error: "Question required field must be boolean",
+      };
+    }
+  }
+
+  return { isValid: true };
+};
+
+const processTicketTypeApproval = (ticketType) => {
+  // Set default approval requirement for free tickets
+  if (ticketType.price === 0 && ticketType.requiresApproval === undefined) {
+    ticketType.requiresApproval = true;
+  }
+
+  // Validate approval questions if approval is required
+  if (ticketType.requiresApproval && ticketType.approvalQuestions) {
+    const validation = validateApprovalQuestions(ticketType.approvalQuestions);
+    if (!validation.isValid) {
+      throw new ErrorResponse(validation.error, 400);
+    }
+  }
+
+  // Ensure free tickets have isFree set correctly
+  ticketType.isFree = ticketType.price === 0;
+
+  return ticketType;
 };
 
 // @desc    Create new event
@@ -47,7 +98,11 @@ const createEvent = async (req, res, next) => {
     // Process form data
     const processedBody = processFormDataArrays(req.body);
     const parsedBody = parseJSONFields(processedBody, [
-      'ticketTypes', 'tags', 'includes', 'requirements'
+      "ticketTypes",
+      "tags",
+      "includes",
+      "requirements",
+      "attendanceApproval",
     ]);
 
     const {
@@ -74,21 +129,31 @@ const createEvent = async (req, res, next) => {
       price,
       capacity,
       ticketDescription,
-      ticketBenefits
+      ticketBenefits,
+      attendanceApproval,
     } = parsedBody;
 
     // Validate required fields
     const requiredFields = [
-      'title', 'description', 'category', 'startDate', 
-      'time', 'endTime'
+      "title",
+      "description",
+      "category",
+      "startDate",
+      "time",
+      "endTime",
     ];
-    
+
     if (eventType !== "virtual") {
-      requiredFields.push('venue', 'address', 'city');
+      requiredFields.push("venue", "address", "city");
     }
-    
+
     if (eventType === "virtual" && !virtualEventLink) {
-      return next(new ErrorResponse("Virtual event link is required for virtual events", 400));
+      return next(
+        new ErrorResponse(
+          "Virtual event link is required for virtual events",
+          400
+        )
+      );
     }
 
     validateRequiredFields(parsedBody, requiredFields);
@@ -122,8 +187,8 @@ const createEvent = async (req, res, next) => {
     // Handle image uploads
     let uploadedImages = [];
     if (req.files && req.files.images) {
-      const imageFiles = Array.isArray(req.files.images) 
-        ? req.files.images 
+      const imageFiles = Array.isArray(req.files.images)
+        ? req.files.images
         : [req.files.images];
 
       if (imageFiles.length > 3) {
@@ -143,8 +208,8 @@ const createEvent = async (req, res, next) => {
       description,
       longDescription: longDescription || description,
       category,
-      date: eventDate,              // ✅ For backwards compatibility
-      startDate: eventDate,          // ✅ For new code
+      date: eventDate, // ✅ For backwards compatibility
+      startDate: eventDate, // ✅ For new code
       endDate: eventEndDate,
       time,
       endTime,
@@ -177,26 +242,80 @@ const createEvent = async (req, res, next) => {
 
     // Handle ticket types or legacy pricing
     if (parsedTicketTypes && Array.isArray(parsedTicketTypes)) {
-      eventData.ticketTypes = parsedTicketTypes.map(ticket => ({
-        name: ticket.name,
-        price: safeParseNumber(ticket.price, 0),
-        capacity: safeParseNumber(ticket.capacity, 1),
-        availableTickets: safeParseNumber(ticket.capacity, 1),
-        description: ticket.description || "",
-        benefits: ticket.benefits || [],
-        accessType: ticket.accessType || (eventType === "hybrid" ? "both" : "physical"),
-        isFree: safeParseNumber(ticket.price, 0) === 0,
-      }));
+      eventData.ticketTypes = parsedTicketTypes.map((ticket) => {
+        const processedTicket = {
+          name: ticket.name,
+          price: safeParseNumber(ticket.price, 0),
+          capacity: safeParseNumber(ticket.capacity, 1),
+          availableTickets: safeParseNumber(ticket.capacity, 1),
+          description: ticket.description || "",
+          benefits: ticket.benefits || [],
+          accessType:
+            ticket.accessType || (eventType === "hybrid" ? "both" : "physical"),
+          isFree: safeParseNumber(ticket.price, 0) === 0,
+        };
 
-      eventData.price = Math.min(...parsedTicketTypes.map(t => safeParseNumber(t.price, 0)));
-      eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + safeParseNumber(t.capacity, 1), 0);
+        // NEW: Handle approval settings for ticket types
+        if (ticket.requiresApproval !== undefined) {
+          processedTicket.requiresApproval = ticket.requiresApproval;
+        }
+
+        if (
+          ticket.approvalQuestions &&
+          Array.isArray(ticket.approvalQuestions)
+        ) {
+          processedTicket.approvalQuestions = ticket.approvalQuestions.map(
+            (q) => ({
+              question: q.question,
+              required: q.required || false,
+            })
+          );
+        }
+
+        return processTicketTypeApproval(processedTicket);
+      });
+
+      eventData.price = Math.min(
+        ...parsedTicketTypes.map((t) => safeParseNumber(t.price, 0))
+      );
+      eventData.capacity = parsedTicketTypes.reduce(
+        (sum, t) => sum + safeParseNumber(t.capacity, 1),
+        0
+      );
       eventData.availableTickets = eventData.capacity;
+
+      // NEW: Enable global approval if any ticket type requires approval
+      const hasApprovalRequired = eventData.ticketTypes.some(
+        (ticket) => ticket.requiresApproval
+      );
+      if (hasApprovalRequired) {
+        eventData.attendanceApproval = {
+          enabled: true,
+          autoApprove: attendanceApproval?.autoApprove || false,
+          approvalDeadline: attendanceApproval?.approvalDeadline
+            ? new Date(attendanceApproval.approvalDeadline)
+            : undefined,
+          instructions: attendanceApproval?.instructions || "",
+        };
+      }
     } else {
       eventData.price = safeParseNumber(price, 0);
       eventData.capacity = safeParseNumber(capacity, 1);
       eventData.availableTickets = safeParseNumber(capacity, 1);
       eventData.ticketDescription = ticketDescription;
       eventData.ticketBenefits = safeParseArray(ticketBenefits);
+
+      // NEW: Handle approval for legacy free tickets
+      if (eventData.price === 0) {
+        eventData.attendanceApproval = {
+          enabled: true,
+          autoApprove: attendanceApproval?.autoApprove || false,
+          approvalDeadline: attendanceApproval?.approvalDeadline
+            ? new Date(attendanceApproval.approvalDeadline)
+            : undefined,
+          instructions: attendanceApproval?.instructions || "",
+        };
+      }
     }
 
     const event = await Event.create(eventData);
@@ -217,7 +336,6 @@ const createEvent = async (req, res, next) => {
       message: "Event created successfully",
       event,
     });
-
   } catch (error) {
     next(error);
   }
@@ -228,7 +346,15 @@ const createEvent = async (req, res, next) => {
 // @access  Public
 const getAllEvents = async (req, res, next) => {
   try {
-    let { search, isVoiceSearch, page = 1, limit = 12, sort = "date", timeFilter, ...filters } = req.query;
+    let {
+      search,
+      isVoiceSearch,
+      page = 1,
+      limit = 12,
+      sort = "date",
+      timeFilter,
+      ...filters
+    } = req.query;
 
     if (isVoiceSearch === "true" && search) {
       const voiceParams = parseVoiceQuery(search);
@@ -238,7 +364,7 @@ const getAllEvents = async (req, res, next) => {
 
     // ✅ Build flexible query (supports both date and startDate)
     const query = buildEventSearchQuery({ ...filters, search }, req.user?.role);
-    
+
     // ✅ CRITICAL FIX: Apply time filter SEPARATELY (not in buildEventSearchQuery)
     const now = new Date();
     if (timeFilter === "upcoming") {
@@ -262,10 +388,10 @@ const getAllEvents = async (req, res, next) => {
         Object.assign(query, pastQuery);
       }
     }
-    
+
     console.log("📍 Final Query:", JSON.stringify(query, null, 2));
     console.log("🔐 User authenticated:", !!req.user);
-    
+
     const sortOption = getSortOptions(sort);
 
     const pageNum = parseInt(page);
@@ -277,8 +403,11 @@ const getAllEvents = async (req, res, next) => {
         .sort(sortOption)
         .skip(skip)
         .limit(limitNum)
-        .populate("organizer", "firstName lastName userName profilePicture organizerInfo"),
-      Event.countDocuments(query)
+        .populate(
+          "organizer",
+          "firstName lastName userName profilePicture organizerInfo"
+        ),
+      Event.countDocuments(query),
     ]);
 
     console.log(`✅ Found ${events.length} events out of ${total} total`);
@@ -300,7 +429,6 @@ const getAllEvents = async (req, res, next) => {
     }
 
     res.status(200).json(response);
-
   } catch (error) {
     console.error("❌ getAllEvents Error:", error);
     next(error);
@@ -316,7 +444,7 @@ const getPastEvents = async (req, res, next) => {
 
     // ✅ CRITICAL FIX: Build base query WITHOUT date filter
     const baseQuery = buildEventSearchQuery(filters, req.user?.role);
-    
+
     // ✅ Build flexible past date condition
     const now = new Date();
     const pastDateQuery = buildFlexibleDateQuery("$lt", now);
@@ -325,21 +453,18 @@ const getPastEvents = async (req, res, next) => {
     let finalQuery = {
       status: "published",
       isActive: true,
-      ...baseQuery
+      ...baseQuery,
     };
 
     // Handle combining with existing $or conditions
     if (baseQuery.$or) {
-      finalQuery.$and = [
-        { $or: baseQuery.$or },
-        pastDateQuery
-      ];
+      finalQuery.$and = [{ $or: baseQuery.$or }, pastDateQuery];
       delete finalQuery.$or;
     } else {
       Object.assign(finalQuery, pastDateQuery);
     }
 
-    console.log('📅 Past Events Query:', JSON.stringify(finalQuery, null, 2));
+    console.log("📅 Past Events Query:", JSON.stringify(finalQuery, null, 2));
 
     const sortOption = getSortOptions(sort);
     const pageNum = parseInt(page);
@@ -351,8 +476,11 @@ const getPastEvents = async (req, res, next) => {
         .sort(sortOption)
         .skip(skip)
         .limit(limitNum)
-        .populate("organizer", "firstName lastName userName profilePicture organizerInfo"),
-      Event.countDocuments(finalQuery)
+        .populate(
+          "organizer",
+          "firstName lastName userName profilePicture organizerInfo"
+        ),
+      Event.countDocuments(finalQuery),
     ]);
 
     console.log(`✅ Found ${events.length} past events out of ${total} total`);
@@ -365,9 +493,8 @@ const getPastEvents = async (req, res, next) => {
       currentPage: pageNum,
       events,
     });
-
   } catch (error) {
-    console.error('❌ getPastEvents Error:', error);
+    console.error("❌ getPastEvents Error:", error);
     next(error);
   }
 };
@@ -384,7 +511,7 @@ const getUpcomingEvents = async (req, res, next) => {
     const query = {
       status: "published",
       isActive: true,
-      ...buildFlexibleDateQuery("$gte", now)
+      ...buildFlexibleDateQuery("$gte", now),
     };
 
     if (category) query.category = category;
@@ -395,16 +522,18 @@ const getUpcomingEvents = async (req, res, next) => {
     const events = await Event.find(query)
       .sort({ startDate: 1, date: 1 })
       .limit(parseInt(limit))
-      .populate("organizer", "firstName lastName userName profilePicture organizerInfo");
+      .populate(
+        "organizer",
+        "firstName lastName userName profilePicture organizerInfo"
+      );
 
     res.status(200).json({
       success: true,
       count: events.length,
       events,
     });
-
   } catch (error) {
-    console.error('❌ getUpcomingEvents Error:', error);
+    console.error("❌ getUpcomingEvents Error:", error);
     next(error);
   }
 };
@@ -433,16 +562,18 @@ const getFeaturedEvents = async (req, res, next) => {
     const events = await Event.find(query)
       .sort({ startDate: 1, date: 1 })
       .limit(parseInt(limit))
-      .populate("organizer", "firstName lastName userName profilePicture organizerInfo");
+      .populate(
+        "organizer",
+        "firstName lastName userName profilePicture organizerInfo"
+      );
 
     res.status(200).json({
       success: true,
       count: events.length,
       events,
     });
-
   } catch (error) {
-    console.error('❌ getFeaturedEvents Error:', error);
+    console.error("❌ getFeaturedEvents Error:", error);
     next(error);
   }
 };
@@ -455,10 +586,13 @@ const getEventById = async (req, res, next) => {
     const { id } = req.params;
 
     let event = await Event.findOne({
-      $or: [{ _id: id }, { slug: id }]
+      $or: [{ _id: id }, { slug: id }],
     })
-    .populate("organizer", "firstName lastName userName email profilePicture organizerInfo socialLinks")
-    .populate("likes", "firstName lastName userName profilePicture");
+      .populate(
+        "organizer",
+        "firstName lastName userName email profilePicture organizerInfo socialLinks"
+      )
+      .populate("likes", "firstName lastName userName profilePicture");
 
     if (!event) {
       return next(new ErrorResponse("Event not found", 404));
@@ -472,7 +606,6 @@ const getEventById = async (req, res, next) => {
       success: true,
       event,
     });
-
   } catch (error) {
     next(error);
   }
@@ -494,13 +627,18 @@ const updateEvent = async (req, res, next) => {
 
     const processedBody = processFormDataArrays(req.body);
     const parsedBody = parseJSONFields(processedBody, [
-      'ticketTypes', 'tags', 'includes', 'requirements', 
-      'existingImages', 'imagesToDelete'
+      "ticketTypes",
+      "tags",
+      "includes",
+      "requirements",
+      "existingImages",
+      "imagesToDelete",
+      "attendanceApproval",
     ]);
 
     if (req.files && req.files.images) {
-      const imageFiles = Array.isArray(req.files.images) 
-        ? req.files.images 
+      const imageFiles = Array.isArray(req.files.images)
+        ? req.files.images
         : [req.files.images];
 
       if (event.images.length + imageFiles.length > 3) {
@@ -513,8 +651,8 @@ const updateEvent = async (req, res, next) => {
 
     if (parsedBody.imagesToDelete && Array.isArray(parsedBody.imagesToDelete)) {
       const publicIdsToDelete = [];
-      
-      event.images = event.images.filter(img => {
+
+      event.images = event.images.filter((img) => {
         if (parsedBody.imagesToDelete.includes(img.publicId)) {
           publicIdsToDelete.push(img.publicId);
           return false;
@@ -528,33 +666,110 @@ const updateEvent = async (req, res, next) => {
     }
 
     const allowedUpdates = [
-      'title', 'description', 'longDescription', 'category',
-      'startDate', 'endDate', 'time', 'endTime', 'venue', 
-      'address', 'state', 'city', 'eventType', 'virtualEventLink',
-      'price', 'capacity', 'tags', 'includes', 'requirements',
-      'cancellationPolicy', 'refundPolicy', 'status', 'isFeatured',
-      'ticketTypes', 'ticketDescription', 'ticketBenefits'
+      "title",
+      "description",
+      "longDescription",
+      "category",
+      "startDate",
+      "endDate",
+      "time",
+      "endTime",
+      "venue",
+      "address",
+      "state",
+      "city",
+      "eventType",
+      "virtualEventLink",
+      "price",
+      "capacity",
+      "tags",
+      "includes",
+      "requirements",
+      "cancellationPolicy",
+      "refundPolicy",
+      "status",
+      "isFeatured",
+      "ticketTypes",
+      "ticketDescription",
+      "ticketBenefits",
+      "attendanceApproval", // NEW: Allow attendance approval updates
     ];
 
-    allowedUpdates.forEach(field => {
+    allowedUpdates.forEach((field) => {
       if (parsedBody[field] !== undefined) {
-        if (field === 'startDate' || field === 'endDate') {
+        if (field === "startDate" || field === "endDate") {
           const dateValue = new Date(parsedBody[field]);
           event[field] = dateValue;
           // ✅ Sync both date and startDate
-          if (field === 'startDate') {
+          if (field === "startDate") {
             event.date = dateValue;
           }
-        } else if (field === 'price' || field === 'capacity') {
-          event[field] = safeParseNumber(parsedBody[field], field === 'capacity' ? 1 : 0);
-        } else if (field === 'ticketTypes' && Array.isArray(parsedBody[field])) {
-          event[field] = parsedBody[field].map(ticket => ({
-            ...ticket,
-            price: safeParseNumber(ticket.price, 0),
-            capacity: safeParseNumber(ticket.capacity, 1),
-            availableTickets: safeParseNumber(ticket.availableTickets, safeParseNumber(ticket.capacity, 1)),
-            isFree: safeParseNumber(ticket.price, 0) === 0,
-          }));
+        } else if (field === "price" || field === "capacity") {
+          event[field] = safeParseNumber(
+            parsedBody[field],
+            field === "capacity" ? 1 : 0
+          );
+        } else if (
+          field === "ticketTypes" &&
+          Array.isArray(parsedBody[field])
+        ) {
+          event[field] = parsedBody[field].map((ticket) => {
+            const processedTicket = {
+              ...ticket,
+              price: safeParseNumber(ticket.price, 0),
+              capacity: safeParseNumber(ticket.capacity, 1),
+              availableTickets: safeParseNumber(
+                ticket.availableTickets,
+                safeParseNumber(ticket.capacity, 1)
+              ),
+              isFree: safeParseNumber(ticket.price, 0) === 0,
+            };
+
+            // NEW: Handle approval settings for ticket types
+            if (ticket.requiresApproval !== undefined) {
+              processedTicket.requiresApproval = ticket.requiresApproval;
+            }
+
+            if (
+              ticket.approvalQuestions &&
+              Array.isArray(ticket.approvalQuestions)
+            ) {
+              processedTicket.approvalQuestions = ticket.approvalQuestions.map(
+                (q) => ({
+                  question: q.question,
+                  required: q.required || false,
+                })
+              );
+            }
+
+            return processTicketTypeApproval(processedTicket);
+          });
+
+          // NEW: Update global approval settings based on ticket types
+          const hasApprovalRequired = event.ticketTypes.some(
+            (ticket) => ticket.requiresApproval
+          );
+          if (hasApprovalRequired && !event.attendanceApproval?.enabled) {
+            event.attendanceApproval = {
+              enabled: true,
+              autoApprove: parsedBody.attendanceApproval?.autoApprove || false,
+              approvalDeadline: parsedBody.attendanceApproval?.approvalDeadline
+                ? new Date(parsedBody.attendanceApproval.approvalDeadline)
+                : undefined,
+              instructions: parsedBody.attendanceApproval?.instructions || "",
+            };
+          } else if (
+            !hasApprovalRequired &&
+            event.attendanceApproval?.enabled
+          ) {
+            event.attendanceApproval.enabled = false;
+          }
+        } else if (field === "attendanceApproval" && parsedBody[field]) {
+          // NEW: Handle direct attendance approval updates
+          event.attendanceApproval = {
+            ...event.attendanceApproval,
+            ...parsedBody[field],
+          };
         } else {
           event[field] = parsedBody[field];
         }
@@ -568,7 +783,6 @@ const updateEvent = async (req, res, next) => {
       message: "Event updated successfully",
       event,
     });
-
   } catch (error) {
     next(error);
   }
@@ -589,13 +803,15 @@ const deleteEvent = async (req, res, next) => {
     validateEventOwnership(event, req.user.userId, req.user.role);
 
     if (event.totalBookings > 0) {
-      return next(new ErrorResponse(
-        "Cannot delete event with existing bookings. Please cancel the event instead.",
-        400
-      ));
+      return next(
+        new ErrorResponse(
+          "Cannot delete event with existing bookings. Please cancel the event instead.",
+          400
+        )
+      );
     }
 
-    const publicIds = event.images.map(img => img.publicId).filter(Boolean);
+    const publicIds = event.images.map((img) => img.publicId).filter(Boolean);
     if (publicIds.length > 0) {
       await deleteImages(publicIds);
     }
@@ -609,7 +825,6 @@ const deleteEvent = async (req, res, next) => {
       success: true,
       message: "Event deleted successfully",
     });
-
   } catch (error) {
     next(error);
   }
@@ -629,30 +844,46 @@ const getTicketAvailability = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      availability: event.ticketTypes?.length > 0 ? event.ticketTypes.map(ticket => ({
-        type: ticket.name,
-        price: ticket.price,
-        capacity: ticket.capacity,
-        available: ticket.availableTickets,
-        soldOut: ticket.availableTickets === 0,
-        percentageSold: Math.round(((ticket.capacity - ticket.availableTickets) / ticket.capacity) * 100),
-        isFree: ticket.price === 0,
-        accessType: ticket.accessType,
-      })) : [{
-        type: "General",
-        price: event.price,
-        capacity: event.capacity,
-        available: event.availableTickets,
-        soldOut: event.availableTickets === 0,
-        percentageSold: Math.round(((event.capacity - event.availableTickets) / event.capacity) * 100),
-        isFree: event.price === 0,
-      }],
+      availability:
+        event.ticketTypes?.length > 0
+          ? event.ticketTypes.map((ticket) => ({
+              type: ticket.name,
+              price: ticket.price,
+              capacity: ticket.capacity,
+              available: ticket.availableTickets,
+              soldOut: ticket.availableTickets === 0,
+              percentageSold: Math.round(
+                ((ticket.capacity - ticket.availableTickets) /
+                  ticket.capacity) *
+                  100
+              ),
+              isFree: ticket.price === 0,
+              accessType: ticket.accessType,
+              requiresApproval: ticket.requiresApproval, // NEW: Include approval requirement
+              approvalQuestions: ticket.approvalQuestions, // NEW: Include approval questions
+            }))
+          : [
+              {
+                type: "General",
+                price: event.price,
+                capacity: event.capacity,
+                available: event.availableTickets,
+                soldOut: event.availableTickets === 0,
+                percentageSold: Math.round(
+                  ((event.capacity - event.availableTickets) / event.capacity) *
+                    100
+                ),
+                isFree: event.price === 0,
+                requiresApproval: event.price === 0, // NEW: Free tickets require approval by default
+              },
+            ],
       totalCapacity: event.totalCapacity,
       totalAvailable: event.totalAvailableTickets,
       isSoldOut: event.isSoldOut,
       hasFreeTickets: event.hasFreeTickets,
+      hasApprovalRequired: event.hasApprovalRequired, // NEW: Include global approval status
+      attendanceApproval: event.attendanceApproval, // NEW: Include approval settings
     });
-
   } catch (error) {
     next(error);
   }
@@ -664,9 +895,16 @@ const getTicketAvailability = async (req, res, next) => {
 const getOrganizerStatistics = async (req, res, next) => {
   try {
     const stats = await Event.getStatistics(req.user.userId);
+
+    // NEW: Get approval statistics
+    const approvalStats = await Event.getApprovalStatistics(req.user.userId);
+
     res.status(200).json({
       success: true,
-      statistics: stats,
+      statistics: {
+        ...stats,
+        approval: approvalStats, // NEW: Include approval statistics
+      },
     });
   } catch (error) {
     next(new ErrorResponse("Failed to fetch statistics", 500));
@@ -680,13 +918,13 @@ const completeEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
     const event = await Event.findById(id);
-    
+
     if (!event) {
       return next(new ErrorResponse("Event not found", 404));
     }
 
     validateEventOwnership(event, req.user.userId, req.user.role);
-    
+
     event.status = "completed";
     event.isActive = false;
     await event.save();
@@ -706,12 +944,25 @@ const completeEvent = async (req, res, next) => {
 // @access  Private (Organizer only)
 const getOrganizerEvents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 12, status, sort = "-createdAt", timeFilter } = req.query;
-    
+    const {
+      page = 1,
+      limit = 12,
+      status,
+      sort = "-createdAt",
+      timeFilter,
+      needsApproval,
+    } = req.query;
+
     const query = { organizer: req.user.userId };
-    
-    if (status && status !== 'all') {
+
+    if (status && status !== "all") {
       query.status = status;
+    }
+
+    // NEW: Filter events needing approval attention
+    if (needsApproval === "true") {
+      query["attendanceApproval.enabled"] = true;
+      query.pendingApprovals = { $gt: 0 };
     }
 
     // ✅ Add time filter for organizer's events
@@ -734,7 +985,7 @@ const getOrganizerEvents = async (req, res, next) => {
         .skip(skip)
         .limit(limitNum)
         .populate("organizer", "firstName lastName userName profilePicture"),
-      Event.countDocuments(query)
+      Event.countDocuments(query),
     ]);
 
     res.status(200).json({
@@ -757,13 +1008,13 @@ const cancelEvent = async (req, res, next) => {
   try {
     const { id } = req.params;
     const event = await Event.findById(id);
-    
+
     if (!event) {
       return next(new ErrorResponse("Event not found", 404));
     }
 
     validateEventOwnership(event, req.user.userId, req.user.role);
-    
+
     event.status = "cancelled";
     event.isActive = false;
     await event.save();
@@ -809,7 +1060,7 @@ const deleteEventImage = async (req, res, next) => {
     }
 
     const imageToDelete = event.images[index];
-    
+
     event.images.splice(index, 1);
     await event.save();
 
@@ -832,30 +1083,33 @@ const deleteEventImage = async (req, res, next) => {
 // @access  Public
 const searchEventsAdvanced = async (req, res, next) => {
   try {
-    const { 
-      query: searchQuery, 
-      category, 
-      city, 
-      state, 
-      priceMin, 
-      priceMax, 
-      date, 
-      eventType, 
-      page = 1, 
-      limit = 12,
-      timeFilter 
-    } = req.query;
-
-    const query = buildEventSearchQuery({
-      search: searchQuery,
+    const {
+      query: searchQuery,
       category,
       city,
       state,
       priceMin,
       priceMax,
       date,
-      eventType
-    }, req.user?.role);
+      eventType,
+      page = 1,
+      limit = 12,
+      timeFilter,
+    } = req.query;
+
+    const query = buildEventSearchQuery(
+      {
+        search: searchQuery,
+        category,
+        city,
+        state,
+        priceMin,
+        priceMax,
+        date,
+        eventType,
+      },
+      req.user?.role
+    );
 
     // ✅ Add time filter
     if (timeFilter) {
@@ -893,7 +1147,7 @@ const searchEventsAdvanced = async (req, res, next) => {
         .skip(skip)
         .limit(limitNum)
         .populate("organizer", "firstName lastName userName profilePicture"),
-      Event.countDocuments(query)
+      Event.countDocuments(query),
     ]);
 
     res.status(200).json({
@@ -906,6 +1160,187 @@ const searchEventsAdvanced = async (req, res, next) => {
     });
   } catch (error) {
     next(new ErrorResponse("Search failed", 500));
+  }
+};
+
+// ==================== STREAMLINED APPROVAL CONTROLLERS ====================
+
+// @desc    Update approval settings for an event
+// @route   PATCH /api/v1/events/:id/approval-settings
+// @access  Private (Organizer only - own events)
+const updateApprovalSettings = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { autoApprove, approvalDeadline, instructions } = req.body;
+
+     if (approvalDeadline && new Date(approvalDeadline) < new Date()) {
+      return next(new ErrorResponse("Approval deadline must be in the future", 400));
+    }
+
+    const event = await Event.findById(id);
+    if (!event) {
+      return next(new ErrorResponse("Event not found", 404));
+    }
+
+    validateEventOwnership(event, req.user.userId, req.user.role);
+
+    const settings = {
+      autoApprove,
+      approvalDeadline: approvalDeadline
+        ? new Date(approvalDeadline)
+        : undefined,
+      instructions,
+    };
+
+    const updatedSettings = await event.updateApprovalSettings(settings);
+
+    res.status(200).json({
+      success: true,
+      message: "Approval settings updated successfully",
+      approvalSettings: updatedSettings,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get events needing approval attention
+// @route   GET /api/v1/events/organizer/needing-approval
+// @access  Private (Organizer only)
+const getEventsNeedingApproval = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 12 } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [events, total] = await Promise.all([
+      Event.findNeedingApproval(req.user.userId).skip(skip).limit(limitNum),
+      Event.countDocuments({
+        organizer: req.user.userId,
+        "attendanceApproval.enabled": true,
+        pendingApprovals: { $gt: 0 },
+      }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+      events,
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to fetch events needing approval", 500));
+  }
+};
+
+// @desc    Get event approval statistics
+// @route   GET /api/v1/events/:id/approval-stats
+// @access  Private (Organizer only - own events)
+const getEventApprovalStats = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const event = await Event.findById(id);
+    if (!event) {
+      return next(new ErrorResponse("Event not found", 404));
+    }
+
+    validateEventOwnership(event, req.user.userId, req.user.role);
+
+    const stats = event.getApprovalStats();
+
+    res.status(200).json({
+      success: true,
+      approvalStats: stats,
+    });
+  } catch (error) {
+    next(new ErrorResponse("Failed to fetch approval statistics", 500));
+  }
+};
+// @desc    Update shareable banner settings
+// @route   PATCH /api/v1/events/:id/shareable-banner
+// @access  Private (Organizer only - own events)
+const updateShareableBanner = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { enabled, required, design, instructions } = req.body;
+
+    const event = await Event.findById(id);
+    if (!event) {
+      return next(new ErrorResponse("Event not found", 404));
+    }
+
+    validateEventOwnership(event, req.user.userId, req.user.role);
+
+    // Handle banner template upload
+    if (req.files && req.files.template) {
+      const templateFile = req.files.template;
+      const uploadResult = await uploadImages([templateFile]);
+
+      if (uploadResult.length > 0) {
+        event.shareableBanner.template = {
+          url: uploadResult[0].url,
+          publicId: uploadResult[0].publicId,
+        };
+      }
+    }
+
+    // Update banner settings
+    event.shareableBanner = {
+      ...event.shareableBanner,
+      enabled: enabled !== undefined ? enabled : event.shareableBanner.enabled,
+      required:
+        required !== undefined ? required : event.shareableBanner.required,
+      design: design
+        ? { ...event.shareableBanner.design, ...design }
+        : event.shareableBanner.design,
+      instructions: instructions || event.shareableBanner.instructions,
+    };
+
+    await event.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Shareable banner settings updated successfully",
+      shareableBanner: event.shareableBanner,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Remove shareable banner template
+// @route   DELETE /api/v1/events/:id/shareable-banner/template
+// @access  Private (Organizer only - own events)
+const removeShareableBannerTemplate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const event = await Event.findById(id);
+    if (!event) {
+      return next(new ErrorResponse("Event not found", 404));
+    }
+
+    validateEventOwnership(event, req.user.userId, req.user.role);
+
+    if (event.shareableBanner.template?.publicId) {
+      await deleteImages([event.shareableBanner.template.publicId]);
+    }
+
+    event.shareableBanner.template = null;
+    event.shareableBanner.enabled = false;
+    await event.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Shareable banner template removed successfully",
+    });
+  } catch (error) {
+    next(error);
   }
 };
 
@@ -924,5 +1359,11 @@ module.exports = {
   getOrganizerEvents,
   cancelEvent,
   deleteEventImage,
-  searchEventsAdvanced
+  searchEventsAdvanced,
+  // STREAMLINED: Only essential approval controllers
+  updateApprovalSettings,
+  getEventsNeedingApproval,
+  getEventApprovalStats,
+  updateShareableBanner,
+  removeShareableBannerTemplate,
 };

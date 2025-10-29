@@ -6,6 +6,55 @@ const { initializePayment, verifyPayment } = require('../service/paystackService
 const ErrorResponse = require('../utils/errorResponse');
 const crypto = require('crypto');
 
+// Helper function to mark transaction as completed
+const markTransactionAsCompleted = async (transaction, paymentData) => {
+  if (typeof transaction.markAsCompleted === 'function') {
+    await transaction.markAsCompleted(paymentData);
+  } else {
+    // Manual completion
+    transaction.status = 'completed';
+    transaction.paymentDetails = paymentData;
+    transaction.completedAt = new Date();
+    transaction.paymentMethod = paymentData.channel || 'card';
+    await transaction.save();
+  }
+};
+
+// Helper function to mark transaction as failed
+const markTransactionAsFailed = async (transaction, reason) => {
+  if (typeof transaction.markAsFailed === 'function') {
+    await transaction.markAsFailed(reason);
+  } else {
+    // Manual failure
+    transaction.status = 'failed';
+    transaction.failedAt = new Date();
+    transaction.failureReason = reason;
+    await transaction.save();
+  }
+};
+
+// Helper function to update event ticket availability
+const updateEventTicketAvailability = async (eventId, ticketCount, operation) => {
+  try {
+    if (typeof Event.updateTicketAvailability === 'function') {
+      await Event.updateTicketAvailability(eventId, ticketCount, operation);
+    } else {
+      // Manual availability update
+      const event = await Event.findById(eventId);
+      if (event) {
+        if (operation === 'decrement') {
+          event.availableTickets = Math.max(0, event.availableTickets - ticketCount);
+        } else if (operation === 'increment') {
+          event.availableTickets += ticketCount;
+        }
+        await event.save();
+      }
+    }
+  } catch (error) {
+    console.error('Error updating ticket availability:', error);
+  }
+};
+
 // @desc    Initialize transaction for booking
 // @route   POST /api/v1/transactions/initialize
 // @access  Private
@@ -18,10 +67,16 @@ const initializeTransaction = async (req, res, next) => {
       return next(new ErrorResponse('Booking ID, amount, and email are required', 400));
     }
 
+    // Validate amount
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0 || amountNum > 1000000) {
+      return next(new ErrorResponse('Invalid amount', 400));
+    }
+
     // Verify booking exists and belongs to user
     const booking = await Booking.findOne({
       _id: bookingId,
-      userId: req.user.userId
+      user: req.user.userId
     });
 
     if (!booking) {
@@ -32,8 +87,8 @@ const initializeTransaction = async (req, res, next) => {
     const transaction = await Transaction.create({
       userId: req.user.userId,
       bookingId: bookingId,
-      eventId: booking.eventId,
-      amount: amount,
+      eventId: booking.event,
+      amount: amountNum,
       currency: 'NGN',
       type: 'event_booking',
       status: 'pending',
@@ -43,7 +98,7 @@ const initializeTransaction = async (req, res, next) => {
     // Initialize payment with Paystack
     const paymentData = {
       email: email,
-      amount: Math.round(amount * 100), // Convert to kobo
+      amount: Math.round(amountNum * 100), // Convert to kobo
       reference: transaction.reference,
       metadata: {
         bookingId: bookingId,
@@ -90,7 +145,7 @@ const verifyTransaction = async (req, res, next) => {
 
     if (verification.data.status === 'success') {
       // Update transaction status
-      await transaction.markAsCompleted(verification.data);
+      await markTransactionAsCompleted(transaction, verification.data);
 
       // Update booking status
       await Booking.findByIdAndUpdate(transaction.bookingId, {
@@ -100,8 +155,8 @@ const verifyTransaction = async (req, res, next) => {
 
       // Update event ticket counts
       const booking = await Booking.findById(transaction.bookingId);
-      if (booking && booking.eventId) {
-        await Event.updateTicketAvailability(booking.eventId, booking.totalTickets, 'decrement');
+      if (booking && booking.event) {
+        await updateEventTicketAvailability(booking.event, booking.totalTickets, 'decrement');
       }
 
       return res.status(200).json({
@@ -113,7 +168,7 @@ const verifyTransaction = async (req, res, next) => {
         }
       });
     } else {
-      await transaction.markAsFailed('Payment verification failed');
+      await markTransactionAsFailed(transaction, 'Payment verification failed');
       
       await Booking.findByIdAndUpdate(transaction.bookingId, {
         paymentStatus: 'failed',
@@ -186,8 +241,8 @@ const getUserTransactions = async (req, res, next) => {
 const getTransaction = async (req, res, next) => {
   try {
     const transaction = await Transaction.findById(req.params.id)
-      .populate('eventId', 'title startDate venue city images organizerInfo')
-      .populate('bookingId', 'orderNumber totalTickets ticketDetails attendeeInfo')
+      .populate('eventId', 'title startDate venue city images organizer')
+      .populate('bookingId', 'orderNumber totalTickets ticketDetails')
       .populate('userId', 'firstName lastName email phone');
 
     if (!transaction) {
@@ -196,7 +251,7 @@ const getTransaction = async (req, res, next) => {
 
     // Check authorization - user can view their own transactions or organizers can view their event transactions
     const isOwner = transaction.userId._id.toString() === req.user.userId;
-    const isOrganizer = transaction.eventId?.organizerInfo?.organizerId?.toString() === req.user.userId;
+    const isOrganizer = transaction.eventId?.organizer?.toString() === req.user.userId;
     
     if (!isOwner && !isOrganizer && req.user.role !== 'superadmin') {
       return next(new ErrorResponse('Not authorized to view this transaction', 403));
@@ -297,8 +352,11 @@ const requestRefund = async (req, res, next) => {
     const eventStartDate = new Date(event.startDate);
     const daysUntilEvent = Math.ceil((eventStartDate - new Date()) / (1000 * 60 * 60 * 24));
 
-    if (daysUntilEvent < event.refundPolicy.minDaysBeforeEvent) {
-      return next(new ErrorResponse(`Refunds only allowed ${event.refundPolicy.minDaysBeforeEvent} days before event`, 400));
+    // Use event's refund policy or default to 7 days
+    const minDaysBeforeEvent = event.refundPolicy?.minDaysBeforeEvent || 7;
+    
+    if (daysUntilEvent < minDaysBeforeEvent) {
+      return next(new ErrorResponse(`Refunds only allowed ${minDaysBeforeEvent} days before event`, 400));
     }
 
     // Create refund request
@@ -323,7 +381,12 @@ const requestRefund = async (req, res, next) => {
 // @access  Private (Organizer/Admin)
 const processRefund = async (req, res, next) => {
   try {
-    const { action, reason } = req.body; // action: 'approve' or 'reject'
+    const { action, reason } = req.body;
+
+    // Validate action
+    if (!['approve', 'reject'].includes(action)) {
+      return next(new ErrorResponse('Action must be "approve" or "reject"', 400));
+    }
 
     const transaction = await Transaction.findById(req.params.id)
       .populate('eventId')
@@ -344,8 +407,7 @@ const processRefund = async (req, res, next) => {
     }
 
     if (action === 'approve') {
-      // Process refund with Paystack
-      // This would typically call Paystack's refund API
+      // Process refund
       transaction.refundStatus = 'approved';
       transaction.refundProcessedAt = new Date();
       transaction.refundAmount = transaction.amount * 0.8; // 80% refund as example
@@ -358,11 +420,13 @@ const processRefund = async (req, res, next) => {
       });
 
       // Update event ticket availability
-      await Event.updateTicketAvailability(
-        transaction.eventId._id, 
-        transaction.bookingId.totalTickets, 
-        'increment'
-      );
+      if (transaction.bookingId && transaction.bookingId.totalTickets) {
+        await updateEventTicketAvailability(
+          transaction.eventId._id, 
+          transaction.bookingId.totalTickets, 
+          'increment'
+        );
+      }
 
     } else if (action === 'reject') {
       transaction.refundStatus = 'rejected';
@@ -474,6 +538,12 @@ const initializeServiceFeePayment = async (req, res, next) => {
       return next(new ErrorResponse('Event ID, amount, and email are required', 400));
     }
 
+    // Validate amount
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0 || amountNum > 1000000) {
+      return next(new ErrorResponse('Invalid service fee amount', 400));
+    }
+
     // Verify event exists and belongs to organizer
     const event = await Event.findOne({
       _id: eventId,
@@ -488,7 +558,7 @@ const initializeServiceFeePayment = async (req, res, next) => {
     const transaction = await Transaction.create({
       userId: req.user.userId,
       eventId: eventId,
-      amount: amount,
+      amount: amountNum,
       currency: 'NGN',
       type: 'service_fee',
       status: 'pending',
@@ -498,7 +568,7 @@ const initializeServiceFeePayment = async (req, res, next) => {
     // Initialize payment with Paystack
     const paymentData = {
       email: email,
-      amount: Math.round(amount * 100),
+      amount: Math.round(amountNum * 100),
       reference: transaction.reference,
       metadata: {
         eventId: eventId,
@@ -546,7 +616,7 @@ const verifyServiceFeePayment = async (req, res, next) => {
     const verification = await verifyPayment(reference);
 
     if (verification.data.status === 'success') {
-      await transaction.markAsCompleted(verification.data);
+      await markTransactionAsCompleted(transaction, verification.data);
 
       // Update event status if this was for event publishing
       await Event.findByIdAndUpdate(transaction.eventId, {
@@ -562,7 +632,7 @@ const verifyServiceFeePayment = async (req, res, next) => {
         }
       });
     } else {
-      await transaction.markAsFailed('Service fee payment verification failed');
+      await markTransactionAsFailed(transaction, 'Service fee payment verification failed');
       
       return res.status(400).json({
         success: false,
@@ -624,7 +694,7 @@ async function handleSuccessfulCharge(data) {
   try {
     const transaction = await Transaction.findOne({ reference: data.reference });
     if (transaction && transaction.status === 'pending') {
-      await transaction.markAsCompleted(data);
+      await markTransactionAsCompleted(transaction, data);
       
       if (transaction.type === 'event_booking') {
         // Update associated booking status
@@ -638,8 +708,8 @@ async function handleSuccessfulCharge(data) {
 
         // Update event ticket counts
         const booking = await Booking.findById(transaction.bookingId);
-        if (booking && booking.eventId) {
-          await Event.updateTicketAvailability(booking.eventId, booking.totalTickets, 'decrement');
+        if (booking && booking.event) {
+          await updateEventTicketAvailability(booking.event, booking.totalTickets, 'decrement');
         }
       } else if (transaction.type === 'service_fee') {
         // Update event status for service fee payments
@@ -658,7 +728,7 @@ async function handleFailedCharge(data) {
   try {
     const transaction = await Transaction.findOne({ reference: data.reference });
     if (transaction) {
-      await transaction.markAsFailed(data.gateway_response);
+      await markTransactionAsFailed(transaction, data.gateway_response);
       
       if (transaction.type === 'event_booking') {
         // Update associated booking status
@@ -680,7 +750,10 @@ async function handleRefundProcessed(data) {
   try {
     const transaction = await Transaction.findOne({ reference: data.reference });
     if (transaction) {
-      await transaction.completeRefund();
+      // Manual refund completion
+      transaction.refundStatus = 'completed';
+      transaction.refundProcessedAt = new Date();
+      await transaction.save();
     }
   } catch (error) {
     console.error('Handle refund processed error:', error);

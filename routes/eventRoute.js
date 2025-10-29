@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-// ✅ ONLY EVENT CONTROLLER IMPORTS
+// ✅ UPDATED EVENT CONTROLLER IMPORTS
 const {
   createEvent,
   getAllEvents,
@@ -17,9 +17,20 @@ const {
   getUpcomingEvents,
   getTicketAvailability,
   searchEventsAdvanced,
+  updateApprovalSettings,
+  getEventsNeedingApproval,
+  getEventApprovalStats,
+  updateShareableBanner,
+  removeShareableBannerTemplate,
+  deleteEventImage,
 } = require("../controllers/event.controller");
+
+const { parseVoiceSearch, getVoiceSuggestions } = require("../controllers/voiceSearchController");
+
+// ✅ IMPORT BOOKING CONTROLLER
+const { bookEventTicket, checkInAttendee } = require("../controllers/bookingController");
+
 const { toggleLikeEvent } = require("../controllers/interactionController");
-const { checkInAttendee } = require("../controllers/bookingController");
 
 const { protect, authorize, optionalAuth } = require("../middleware/auth");
 const { validateImages } = require("../middleware/fileUpload");
@@ -27,6 +38,7 @@ const {
   validateEventCreation,
   validateEventUpdate,
   validateQueryParams,
+  validateBooking,
 } = require("../middleware/validation");
 
 // ============================================
@@ -47,6 +59,10 @@ router.get("/search/advanced", validateQueryParams, searchEventsAdvanced);
 
 // Get all events with filtering
 router.get("/all", optionalAuth, validateQueryParams, getAllEvents);
+
+//  VOICE SEARCH ROUTES
+router.post("/voice-search", parseVoiceSearch);
+router.get("/voice-search/suggestions", getVoiceSuggestions);
 
 // ============================================
 // PROTECTED ROUTES (Authentication required)
@@ -69,6 +85,15 @@ router.get(
   getOrganizerStatistics
 );
 
+// ✅ NEW: Get events needing approval attention
+router.get(
+  "/organizer/needing-approval",
+  protect,
+  authorize("organizer", "superadmin"),
+  validateQueryParams,
+  getEventsNeedingApproval
+);
+
 // Create new event
 router.post(
   "/create",
@@ -89,6 +114,14 @@ router.get("/:id", getEventById);
 // Get ticket availability (public)
 router.get("/:id/ticket-availability", getTicketAvailability);
 
+// ✅ BOOK EVENT TICKETS (PROTECTED)
+router.post(
+  "/:id/book",
+  protect,
+  validateBooking,
+  bookEventTicket
+);
+
 // Like/Unlike event (PROTECTED)
 router.post("/:id/like", protect, toggleLikeEvent);
 
@@ -100,6 +133,46 @@ router.post(
   checkInAttendee
 );
 
+// ✅ NEW: Get event approval statistics (Organizer only)
+router.get(
+  "/:id/approval-stats",
+  protect,
+  authorize("organizer", "superadmin"),
+  getEventApprovalStats
+);
+
+// ✅ NEW: Update approval settings (Organizer only)
+router.patch(
+  "/:id/approval-settings",
+  protect,
+  authorize("organizer", "superadmin"),
+  updateApprovalSettings
+);
+
+// ✅ NEW: Update shareable banner settings (Organizer only)
+router.patch(
+  "/:id/shareable-banner",
+  protect,
+  authorize("organizer", "superadmin"),
+  validateImages, // Allow template image upload
+  updateShareableBanner
+);
+
+// ✅ NEW: Remove shareable banner template (Organizer only)
+router.delete(
+  "/:id/shareable-banner/template",
+  protect,
+  authorize("organizer", "superadmin"),
+  removeShareableBannerTemplate
+);
+
+// ✅ ADD: Delete event image (Organizer only)
+router.delete(
+  "/:id/images/:imageIndex",
+  protect,
+  authorize("organizer", "superadmin"),
+  deleteEventImage
+);
 
 // Cancel event (Organizer only)
 router.patch(

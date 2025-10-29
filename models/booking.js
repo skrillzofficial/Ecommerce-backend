@@ -76,9 +76,34 @@ const bookingSchema = new mongoose.Schema(
           type: String,
           enum: ["physical", "virtual", "both"],
           default: "both"
-        }
+        },
+        // NEW: Track individual ticket generation
+        generatedTickets: [{
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Ticket"
+        }]
       },
     ],
+
+    // NEW: Ticket Generation Status
+    ticketGeneration: {
+      status: {
+        type: String,
+        enum: ["pending", "in-progress", "completed", "failed", "partial"],
+        default: "pending"
+      },
+      generatedCount: {
+        type: Number,
+        default: 0
+      },
+      failedTickets: [{
+        ticketIndex: Number,
+        error: String,
+        retryCount: Number
+      }],
+      lastGenerationAttempt: Date,
+      completedAt: Date
+    },
 
     // Pricing Information
     totalTickets: {
@@ -171,12 +196,12 @@ const bookingSchema = new mongoose.Schema(
     paymentReference: {
       type: String,
       trim: true,
-      index: true, // ✅ KEEP this
+      index: true,
     },
     transactionId: {
       type: String,
       trim: true,
-      index: true, // ✅ KEEP this
+      index: true,
     },
     paymentDetails: {
       gatewayResponse: mongoose.Schema.Types.Mixed,
@@ -190,7 +215,7 @@ const bookingSchema = new mongoose.Schema(
     bookingDate: {
       type: Date,
       default: Date.now,
-      index: true, // ✅ KEEP this
+      index: true,
     },
     confirmedAt: Date,
     cancelledAt: Date,
@@ -338,6 +363,10 @@ const bookingSchema = new mongoose.Schema(
       },
       reminderDate: Date,
       lastNotified: Date,
+      ticketsGeneratedSent: {
+        type: Boolean,
+        default: false
+      }
     },
 
     // Security
@@ -346,6 +375,21 @@ const bookingSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
     },
+
+    // NEW: Download tracking
+    downloadHistory: [{
+      downloadedAt: Date,
+      downloadedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
+      },
+      ipAddress: String,
+      userAgent: String,
+      ticketsDownloaded: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Ticket"
+      }]
+    }]
   },
   {
     timestamps: true,
@@ -354,26 +398,22 @@ const bookingSchema = new mongoose.Schema(
   }
 );
 
-// Indexes - REMOVED DUPLICATES
-// ❌ REMOVED: bookingSchema.index({ orderNumber: 1 }); // Duplicate of field definition
-// ❌ REMOVED: bookingSchema.index({ shortId: 1 }); // Duplicate of field definition
-
+// Indexes
 bookingSchema.index({ user: 1, bookingDate: -1 });
 bookingSchema.index({ event: 1, status: 1 });
 bookingSchema.index({ organizer: 1, status: 1 });
 bookingSchema.index({ paymentStatus: 1, bookingDate: -1 });
 bookingSchema.index({ "eventSnapshot.startDate": 1 });
 bookingSchema.index({ "customerInfo.email": 1, event: 1 });
-
-// NEW: Indexes for enhanced querying
 bookingSchema.index({ "eventSnapshot.eventType": 1 });
 bookingSchema.index({ "eventSnapshot.category": 1 });
 bookingSchema.index({ "eventSnapshot.state": 1, "eventSnapshot.city": 1 });
-
-// Compound indexes for common queries
 bookingSchema.index({ status: 1, paymentStatus: 1 });
 bookingSchema.index({ user: 1, event: 1 });
 bookingSchema.index({ organizer: 1, createdAt: -1 });
+// NEW: Index for ticket generation status
+bookingSchema.index({ "ticketGeneration.status": 1 });
+bookingSchema.index({ "ticketGeneration.completedAt": 1 });
 
 // Virtual Fields
 bookingSchema.virtual("isActive").get(function () {
@@ -412,14 +452,13 @@ bookingSchema.virtual("canBeRefunded").get(function () {
 });
 
 bookingSchema.virtual("totalCheckedIn").get(function () {
-  return 0;
+  return 0; // This will be calculated from tickets
 });
 
 bookingSchema.virtual("bookingAge").get(function () {
   return (new Date() - this.bookingDate) / (1000 * 60 * 60);
 });
 
-// NEW Virtual Fields
 bookingSchema.virtual("isVirtualEvent").get(function () {
   return this.eventSnapshot.eventType === "virtual";
 });
@@ -443,6 +482,27 @@ bookingSchema.virtual("hasPhysicalAccess").get(function () {
   if (!this.ticketDetails || this.ticketDetails.length === 0) return false;
   return this.ticketDetails.some(ticket => 
     ticket.accessType === "physical" || ticket.accessType === "both"
+  );
+});
+
+// NEW: Ticket Generation Virtuals
+bookingSchema.virtual("ticketsGenerated").get(function () {
+  return this.ticketGeneration.status === "completed";
+});
+
+bookingSchema.virtual("ticketsGenerationPending").get(function () {
+  return this.ticketGeneration.status === "pending" || this.ticketGeneration.status === "in-progress";
+});
+
+bookingSchema.virtual("allTicketsAvailable").get(function () {
+  if (!this.ticketsGenerated) return false;
+  return this.ticketGeneration.generatedCount === this.totalTickets;
+});
+
+bookingSchema.virtual("downloadableTickets").get(function () {
+  if (!this.tickets || this.tickets.length === 0) return [];
+  return this.tickets.filter(ticket => 
+    ticket.status === "confirmed" || ticket.status === "checked-in"
   );
 });
 
@@ -501,6 +561,19 @@ bookingSchema.pre("save", function (next) {
         this.serviceFee +
         this.taxAmount -
         this.discountAmount;
+    }
+  }
+
+  // NEW: Update ticket generation status
+  if (this.tickets && this.tickets.length > 0) {
+    this.ticketGeneration.generatedCount = this.tickets.length;
+    if (this.ticketGeneration.generatedCount === this.totalTickets) {
+      this.ticketGeneration.status = "completed";
+      if (!this.ticketGeneration.completedAt) {
+        this.ticketGeneration.completedAt = new Date();
+      }
+    } else if (this.ticketGeneration.generatedCount > 0) {
+      this.ticketGeneration.status = "partial";
     }
   }
 
@@ -618,6 +691,44 @@ bookingSchema.methods.addTicket = async function (ticketId) {
 
   if (!this.tickets.includes(ticketId)) {
     this.tickets.push(ticketId);
+    this.ticketGeneration.generatedCount = this.tickets.length;
+    
+    // Update status if all tickets are generated
+    if (this.ticketGeneration.generatedCount === this.totalTickets) {
+      this.ticketGeneration.status = "completed";
+      this.ticketGeneration.completedAt = new Date();
+    } else if (this.ticketGeneration.generatedCount > 0) {
+      this.ticketGeneration.status = "partial";
+    }
+    
+    await this.save();
+  }
+
+  return this;
+};
+
+// NEW: Method to add multiple tickets at once
+bookingSchema.methods.addMultipleTickets = async function (ticketIds) {
+  if (this.status !== "pending" && this.status !== "confirmed") {
+    throw new Error("Cannot add tickets to cancelled or refunded booking");
+  }
+
+  const newTickets = ticketIds.filter(ticketId => 
+    !this.tickets.includes(ticketId)
+  );
+
+  if (newTickets.length > 0) {
+    this.tickets.push(...newTickets);
+    this.ticketGeneration.generatedCount = this.tickets.length;
+    
+    // Update status if all tickets are generated
+    if (this.ticketGeneration.generatedCount === this.totalTickets) {
+      this.ticketGeneration.status = "completed";
+      this.ticketGeneration.completedAt = new Date();
+    } else if (this.ticketGeneration.generatedCount > 0) {
+      this.ticketGeneration.status = "partial";
+    }
+    
     await this.save();
   }
 
@@ -637,6 +748,41 @@ bookingSchema.methods.getVirtualAccessLink = function () {
   return this.eventSnapshot.virtualEventLink;
 };
 
+// NEW: Method to track download
+bookingSchema.methods.trackDownload = async function (userId, ipAddress, userAgent, ticketIds = []) {
+  const downloadRecord = {
+    downloadedAt: new Date(),
+    downloadedBy: userId,
+    ipAddress,
+    userAgent,
+    ticketsDownloaded: ticketIds.length > 0 ? ticketIds : this.tickets
+  };
+
+  this.downloadHistory.push(downloadRecord);
+  await this.save();
+  
+  return downloadRecord;
+};
+
+// NEW: Method to get download statistics
+bookingSchema.methods.getDownloadStats = function () {
+  return {
+    totalDownloads: this.downloadHistory.length,
+    lastDownload: this.downloadHistory.length > 0 ? 
+      this.downloadHistory[this.downloadHistory.length - 1].downloadedAt : null,
+    uniqueIps: [...new Set(this.downloadHistory.map(d => d.ipAddress))].length,
+    ticketsDownloaded: this.downloadHistory.reduce((acc, curr) => 
+      acc + curr.ticketsDownloaded.length, 0
+    )
+  };
+};
+
+// NEW: Method to check if all tickets are generated and ready
+bookingSchema.methods.areTicketsReady = function () {
+  return this.ticketGeneration.status === "completed" && 
+         this.tickets.length === this.totalTickets;
+};
+
 // Static Methods
 bookingSchema.statics.findByUser = function (userId, options = {}) {
   const { status, page = 1, limit = 20, sort = "-bookingDate" } = options;
@@ -646,7 +792,7 @@ bookingSchema.statics.findByUser = function (userId, options = {}) {
 
   return this.find(query)
     .populate("event", "title startDate endDate time venue city images status eventType")
-    .populate("tickets", "ticketNumber status checkedInAt")
+    .populate("tickets", "ticketNumber status checkedInAt approvalStatus")
     .sort(sort)
     .skip((page - 1) * limit)
     .limit(limit);
@@ -678,6 +824,24 @@ bookingSchema.statics.findByOrganizer = function (organizerId, options = {}) {
     .sort(sort)
     .skip((page - 1) * limit)
     .limit(limit);
+};
+
+// NEW: Find bookings with incomplete ticket generation
+bookingSchema.statics.findWithIncompleteTickets = function (options = {}) {
+  const { page = 1, limit = 50, olderThanHours = 1 } = options;
+
+  const cutoffTime = new Date(Date.now() - olderThanHours * 60 * 60 * 1000);
+
+  return this.find({
+    status: "confirmed",
+    "ticketGeneration.status": { $in: ["pending", "in-progress", "partial"] },
+    "ticketGeneration.lastGenerationAttempt": { $lt: cutoffTime }
+  })
+  .populate("event", "title startDate")
+  .populate("user", "firstName lastName email")
+  .sort("createdAt")
+  .skip((page - 1) * limit)
+  .limit(limit);
 };
 
 bookingSchema.statics.getRevenueStats = async function (
@@ -739,6 +903,54 @@ bookingSchema.statics.getStatsByEventType = async function (organizerId) {
   return stats;
 };
 
+// NEW: Get ticket generation statistics
+bookingSchema.statics.getTicketGenerationStats = async function (organizerId) {
+  const stats = await this.aggregate([
+    {
+      $match: {
+        organizer: new mongoose.Types.ObjectId(organizerId),
+        status: "confirmed"
+      }
+    },
+    {
+      $group: {
+        _id: "$ticketGeneration.status",
+        count: { $sum: 1 },
+        totalTickets: { $sum: "$totalTickets" },
+        generatedTickets: { $sum: "$ticketGeneration.generatedCount" }
+      }
+    }
+  ]);
+
+  const completionStats = await this.aggregate([
+    {
+      $match: {
+        organizer: new mongoose.Types.ObjectId(organizerId),
+        status: "confirmed",
+        "ticketGeneration.status": "completed"
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        avgGenerationTime: {
+          $avg: {
+            $subtract: [
+              "$ticketGeneration.completedAt",
+              "$confirmedAt"
+            ]
+          }
+        }
+      }
+    }
+  ]);
+
+  return {
+    byStatus: stats,
+    completionTime: completionStats[0] || { avgGenerationTime: 0 }
+  };
+};
+
 bookingSchema.statics.expirePendingBookings = async function () {
   const result = await this.updateMany(
     {
@@ -774,7 +986,6 @@ bookingSchema.query.byPeriod = function (startDate, endDate) {
   return this.where({ bookingDate: { $gte: startDate, $lte: endDate } });
 };
 
-// NEW Query Helpers
 bookingSchema.query.virtualEvents = function () {
   return this.where({ "eventSnapshot.eventType": "virtual" });
 };
@@ -793,6 +1004,19 @@ bookingSchema.query.byCategory = function (category) {
 
 bookingSchema.query.byState = function (state) {
   return this.where({ "eventSnapshot.state": state });
+};
+
+// NEW: Ticket generation query helpers
+bookingSchema.query.withCompletedTickets = function () {
+  return this.where({ "ticketGeneration.status": "completed" });
+};
+
+bookingSchema.query.withPendingTickets = function () {
+  return this.where({ "ticketGeneration.status": { $in: ["pending", "in-progress", "partial"] } });
+};
+
+bookingSchema.query.withFailedTickets = function () {
+  return this.where({ "ticketGeneration.status": "failed" });
 };
 
 // Helper function for date filtering

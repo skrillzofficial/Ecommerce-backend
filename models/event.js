@@ -67,14 +67,14 @@ const eventSchema = new mongoose.Schema(
       type: String,
       trim: true,
       validate: {
-        validator: function(v) {
+        validator: function (v) {
           if (this.eventType === "virtual" || this.eventType === "hybrid") {
             return v && v.length > 0;
           }
           return true;
         },
-        message: "Virtual event link is required for virtual and hybrid events"
-      }
+        message: "Virtual event link is required for virtual and hybrid events",
+      },
     },
 
     // Date & Time (Multi-day support)
@@ -147,7 +147,10 @@ const eventSchema = new mongoose.Schema(
       trim: true,
       maxlength: [200, "Venue name cannot exceed 200 characters"],
       required: function () {
-        return this.status === "published" && (this.eventType === "physical" || this.eventType === "hybrid");
+        return (
+          this.status === "published" &&
+          (this.eventType === "physical" || this.eventType === "hybrid")
+        );
       },
     },
     address: {
@@ -155,32 +158,71 @@ const eventSchema = new mongoose.Schema(
       trim: true,
       maxlength: [500, "Address cannot exceed 500 characters"],
       required: function () {
-        return this.status === "published" && (this.eventType === "physical" || this.eventType === "hybrid");
+        return (
+          this.status === "published" &&
+          (this.eventType === "physical" || this.eventType === "hybrid")
+        );
       },
     },
     state: {
       type: String,
       enum: {
         values: [
-          "Abia", "Adamawa", "Akwa Ibom", "Anambra", "Bauchi", "Bayelsa",
-          "Benue", "Borno", "Cross River", "Delta", "Ebonyi", "Edo",
-          "Ekiti", "Enugu", "FCT (Abuja)", "Gombe", "Imo", "Jigawa",
-          "Kaduna", "Kano", "Katsina", "Kebbi", "Kogi", "Kwara",
-          "Lagos", "Nasarawa", "Niger", "Ogun", "Ondo", "Osun",
-          "Oyo", "Plateau", "Rivers", "Sokoto", "Taraba", "Yobe",
+          "Abia",
+          "Adamawa",
+          "Akwa Ibom",
+          "Anambra",
+          "Bauchi",
+          "Bayelsa",
+          "Benue",
+          "Borno",
+          "Cross River",
+          "Delta",
+          "Ebonyi",
+          "Edo",
+          "Ekiti",
+          "Enugu",
+          "FCT (Abuja)",
+          "Gombe",
+          "Imo",
+          "Jigawa",
+          "Kaduna",
+          "Kano",
+          "Katsina",
+          "Kebbi",
+          "Kogi",
+          "Kwara",
+          "Lagos",
+          "Nasarawa",
+          "Niger",
+          "Ogun",
+          "Ondo",
+          "Osun",
+          "Oyo",
+          "Plateau",
+          "Rivers",
+          "Sokoto",
+          "Taraba",
+          "Yobe",
           "Zamfara",
         ],
         message: "{VALUE} is not a supported state",
       },
       required: function () {
-        return this.status === "published" && (this.eventType === "physical" || this.eventType === "hybrid");
+        return (
+          this.status === "published" &&
+          (this.eventType === "physical" || this.eventType === "hybrid")
+        );
       },
       index: true,
     },
     city: {
       type: String,
       required: function () {
-        return this.status === "published" && (this.eventType === "physical" || this.eventType === "hybrid");
+        return (
+          this.status === "published" &&
+          (this.eventType === "physical" || this.eventType === "hybrid")
+        );
       },
       index: true,
     },
@@ -247,8 +289,29 @@ const eventSchema = new mongoose.Schema(
         accessType: {
           type: String,
           enum: ["physical", "virtual", "both"],
-          default: "both"
-        }
+          default: "both",
+        },
+        // NEW: Approval settings for free tickets
+        requiresApproval: {
+          type: Boolean,
+          default: function () {
+            return this.price === 0; // Default to requiring approval for free tickets
+          },
+        },
+        approvalQuestions: [
+          {
+            question: {
+              type: String,
+              required: true,
+              trim: true,
+              maxlength: [500, "Question cannot exceed 500 characters"],
+            },
+            required: {
+              type: Boolean,
+              default: false,
+            },
+          },
+        ],
       },
     ],
 
@@ -289,10 +352,12 @@ const eventSchema = new mongoose.Schema(
       type: String,
       maxlength: [500, "Ticket description cannot exceed 500 characters"],
     },
-    ticketBenefits: [{
-      type: String,
-      trim: true,
-    }],
+    ticketBenefits: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
 
     // Images
     images: [
@@ -312,11 +377,76 @@ const eventSchema = new mongoose.Schema(
       publicId: String,
       alt: String,
     },
-    socialBannerEnabled: {
-      type: Boolean,
-      default: false,
+    // Shareable Banner Feature
+    shareableBanner: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+      required: {
+        type: Boolean,
+        default: false,
+      },
+      template: {
+        url: String,
+        publicId: String,
+      },
+      design: {
+        photoPosition: {
+          type: String,
+          enum: [
+            "top-right",
+            "top-left",
+            "bottom-right",
+            "bottom-left",
+            "center",
+          ],
+          default: "top-right",
+        },
+        photoSize: {
+          type: String,
+          enum: ["small", "medium", "large"],
+          default: "medium",
+        },
+        photoShape: {
+          type: String,
+          enum: ["circle", "square", "rounded"],
+          default: "circle",
+        },
+        // Dynamic positions from frontend
+        positions: {
+          title: {
+            x: { type: Number, default: 50 },
+            y: { type: Number, default: 100 },
+            fontSize: { type: Number, default: 36 },
+            color: { type: String, default: "#FFFFFF" },
+          },
+          date: {
+            x: { type: Number, default: 50 },
+            y: { type: Number, default: 150 },
+            fontSize: { type: Number, default: 18 },
+            color: { type: String, default: "#FFFFFF" },
+          },
+          userPhoto: {
+            x: { type: Number, default: 300 },
+            y: { type: Number, default: 100 },
+            width: { type: Number, default: 150 },
+            height: { type: Number, default: 150 },
+            borderRadius: { type: Number, default: 75 },
+          },
+          qrCode: {
+            x: { type: Number, default: 500 },
+            y: { type: Number, default: 100 },
+            width: { type: Number, default: 100 },
+            height: { type: Number, default: 100 },
+          },
+        },
+      },
+      instructions: {
+        type: String,
+        maxlength: [500, "Instructions cannot exceed 500 characters"],
+      },
     },
-
     // Community/Groups Feature
     community: {
       whatsapp: {
@@ -330,7 +460,9 @@ const eventSchema = new mongoose.Schema(
           validate: {
             validator: function (v) {
               if (!v) return true;
-              return /^https?:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//.test(v);
+              return /^https?:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//.test(
+                v
+              );
             },
             message: "Invalid WhatsApp link format",
           },
@@ -372,7 +504,9 @@ const eventSchema = new mongoose.Schema(
           validate: {
             validator: function (v) {
               if (!v) return true;
-              return /^https?:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//.test(v);
+              return /^https?:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//.test(
+                v
+              );
             },
             message: "Invalid Discord link format",
           },
@@ -420,13 +554,13 @@ const eventSchema = new mongoose.Schema(
         type: {
           type: String,
           enum: ["percentage", "fixed"],
-          default: "percentage"
+          default: "percentage",
         },
         amount: {
           type: Number,
           min: 0,
-          default: 5
-        }
+          default: 5,
+        },
       },
       estimatedAttendance: {
         type: String,
@@ -442,6 +576,25 @@ const eventSchema = new mongoose.Schema(
         default: "1.0",
       },
       termsUrl: String,
+    },
+
+    // NEW: Global approval settings for the event
+    attendanceApproval: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+      autoApprove: {
+        type: Boolean,
+        default: false, // If true, automatically approve after questions are answered
+      },
+      approvalDeadline: {
+        type: Date, // Deadline for organizer to approve/reject attendees
+      },
+      instructions: {
+        type: String,
+        maxlength: [1000, "Instructions cannot exceed 1000 characters"],
+      },
     },
 
     // Organizer Information
@@ -507,6 +660,22 @@ const eventSchema = new mongoose.Schema(
       min: 0,
     },
     totalAttendees: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // NEW: Approval statistics
+    pendingApprovals: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    approvedAttendees: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    rejectedAttendees: {
       type: Number,
       default: 0,
       min: 0,
@@ -584,9 +753,14 @@ eventSchema.index({ organizer: 1, status: 1 });
 eventSchema.index({ price: 1 });
 eventSchema.index({ createdAt: -1 });
 eventSchema.index({ isFeatured: 1, status: 1 });
-eventSchema.index({ "communityEnabled": 1, "status": 1 });
-eventSchema.index({ "socialBannerEnabled": 1 });
+eventSchema.index({ communityEnabled: 1, status: 1 });
+eventSchema.index({ socialBannerEnabled: 1 });
 eventSchema.index({ "agreement.acceptedTerms": 1 });
+// NEW: Approval indexes
+eventSchema.index({ "attendanceApproval.enabled": 1 });
+eventSchema.index({ pendingApprovals: -1 });
+eventSchema.index({ organizer: 1, "attendanceApproval.enabled": 1 });
+eventSchema.index({ organizer: 1, pendingApprovals: -1 });
 
 // ==================== VIRTUALS ====================
 eventSchema.virtual("eventUrl").get(function () {
@@ -661,31 +835,48 @@ eventSchema.virtual("priceRange").get(function () {
 });
 
 eventSchema.virtual("hasCommunity").get(function () {
-  return this.communityEnabled && (
-    this.community?.whatsapp?.enabled ||
-    this.community?.telegram?.enabled || 
-    this.community?.discord?.enabled ||
-    this.community?.slack?.enabled
+  return (
+    this.communityEnabled &&
+    (this.community?.whatsapp?.enabled ||
+      this.community?.telegram?.enabled ||
+      this.community?.discord?.enabled ||
+      this.community?.slack?.enabled)
   );
 });
 
 eventSchema.virtual("activeCommunityLinks").get(function () {
   if (!this.communityEnabled) return [];
-  
+
   const links = [];
   if (this.community?.whatsapp?.enabled && this.community.whatsapp.link) {
-    links.push({ platform: 'whatsapp', link: this.community.whatsapp.link, description: this.community.whatsapp.description });
+    links.push({
+      platform: "whatsapp",
+      link: this.community.whatsapp.link,
+      description: this.community.whatsapp.description,
+    });
   }
   if (this.community?.telegram?.enabled && this.community.telegram.link) {
-    links.push({ platform: 'telegram', link: this.community.telegram.link, description: this.community.telegram.description });
+    links.push({
+      platform: "telegram",
+      link: this.community.telegram.link,
+      description: this.community.telegram.description,
+    });
   }
   if (this.community?.discord?.enabled && this.community.discord.link) {
-    links.push({ platform: 'discord', link: this.community.discord.link, description: this.community.discord.description });
+    links.push({
+      platform: "discord",
+      link: this.community.discord.link,
+      description: this.community.discord.description,
+    });
   }
   if (this.community?.slack?.enabled && this.community.slack.link) {
-    links.push({ platform: 'slack', link: this.community.slack.link, description: this.community.slack.description });
+    links.push({
+      platform: "slack",
+      link: this.community.slack.link,
+      description: this.community.slack.description,
+    });
   }
-  
+
   return links;
 });
 
@@ -695,13 +886,17 @@ eventSchema.virtual("hasSocialBanner").get(function () {
 
 eventSchema.virtual("isPaidEvent").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    return this.ticketTypes.some(tt => tt.price > 0);
+    return this.ticketTypes.some((tt) => tt.price > 0);
   }
   return this.price > 0;
 });
 
 eventSchema.virtual("isMultiDay").get(function () {
-  return this.startDate && this.endDate && this.startDate.getTime() !== this.endDate.getTime();
+  return (
+    this.startDate &&
+    this.endDate &&
+    this.startDate.getTime() !== this.endDate.getTime()
+  );
 });
 
 eventSchema.virtual("isVirtual").get(function () {
@@ -722,6 +917,27 @@ eventSchema.virtual("eventDuration").get(function () {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 });
 
+// NEW: Approval virtuals
+eventSchema.virtual("hasApprovalRequired").get(function () {
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    return this.ticketTypes.some((tt) => tt.requiresApproval);
+  }
+  return false;
+});
+
+eventSchema.virtual("approvalRate").get(function () {
+  if (this.pendingApprovals + this.approvedAttendees === 0) return 0;
+  return Math.round(
+    (this.approvedAttendees /
+      (this.pendingApprovals + this.approvedAttendees)) *
+      100
+  );
+});
+
+eventSchema.virtual("needsApprovalAttention").get(function () {
+  return this.pendingApprovals > 0 && this.attendanceApproval?.enabled;
+});
+
 // ==================== PRE-SAVE MIDDLEWARE ====================
 
 // Ensure slug is never null
@@ -740,7 +956,7 @@ eventSchema.pre("save", function (next) {
   if (this.startDate && !this.date) {
     this.date = this.startDate;
   }
-  
+
   // If date is provided but startDate is not (legacy events), sync startDate from date
   if (this.date && !this.startDate) {
     this.startDate = this.date;
@@ -748,21 +964,25 @@ eventSchema.pre("save", function (next) {
       this.endDate = this.date;
     }
   }
-  
+
   // Ensure endDate defaults to startDate if not provided
   if (this.startDate && !this.endDate) {
     this.endDate = this.startDate;
   }
-  
+
   next();
 });
 
 // Validate virtual event link
 eventSchema.pre("save", function (next) {
-  if ((this.eventType === "virtual" || this.eventType === "hybrid") && 
-      this.status === "published" && 
-      !this.virtualEventLink) {
-    return next(new Error("Virtual event link is required for virtual and hybrid events"));
+  if (
+    (this.eventType === "virtual" || this.eventType === "hybrid") &&
+    this.status === "published" &&
+    !this.virtualEventLink
+  ) {
+    return next(
+      new Error("Virtual event link is required for virtual and hybrid events")
+    );
   }
   next();
 });
@@ -785,7 +1005,7 @@ eventSchema.pre("save", function (next) {
         ticketType.capacity
       );
       ticketType.isFree = ticketType.price === 0;
-      
+
       if (this.eventType === "hybrid" && !ticketType.accessType) {
         ticketType.accessType = "both";
       }
@@ -801,6 +1021,9 @@ eventSchema.pre("save", function (next) {
   this.totalRevenue = safeNumber(this.totalRevenue, 0);
   this.views = safeNumber(this.views, 0);
   this.totalLikes = safeNumber(this.totalLikes, 0);
+  this.pendingApprovals = safeNumber(this.pendingApprovals, 0);
+  this.approvedAttendees = safeNumber(this.approvedAttendees, 0);
+  this.rejectedAttendees = safeNumber(this.rejectedAttendees, 0);
 
   if (this.coordinates) {
     this.coordinates.latitude = safeNumber(this.coordinates.latitude, 0);
@@ -896,50 +1119,74 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
-// ✅ FIXED: Validate community and agreement - Only runs on save operations
+// Validate community and agreement - Only runs on save operations
 eventSchema.pre("save", function (next) {
   // Community validation
   if (this.communityEnabled) {
-    const communityPlatforms = ['whatsapp', 'telegram', 'discord', 'slack'];
+    const communityPlatforms = ["whatsapp", "telegram", "discord", "slack"];
     let hasValidLink = false;
-    
+
     for (const platform of communityPlatforms) {
-      if (this.community?.[platform]?.enabled && this.community[platform].link) {
+      if (
+        this.community?.[platform]?.enabled &&
+        this.community[platform].link
+      ) {
         hasValidLink = true;
         break;
       }
     }
-    
+
     if (!hasValidLink) {
-      return next(new Error("At least one community platform must have a valid link when community is enabled"));
+      return next(
+        new Error(
+          "At least one community platform must have a valid link when community is enabled"
+        )
+      );
     }
   }
-  
-  // ✅ CRITICAL FIX: Payment agreement validation
-  // Only check actual fields, not virtual properties
-  // Only validate when creating/modifying relevant fields
+
+  // Payment agreement validation
   if (this.status === "published") {
     // Determine if event has paid tickets by checking actual fields
     let hasPaidTickets = false;
-    
+
     if (this.ticketTypes && this.ticketTypes.length > 0) {
-      hasPaidTickets = this.ticketTypes.some(tt => tt.price > 0);
+      hasPaidTickets = this.ticketTypes.some((tt) => tt.price > 0);
     } else if (this.price > 0) {
       hasPaidTickets = true;
     }
-    
+
     // Only validate when document is new or relevant fields are being modified
-    const isRelevantChange = this.isNew || 
-                             this.isModified('status') || 
-                             this.isModified('ticketTypes') || 
-                             this.isModified('price');
-    
+    const isRelevantChange =
+      this.isNew ||
+      this.isModified("status") ||
+      this.isModified("ticketTypes") ||
+      this.isModified("price");
+
     // Check terms acceptance for paid events
     if (hasPaidTickets && isRelevantChange && !this.agreement?.acceptedTerms) {
       return next(new Error("Terms must be accepted for paid events"));
     }
   }
-  
+
+  // NEW: Initialize approval settings for free tickets
+  if (this.ticketTypes && this.ticketTypes.length > 0) {
+    this.ticketTypes.forEach((ticketType) => {
+      // Set default approval requirement for free tickets
+      if (ticketType.price === 0 && ticketType.requiresApproval === undefined) {
+        ticketType.requiresApproval = true;
+      }
+
+      // Ensure free tickets have isFree set correctly
+      ticketType.isFree = ticketType.price === 0;
+
+      // Enable global approval if any ticket requires approval
+      if (ticketType.requiresApproval && !this.attendanceApproval.enabled) {
+        this.attendanceApproval.enabled = true;
+      }
+    });
+  }
+
   next();
 });
 
@@ -970,31 +1217,38 @@ eventSchema.methods.acceptAgreement = async function (termsData = {}) {
   this.agreement = {
     acceptedTerms: true,
     acceptedAt: new Date(),
-    serviceFee: termsData.serviceFee || this.agreement?.serviceFee || { type: "percentage", amount: 5 },
-    estimatedAttendance: termsData.estimatedAttendance || this.agreement?.estimatedAttendance,
-    paymentTerms: termsData.paymentTerms || this.agreement?.paymentTerms || "post-event",
+    serviceFee: termsData.serviceFee ||
+      this.agreement?.serviceFee || { type: "percentage", amount: 5 },
+    estimatedAttendance:
+      termsData.estimatedAttendance || this.agreement?.estimatedAttendance,
+    paymentTerms:
+      termsData.paymentTerms || this.agreement?.paymentTerms || "post-event",
     agreementVersion: termsData.agreementVersion || "1.0",
     termsUrl: termsData.termsUrl,
   };
-  
+
   await this.save();
   return this.agreement;
 };
 
-eventSchema.methods.enableCommunity = async function (platform, link, description = "") {
+eventSchema.methods.enableCommunity = async function (
+  platform,
+  link,
+  description = ""
+) {
   if (!this.community) {
     this.community = {};
   }
-  
+
   if (!this.community[platform]) {
     this.community[platform] = {};
   }
-  
+
   this.community[platform].enabled = true;
   this.community[platform].link = link;
   this.community[platform].description = description;
   this.communityEnabled = true;
-  
+
   await this.save();
   return this.community;
 };
@@ -1002,14 +1256,14 @@ eventSchema.methods.enableCommunity = async function (platform, link, descriptio
 eventSchema.methods.disableCommunity = async function (platform) {
   if (this.community?.[platform]) {
     this.community[platform].enabled = false;
-    
+
     const hasEnabledPlatforms = Object.values(this.community).some(
-      platformConfig => platformConfig && platformConfig.enabled
+      (platformConfig) => platformConfig && platformConfig.enabled
     );
-    
+
     this.communityEnabled = hasEnabledPlatforms;
   }
-  
+
   await this.save();
   return this.community;
 };
@@ -1021,7 +1275,7 @@ eventSchema.methods.setSocialBanner = async function (bannerData) {
     alt: bannerData.alt || this.title,
   };
   this.socialBannerEnabled = true;
-  
+
   await this.save();
   return this.socialBanner;
 };
@@ -1093,6 +1347,158 @@ eventSchema.methods.usesNewDateSystem = function () {
   return !!this.startDate;
 };
 
+// NEW: Approval instance methods
+
+/**
+ * Enable approval for a specific ticket type
+ */
+eventSchema.methods.enableTicketApproval = async function (
+  ticketTypeId,
+  questions = []
+) {
+  const ticketType = this.ticketTypes.id(ticketTypeId);
+  if (!ticketType) {
+    throw new Error("Ticket type not found");
+  }
+
+  ticketType.requiresApproval = true;
+  if (questions.length > 0) {
+    ticketType.approvalQuestions = questions;
+  }
+
+  // Enable global approval if not already enabled
+  if (!this.attendanceApproval.enabled) {
+    this.attendanceApproval.enabled = true;
+  }
+
+  await this.save();
+  return ticketType;
+};
+
+/**
+ * Disable approval for a specific ticket type
+ */
+eventSchema.methods.disableTicketApproval = async function (ticketTypeId) {
+  const ticketType = this.ticketTypes.id(ticketTypeId);
+  if (!ticketType) {
+    throw new Error("Ticket type not found");
+  }
+
+  ticketType.requiresApproval = false;
+  ticketType.approvalQuestions = [];
+
+  // Check if any ticket types still require approval
+  const hasApprovalRequired = this.ticketTypes.some(
+    (tt) => tt.requiresApproval
+  );
+  if (!hasApprovalRequired) {
+    this.attendanceApproval.enabled = false;
+  }
+
+  await this.save();
+  return ticketType;
+};
+
+/**
+ * Add approval questions to a ticket type
+ */
+eventSchema.methods.addApprovalQuestions = async function (
+  ticketTypeId,
+  questions
+) {
+  const ticketType = this.ticketTypes.id(ticketTypeId);
+  if (!ticketType) {
+    throw new Error("Ticket type not found");
+  }
+
+  if (!ticketType.requiresApproval) {
+    ticketType.requiresApproval = true;
+  }
+
+  ticketType.approvalQuestions = questions;
+  this.attendanceApproval.enabled = true;
+
+  await this.save();
+  return ticketType;
+};
+
+/**
+ * Update global approval settings
+ */
+eventSchema.methods.updateApprovalSettings = async function (settings) {
+  this.attendanceApproval = {
+    ...this.attendanceApproval,
+    ...settings,
+  };
+
+  await this.save();
+  return this.attendanceApproval;
+};
+
+/**
+ * Increment approval counters
+ */
+eventSchema.methods.incrementApprovalCounters = async function (
+  type,
+  count = 1
+) {
+  const validTypes = ["pending", "approved", "rejected"];
+  if (!validTypes.includes(type)) {
+    throw new Error("Invalid approval type");
+  }
+
+  const fieldMap = {
+    pending: "pendingApprovals",
+    approved: "approvedAttendees",
+    rejected: "rejectedAttendees",
+  };
+
+  const field = fieldMap[type];
+  this[field] = (this[field] || 0) + count;
+
+  // If approving or rejecting, decrease pending count
+  if (type === "approved" || type === "rejected") {
+    this.pendingApprovals = Math.max(0, (this.pendingApprovals || 0) - count);
+  }
+
+  await this.save({ validateBeforeSave: false });
+};
+
+/**
+ * Get approval statistics
+ */
+eventSchema.methods.getApprovalStats = function () {
+  return {
+    pending: this.pendingApprovals || 0,
+    approved: this.approvedAttendees || 0,
+    rejected: this.rejectedAttendees || 0,
+    totalProcessed:
+      (this.approvedAttendees || 0) + (this.rejectedAttendees || 0),
+    approvalRate: this.approvalRate,
+  };
+};
+
+/**
+ * Check if ticket type requires approval
+ */
+eventSchema.methods.requiresTicketApproval = function (ticketTypeId) {
+  if (!this.attendanceApproval.enabled) return false;
+
+  const ticketType = this.ticketTypes.id(ticketTypeId);
+  return ticketType ? ticketType.requiresApproval : false;
+};
+
+/**
+ * Get approval questions for a ticket type
+ */
+eventSchema.methods.getApprovalQuestions = function (ticketTypeId) {
+  const ticketType = this.ticketTypes.id(ticketTypeId);
+  if (!ticketType || !ticketType.requiresApproval) {
+    return [];
+  }
+  return ticketType.approvalQuestions || [];
+};
+
 // ==================== STATIC METHODS ====================
 
 eventSchema.statics.findUpcoming = function (limit = 10) {
@@ -1102,12 +1508,15 @@ eventSchema.statics.findUpcoming = function (limit = 10) {
     isActive: true,
     $or: [
       { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } },
     ],
   })
     .sort({ startDate: 1, date: 1 })
     .limit(limit)
-    .populate("organizer", "firstName lastName userName companyName profilePicture");
+    .populate(
+      "organizer",
+      "firstName lastName userName companyName profilePicture"
+    );
 };
 
 eventSchema.statics.findFeatured = function (limit = 6) {
@@ -1118,7 +1527,7 @@ eventSchema.statics.findFeatured = function (limit = 6) {
     isActive: true,
     $or: [
       { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } },
     ],
   })
     .sort({ startDate: 1, date: 1 })
@@ -1128,13 +1537,13 @@ eventSchema.statics.findFeatured = function (limit = 6) {
 
 eventSchema.statics.searchEvents = function (query, filters = {}) {
   const now = new Date();
-  
+
   const searchQuery = {
     status: "published",
     isActive: true,
     $or: [
       { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } },
     ],
   };
 
@@ -1171,9 +1580,13 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
 
     const ticketTypePriceQuery = { "ticketTypes.price": {} };
     if (filters.minPrice !== undefined)
-      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(filters.minPrice);
+      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(
+        filters.minPrice
+      );
     if (filters.maxPrice !== undefined)
-      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(filters.maxPrice);
+      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(
+        filters.maxPrice
+      );
     priceConditions.push(ticketTypePriceQuery);
 
     if (!searchQuery.$and) searchQuery.$and = [];
@@ -1183,27 +1596,33 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
   // Date range filtering
   if (filters.startDate || filters.endDate) {
     const dateConditions = [];
-    
+
     const startDateQuery = { startDate: {} };
-    if (filters.startDate) startDateQuery.startDate.$gte = new Date(filters.startDate);
-    if (filters.endDate) startDateQuery.startDate.$lte = new Date(filters.endDate);
+    if (filters.startDate)
+      startDateQuery.startDate.$gte = new Date(filters.startDate);
+    if (filters.endDate)
+      startDateQuery.startDate.$lte = new Date(filters.endDate);
     dateConditions.push(startDateQuery);
-    
-    const legacyDateQuery = { 
+
+    const legacyDateQuery = {
       date: {},
-      startDate: { $exists: false }
+      startDate: { $exists: false },
     };
-    if (filters.startDate) legacyDateQuery.date.$gte = new Date(filters.startDate);
+    if (filters.startDate)
+      legacyDateQuery.date.$gte = new Date(filters.startDate);
     if (filters.endDate) legacyDateQuery.date.$lte = new Date(filters.endDate);
     dateConditions.push(legacyDateQuery);
-    
+
     if (!searchQuery.$and) searchQuery.$and = [];
     searchQuery.$and.push({ $or: dateConditions });
   }
 
   return this.find(searchQuery)
     .sort(filters.sort || { startDate: 1, date: 1 })
-    .populate("organizer", "firstName lastName userName companyName profilePicture");
+    .populate(
+      "organizer",
+      "firstName lastName userName companyName profilePicture"
+    );
 };
 
 eventSchema.statics.getStatistics = async function (organizerId) {
@@ -1249,17 +1668,17 @@ eventSchema.statics.getStatistics = async function (organizerId) {
 
 eventSchema.statics.getFlexibleDateMatch = function (dateFilter = {}) {
   const match = {};
-  
+
   if (dateFilter.$gte || dateFilter.$lte || dateFilter.$gt || dateFilter.$lt) {
     match.$or = [
       { startDate: dateFilter },
-      { 
+      {
         date: { ...dateFilter, $exists: true },
-        startDate: { $exists: false }
-      }
+        startDate: { $exists: false },
+      },
     ];
   }
-  
+
   return match;
 };
 
@@ -1267,7 +1686,7 @@ eventSchema.statics.migrateToFlexibleDates = async function () {
   try {
     const eventsToMigrate = await this.find({
       date: { $exists: true },
-      startDate: { $exists: false }
+      startDate: { $exists: false },
     });
 
     console.log(`Found ${eventsToMigrate.length} events to migrate`);
@@ -1289,7 +1708,79 @@ eventSchema.statics.migrateToFlexibleDates = async function () {
 };
 
 eventSchema.statics.getDateFieldName = function (event) {
-  return event && event.startDate ? 'startDate' : 'date';
+  return event && event.startDate ? "startDate" : "date";
+};
+
+// NEW: Approval static methods
+
+/**
+ * Find events requiring approval attention
+ */
+eventSchema.statics.findNeedingApproval = function (organizerId) {
+  return this.find({
+    organizer: organizerId,
+    "attendanceApproval.enabled": true,
+    pendingApprovals: { $gt: 0 },
+  })
+    .sort({ pendingApprovals: -1, startDate: 1 })
+    .populate("organizer", "firstName lastName userName");
+};
+
+/**
+ * Get approval statistics for organizer
+ */
+eventSchema.statics.getApprovalStatistics = async function (organizerId) {
+  const stats = await this.aggregate([
+    {
+      $match: {
+        organizer: new mongoose.Types.ObjectId(organizerId),
+        "attendanceApproval.enabled": true,
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        totalEventsWithApproval: { $sum: 1 },
+        totalPendingApprovals: { $sum: "$pendingApprovals" },
+        totalApprovedAttendees: { $sum: "$approvedAttendees" },
+        totalRejectedAttendees: { $sum: "$rejectedAttendees" },
+        avgApprovalRate: {
+          $avg: {
+            $cond: [
+              {
+                $eq: [
+                  { $add: ["$approvedAttendees", "$rejectedAttendees"] },
+                  0,
+                ],
+              },
+              0,
+              {
+                $multiply: [
+                  {
+                    $divide: [
+                      "$approvedAttendees",
+                      { $add: ["$approvedAttendees", "$rejectedAttendees"] },
+                    ],
+                  },
+                  100,
+                ],
+              },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  return (
+    stats[0] || {
+      totalEventsWithApproval: 0,
+      totalPendingApprovals: 0,
+      totalApprovedAttendees: 0,
+      totalRejectedAttendees: 0,
+      avgApprovalRate: 0,
+    }
+  );
 };
 
 // ==================== QUERY HELPERS ====================
@@ -1303,8 +1794,8 @@ eventSchema.query.upcoming = function () {
   return this.where({
     $or: [
       { startDate: { $gte: now } },
-      { date: { $gte: now, $exists: true }, startDate: { $exists: false } }
-    ]
+      { date: { $gte: now, $exists: true }, startDate: { $exists: false } },
+    ],
   });
 };
 
@@ -1313,8 +1804,8 @@ eventSchema.query.past = function () {
   return this.where({
     $or: [
       { startDate: { $lt: now } },
-      { date: { $lt: now, $exists: true }, startDate: { $exists: false } }
-    ]
+      { date: { $lt: now, $exists: true }, startDate: { $exists: false } },
+    ],
   });
 };
 
@@ -1356,20 +1847,38 @@ eventSchema.query.byState = function (state) {
 
 eventSchema.query.free = function () {
   return this.where({
-    $or: [
-      { price: 0 },
-      { "ticketTypes.price": 0 }
-    ]
+    $or: [{ price: 0 }, { "ticketTypes.price": 0 }],
   });
 };
 
 eventSchema.query.paid = function () {
   return this.where({
-    $or: [
-      { price: { $gt: 0 } },
-      { "ticketTypes.price": { $gt: 0 } }
-    ]
+    $or: [{ price: { $gt: 0 } }, { "ticketTypes.price": { $gt: 0 } }],
   });
 };
 
-module.exports = mongoose.model("Event", eventSchema)
+// NEW: Approval query helpers
+eventSchema.query.withApproval = function () {
+  return this.where({ "attendanceApproval.enabled": true });
+};
+
+eventSchema.query.needingApproval = function () {
+  return this.where({
+    "attendanceApproval.enabled": true,
+    pendingApprovals: { $gt: 0 },
+  });
+};
+
+eventSchema.query.byApprovalStatus = function (hasApproval) {
+  if (hasApproval) {
+    return this.where({ "attendanceApproval.enabled": true });
+  }
+  return this.where({
+    $or: [
+      { "attendanceApproval.enabled": false },
+      { "attendanceApproval.enabled": { $exists: false } },
+    ],
+  });
+};
+
+module.exports = mongoose.model("Event", eventSchema);
