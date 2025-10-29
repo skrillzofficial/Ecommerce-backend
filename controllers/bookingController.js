@@ -833,53 +833,170 @@ const cancelBooking = async (req, res, next) => {
   }
 };
 
-// @desc    Get user's bookings
-// @route   GET /api/v1/bookings
+// @desc    Get user's bookings (includes both Booking and Ticket collections)
+// @route   GET /api/v1/bookings/my-bookings
 // @access  Private
 const getMyBookings = async (req, res, next) => {
   try {
     const { status, page = 1, limit = 10, sort = "-bookingDate" } = req.query;
 
-    const query = { user: req.user.userId };
-    if (status) query.status = status;
-
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    const [bookings, total] = await Promise.all([
-      Booking.find(query)
+    // Build query for bookings
+    const bookingQuery = { user: req.user.userId };
+    if (status) bookingQuery.status = status;
+
+    // Build query for tickets
+    const ticketQuery = { userId: req.user.userId };
+    if (status) ticketQuery.status = status;
+
+    // Fetch both bookings and tickets in parallel
+    const [bookings, tickets] = await Promise.all([
+      Booking.find(bookingQuery)
         .populate("event", "title startDate endDate time venue city images status eventType virtualEventLink")
         .populate("tickets", "ticketNumber status checkedInAt ticketType accessType")
         .sort(sort)
-        .skip(skip)
-        .limit(limitNum)
         .lean(),
-      Booking.countDocuments(query)
+      Ticket.find(ticketQuery)
+        .sort(sort)
+        .lean()
     ]);
 
-    // Enhance bookings with virtual fields
-    const enhancedBookings = bookings.map(booking => ({
-      ...booking,
-      canBeCancelled: new Date(booking.eventSnapshot.startDate) > new Date() && 
-                     booking.status === "confirmed",
-      isUpcoming: new Date(booking.eventSnapshot.startDate) > new Date(),
-      hasVirtualAccess: booking.ticketDetails?.some(td => 
-        td.accessType === "virtual" || td.accessType === "both"
-      ),
-      requiresPayment: booking.paymentStatus === 'pending' && booking.status === 'pending'
-    }));
+    // Combine bookings and tickets
+    const combinedData = [];
+
+    // Add all bookings
+    bookings.forEach(booking => {
+      combinedData.push({
+        _id: booking._id,
+        source: 'booking',
+        event: booking.event,
+        tickets: booking.tickets,
+        ticketDetails: booking.ticketDetails,
+        totalTickets: booking.totalTickets,
+        subtotalAmount: booking.subtotalAmount,
+        serviceFee: booking.serviceFee,
+        totalAmount: booking.totalAmount,
+        currency: booking.currency,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        paymentMethod: booking.paymentMethod,
+        bookingDate: booking.bookingDate || booking.createdAt,
+        orderNumber: booking.orderNumber,
+        eventSnapshot: booking.eventSnapshot,
+        canBeCancelled: new Date(booking.eventSnapshot?.startDate || booking.event?.startDate) > new Date() && 
+                       booking.status === "confirmed",
+        isUpcoming: new Date(booking.eventSnapshot?.startDate || booking.event?.startDate) > new Date(),
+        hasVirtualAccess: booking.ticketDetails?.some(td => 
+          td.accessType === "virtual" || td.accessType === "both"
+        ),
+        requiresPayment: booking.paymentStatus === 'pending' && booking.status === 'pending'
+      });
+    });
+
+    // Add tickets that are NOT already included in bookings
+    tickets.forEach(ticket => {
+      // Check if this ticket is already part of a booking
+      const existsInBookings = bookings.some(booking => 
+        booking.tickets?.some(t => t._id.toString() === ticket._id.toString())
+      );
+
+      if (!existsInBookings) {
+        // Convert ticket to booking-like structure
+        combinedData.push({
+          _id: ticket._id,
+          source: 'ticket',
+          event: {
+            _id: ticket.eventId,
+            title: ticket.eventName,
+            startDate: ticket.eventDate,
+            endDate: ticket.eventDate,
+            time: ticket.eventTime,
+            endTime: ticket.eventEndTime,
+            venue: ticket.eventVenue,
+            city: ticket.eventCity,
+            images: [],
+            status: 'published',
+            eventType: ticket.eventType || 'physical'
+          },
+          tickets: [{
+            _id: ticket._id,
+            ticketNumber: ticket.ticketNumber,
+            status: ticket.status,
+            checkedInAt: ticket.checkedInAt,
+            ticketType: ticket.ticketType,
+            accessType: ticket.accessLevel || 'general'
+          }],
+          ticketDetails: [{
+            ticketType: ticket.ticketType,
+            quantity: ticket.quantity || 1,
+            price: ticket.ticketPrice,
+            subtotal: ticket.totalAmount || ticket.ticketPrice
+          }],
+          totalTickets: ticket.quantity || 1,
+          subtotalAmount: ticket.ticketPrice || 0,
+          serviceFee: 0,
+          totalAmount: ticket.totalAmount || ticket.ticketPrice || 0,
+          currency: ticket.currency || 'NGN',
+          status: ticket.status,
+          paymentStatus: ticket.paymentStatus,
+          paymentMethod: ticket.paymentMethod,
+          bookingDate: ticket.purchaseDate || ticket.createdAt,
+          orderNumber: ticket.ticketNumber,
+          eventSnapshot: {
+            title: ticket.eventName,
+            startDate: ticket.eventDate,
+            endDate: ticket.eventDate,
+            time: ticket.eventTime,
+            endTime: ticket.eventEndTime,
+            venue: ticket.eventVenue,
+            address: ticket.eventAddress,
+            state: ticket.eventCity,
+            city: ticket.eventCity,
+            eventType: ticket.eventType || 'physical',
+            virtualEventLink: ticket.virtualEventLink || '',
+            organizerName: ticket.organizerName,
+            organizerCompany: ticket.organizerCompany,
+            refundPolicy: ticket.refundPolicy || 'partial',
+            category: ticket.eventCategory
+          },
+          canBeCancelled: new Date(ticket.eventDate) > new Date() && 
+                         ticket.status === "confirmed",
+          isUpcoming: new Date(ticket.eventDate) > new Date(),
+          hasVirtualAccess: ticket.accessLevel === 'virtual' || ticket.accessLevel === 'both',
+          requiresPayment: ticket.paymentStatus === 'pending' && ticket.status === 'pending'
+        });
+      }
+    });
+
+    // Sort combined data by booking date
+    combinedData.sort((a, b) => {
+      const dateA = new Date(a.bookingDate);
+      const dateB = new Date(b.bookingDate);
+      return sort.startsWith('-') ? dateB - dateA : dateA - dateB;
+    });
+
+    // Apply pagination to combined data
+    const total = combinedData.length;
+    const paginatedData = combinedData.slice(skip, skip + limitNum);
 
     res.status(200).json({
       success: true,
       data: {
-        bookings: enhancedBookings,
+        bookings: paginatedData,
         pagination: {
           total,
           page: pageNum,
           totalPages: Math.ceil(total / limitNum),
           hasNext: pageNum < Math.ceil(total / limitNum),
           hasPrev: pageNum > 1
+        },
+        summary: {
+          totalBookings: bookings.length,
+          totalTickets: tickets.length,
+          totalCombined: total
         }
       }
     });

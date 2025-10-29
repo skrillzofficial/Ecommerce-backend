@@ -7,13 +7,13 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       required: [true, "Order number is required"],
       unique: true,
-      index: true, // ✅ KEEP this - remove the separate index below
+      index: true, 
     },
     shortId: {
       type: String,
       unique: true,
       sparse: true,
-      index: true, // ✅ KEEP this - remove the separate index below
+      index: true, 
     },
 
     // Event & User References
@@ -21,19 +21,19 @@ const bookingSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Event",
       required: [true, "Event reference is required"],
-      index: true, // ✅ KEEP this
+      index: true, 
     },
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "User reference is required"],
-      index: true, // ✅ KEEP this
+      index: true, 
     },
     organizer: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: [true, "Organizer reference is required"],
-      index: true, // ✅ KEEP this
+      index: true, 
     },
 
     // Ticket Information
@@ -41,7 +41,7 @@ const bookingSchema = new mongoose.Schema(
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Ticket",
-        index: true, // ✅ KEEP this
+        index: true, 
       },
     ],
 
@@ -131,7 +131,7 @@ const bookingSchema = new mongoose.Schema(
         message: "{VALUE} is not a valid booking status",
       },
       default: "pending",
-      index: true, // ✅ KEEP this
+      index: true, 
     },
 
     // Payment Information
@@ -150,7 +150,7 @@ const bookingSchema = new mongoose.Schema(
         message: "{VALUE} is not a valid payment status",
       },
       default: "pending",
-      index: true, // ✅ KEEP this
+      index: true, 
     },
     paymentMethod: {
       type: String,
