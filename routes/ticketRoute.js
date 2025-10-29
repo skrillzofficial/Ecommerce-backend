@@ -7,7 +7,7 @@ const {
   getTicketAnalytics,
   downloadTicket,
   resendTicketEmail,
-  getUserTickets, // Add this import
+  getUserTickets,
 } = require("../controllers/ticket.controller");
 
 const { protect, authorize } = require("../middleware/auth");
