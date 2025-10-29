@@ -608,36 +608,53 @@ const initializeServiceFeePayment = async (req, res, next) => {
     // ✅ Use null for draft events, real eventId for existing events
     const transactionEventId = isDraftEvent ? null : eventId;
 
-    // Create service fee transaction
+    // ✅ FIXED: Create service fee transaction with ALL required fields
     const transaction = await Transaction.create({
+      // Required fields from your model
       userId: req.user.userId,
       eventId: transactionEventId, // Will be null for draft events
+      bookingId: null, // Service fee payments don't have bookings
+      totalAmount: amountNum,
+      subtotalAmount: amountNum, // Same as total for service fees (no additional charges)
+      eventTitle: metadata?.eventTitle || metadata?.eventData?.title || "Event Service Fee",
+      eventStartDate: metadata?.eventData?.startDate || metadata?.eventData?.date || new Date(),
+      
+      // Payment details
       amount: amountNum,
       currency: "NGN",
       type: "service_fee",
       status: "pending",
-      paymentMethod: "paystack",
+      paymentMethod: "card", // ✅ FIXED: Use "card" instead of "paystack"
+      paymentGateway: "paystack", // Keep gateway as paystack
+      
+      // Metadata
       metadata: {
         isDraft: isDraftEvent,
-        draftEventId: isDraftEvent ? eventId : null, // Store draft ID for reference
-        eventData: metadata?.eventData || {}, // Store event data from request
+        draftEventId: isDraftEvent ? eventId : null,
+        eventData: metadata?.eventData || {},
         agreementData: metadata?.agreementData || {},
         attendanceRange: metadata?.attendanceRange || "unknown",
         userInfo: metadata?.userInfo || {},
+        hasApprovalTickets: metadata?.hasApprovalTickets || false,
       },
+    });
+
+    console.log("✅ Transaction created:", {
+      id: transaction._id,
+      reference: transaction.reference,
     });
 
     // Initialize payment with Paystack
     const paymentData = {
       email: email,
-      amount: Math.round(amountNum), // Already in kobo from frontend
+      amount: Math.round(amountNum * 100), // ✅ FIXED: Convert to kobo here
       reference: transaction.reference,
       metadata: {
         transactionId: transaction._id.toString(),
         userId: req.user.userId,
         type: "service_fee",
         isDraft: isDraftEvent,
-        eventId: eventId, // Keep original eventId (draft or real)
+        eventId: eventId,
       },
       callback_url:
         req.body.callback_url ||
