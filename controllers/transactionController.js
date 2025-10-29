@@ -582,7 +582,7 @@ const initializeServiceFeePayment = async (req, res, next) => {
       return next(new ErrorResponse("Invalid service fee amount", 400));
     }
 
-    // ✅ CHECK IF THIS IS A DRAFT EVENT (not yet created in database)
+    // ✅ CHECK IF THIS IS A DRAFT EVENT
     const isDraftEvent =
       typeof eventId === "string" && eventId.startsWith("draft-");
 
@@ -594,8 +594,9 @@ const initializeServiceFeePayment = async (req, res, next) => {
     });
 
     // Only verify event exists if it's not a draft
+    let event = null;
     if (!isDraftEvent) {
-      const event = await Event.findOne({
+      event = await Event.findOne({
         _id: eventId,
         organizer: req.user.userId,
       });
@@ -605,29 +606,43 @@ const initializeServiceFeePayment = async (req, res, next) => {
       }
     }
 
-    // ✅ Use null for draft events, real eventId for existing events
-    const transactionEventId = isDraftEvent ? null : eventId;
+    // ✅ MANUALLY GENERATE REFERENCE (Don't rely on pre-save hook)
+    const reference = `TXN-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 9)
+      .toUpperCase()}`;
 
-    // ✅ FIXED: Create service fee transaction with ALL required fields
-    const transaction = await Transaction.create({
-      // Required fields from your model
+    console.log("✅ Generated reference:", reference);
+
+    // ✅ Prepare transaction data with ALL required fields
+    const transactionData = {
+      // Core identification
+      reference: reference, // ✅ MANUALLY PROVIDED
       userId: req.user.userId,
-      eventId: transactionEventId, // Will be null for draft events
-      bookingId: null, // Service fee payments don't have bookings
+      type: "service_fee",
+      
+      // Event & Booking (conditionally set based on draft status)
+      eventId: isDraftEvent ? undefined : eventId, // Don't set if draft
+      bookingId: undefined, // Service fees never have bookings
+      
+      // Amounts (all required)
       totalAmount: amountNum,
-      subtotalAmount: amountNum, // Same as total for service fees (no additional charges)
+      subtotalAmount: amountNum,
+      serviceFee: 0,
+      taxAmount: 0,
+      discountAmount: 0,
+      currency: "NGN",
+      
+      // Event snapshot (required)
       eventTitle: metadata?.eventTitle || metadata?.eventData?.title || "Event Service Fee",
       eventStartDate: metadata?.eventData?.startDate || metadata?.eventData?.date || new Date(),
       
-      // Payment details
-      amount: amountNum,
-      currency: "NGN",
-      type: "service_fee",
+      // Payment info
       status: "pending",
-      paymentMethod: "card", // ✅ FIXED: Use "card" instead of "paystack"
-      paymentGateway: "paystack", // Keep gateway as paystack
+      paymentMethod: "card",
+      paymentGateway: "paystack",
       
-      // Metadata
+      // Metadata for draft event handling
       metadata: {
         isDraft: isDraftEvent,
         draftEventId: isDraftEvent ? eventId : null,
@@ -637,17 +652,31 @@ const initializeServiceFeePayment = async (req, res, next) => {
         userInfo: metadata?.userInfo || {},
         hasApprovalTickets: metadata?.hasApprovalTickets || false,
       },
+    };
+
+    console.log("📦 Transaction data prepared:", {
+      reference: transactionData.reference,
+      type: transactionData.type,
+      isDraft: isDraftEvent,
+      hasEventId: !!transactionData.eventId,
+      hasBookingId: !!transactionData.bookingId,
+      totalAmount: transactionData.totalAmount,
+      eventTitle: transactionData.eventTitle,
     });
 
-    console.log("✅ Transaction created:", {
+    // ✅ Create transaction
+    const transaction = await Transaction.create(transactionData);
+
+    console.log("✅ Transaction created successfully:", {
       id: transaction._id,
       reference: transaction.reference,
+      type: transaction.type,
     });
 
     // Initialize payment with Paystack
     const paymentData = {
       email: email,
-      amount: Math.round(amountNum * 100), // ✅ FIXED: Convert to kobo here
+      amount: Math.round(amountNum * 100), // Convert to kobo
       reference: transaction.reference,
       metadata: {
         transactionId: transaction._id.toString(),
@@ -661,19 +690,20 @@ const initializeServiceFeePayment = async (req, res, next) => {
         `${process.env.FRONTEND_URL}/dashboard/organizer/events?payment=success`,
     };
 
-    console.log("Initializing Paystack payment:", {
+    console.log("💳 Initializing Paystack payment:", {
       reference: transaction.reference,
       amount: paymentData.amount,
-      isDraft: isDraftEvent,
+      email: paymentData.email,
     });
 
     const paymentResponse = await initializePayment(paymentData);
 
     // Update transaction with payment URL
-    transaction.paymentUrl = paymentResponse.data.authorization_url;
+    transaction.authorizationUrl = paymentResponse.data.authorization_url;
+    transaction.accessCode = paymentResponse.data.access_code;
     await transaction.save();
 
-    console.log("Payment initialized successfully:", {
+    console.log("🎉 Payment initialized successfully:", {
       reference: transaction.reference,
       authorizationUrl: paymentResponse.data.authorization_url,
     });
@@ -685,7 +715,7 @@ const initializeServiceFeePayment = async (req, res, next) => {
         transaction: {
           _id: transaction._id,
           reference: transaction.reference,
-          amount: transaction.amount,
+          amount: transaction.totalAmount,
           status: transaction.status,
           type: transaction.type,
         },
@@ -695,7 +725,15 @@ const initializeServiceFeePayment = async (req, res, next) => {
       },
     });
   } catch (error) {
-    console.error("Service fee payment initialization error:", error);
+    console.error("💥 Service fee payment initialization error:", error);
+    
+    // Log validation errors
+    if (error.name === 'ValidationError') {
+      console.error("Validation errors:", error.errors);
+      const messages = Object.values(error.errors).map(err => err.message);
+      return next(new ErrorResponse(messages.join(', '), 400));
+    }
+    
     next(error);
   }
 };
