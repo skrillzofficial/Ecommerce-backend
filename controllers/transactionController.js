@@ -745,8 +745,42 @@ const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
 
-    console.log("Verifying service fee payment:", reference);
+    console.log("🔍 Verifying service fee payment:", reference);
 
+    // ✅ FIRST: Check if transaction already completed and has event
+    const existingTransaction = await Transaction.findOne({
+      reference,
+      type: "service_fee",
+      status: "completed"
+    }).populate('eventId');
+
+    if (existingTransaction && existingTransaction.eventId) {
+      console.log('✅ Event already created for this payment:', {
+        transactionId: existingTransaction._id,
+        eventId: existingTransaction.eventId._id,
+        eventTitle: existingTransaction.eventId.title
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Service fee payment already verified and event created",
+        data: {
+          transaction: {
+            _id: existingTransaction._id,
+            reference: existingTransaction.reference,
+            amount: existingTransaction.totalAmount,
+            status: existingTransaction.status,
+            type: existingTransaction.type,
+            metadata: existingTransaction.metadata,
+          },
+          event: existingTransaction.eventId,
+          isDraft: false, // Important: Mark as not draft
+          alreadyProcessed: true
+        }
+      });
+    }
+
+    // ✅ SECOND: Check if transaction exists but no event created yet
     const transaction = await Transaction.findOne({
       reference,
       type: "service_fee",
@@ -756,75 +790,149 @@ const verifyServiceFeePayment = async (req, res, next) => {
       return next(new ErrorResponse("Service fee transaction not found", 404));
     }
 
-    // Verify payment with Paystack
-    const verification = await verifyPayment(reference);
-
-    console.log("Paystack verification response:", {
-      status: verification.data.status,
-      reference,
-      isDraft: transaction.metadata?.isDraft,
-    });
-
-    if (verification.data.status === "success") {
-      // Mark transaction as completed
-      await markTransactionAsCompleted(transaction, verification.data);
-
-      const isDraft = transaction.metadata?.isDraft;
-
-      // ✅ Only update event if it exists and is not a draft
-      if (!isDraft && transaction.eventId) {
-        console.log("Updating existing event status:", transaction.eventId);
-
-        await Event.findByIdAndUpdate(transaction.eventId, {
-          serviceFeePaymentStatus: "paid",
-          serviceFeeReference: reference,
-          serviceFeeTransaction: transaction._id,
-          isActive: true,
-        });
-      } else if (isDraft) {
-        console.log(
-          "Draft event - payment verified, waiting for event creation"
-        );
-      }
+    // ✅ THIRD: If transaction is already completed but no event, return draft state
+    if (transaction.status === "completed" && !transaction.eventId) {
+      console.log("📋 Payment verified but waiting for event creation");
 
       return res.status(200).json({
         success: true,
-        message: "Service fee payment verified successfully",
+        message: "Payment verified, waiting for event creation",
         data: {
           transaction: {
             _id: transaction._id,
             reference: transaction.reference,
-            amount: transaction.amount,
+            amount: transaction.totalAmount,
             status: transaction.status,
             type: transaction.type,
             metadata: transaction.metadata,
           },
-          isDraft: isDraft,
+          isDraft: true,
           eventData: transaction.metadata?.eventData || null,
-        },
-      });
-    } else {
-      console.log("Payment verification failed:", verification.data.status);
-
-      await markTransactionAsFailed(
-        transaction,
-        "Service fee payment verification failed"
-      );
-
-      return res.status(400).json({
-        success: false,
-        message: "Service fee payment verification failed",
-        data: {
-          transaction: transaction,
-        },
+        }
       });
     }
+
+    // ✅ FOURTH: Verify payment with Paystack (only for pending transactions)
+    if (transaction.status === "pending") {
+      console.log("💳 Verifying payment with Paystack...");
+      const verification = await verifyPayment(reference);
+
+      console.log("Paystack verification response:", {
+        status: verification.data.status,
+        reference,
+        isDraft: transaction.metadata?.isDraft,
+      });
+
+      if (verification.data.status === "success") {
+        // Mark transaction as completed
+        await markTransactionAsCompleted(transaction, verification.data);
+
+        const isDraft = transaction.metadata?.isDraft;
+
+        // ✅ Only update event if it exists and is not a draft
+        if (!isDraft && transaction.eventId) {
+          console.log("📝 Updating existing event status:", transaction.eventId);
+
+          const updatedEvent = await Event.findByIdAndUpdate(
+            transaction.eventId,
+            {
+              serviceFeePaymentStatus: "paid",
+              serviceFeeReference: reference,
+              serviceFeeTransaction: transaction._id,
+              isActive: true,
+              status: "published",
+            },
+            { new: true }
+          );
+
+          console.log("✅ Event updated successfully:", {
+            eventId: updatedEvent._id,
+            title: updatedEvent.title,
+            status: updatedEvent.status
+          });
+
+          return res.status(200).json({
+            success: true,
+            message: "Service fee payment verified and event published successfully",
+            data: {
+              transaction: {
+                _id: transaction._id,
+                reference: transaction.reference,
+                amount: transaction.totalAmount,
+                status: transaction.status,
+                type: transaction.type,
+                metadata: transaction.metadata,
+              },
+              event: updatedEvent,
+              isDraft: false,
+            },
+          });
+        } else if (isDraft) {
+          console.log("📋 Draft event - payment verified, waiting for event creation");
+
+          return res.status(200).json({
+            success: true,
+            message: "Service fee payment verified successfully",
+            data: {
+              transaction: {
+                _id: transaction._id,
+                reference: transaction.reference,
+                amount: transaction.totalAmount,
+                status: transaction.status,
+                type: transaction.type,
+                metadata: transaction.metadata,
+              },
+              isDraft: true,
+              eventData: transaction.metadata?.eventData || null,
+            },
+          });
+        }
+      } else {
+        console.log("❌ Payment verification failed:", verification.data.status);
+
+        await markTransactionAsFailed(
+          transaction,
+          "Service fee payment verification failed"
+        );
+
+        return res.status(400).json({
+          success: false,
+          message: "Service fee payment verification failed",
+          data: {
+            transaction: transaction,
+          },
+        });
+      }
+    }
+
+    // ✅ FIFTH: Handle other transaction states
+    console.log("ℹ️ Transaction in unexpected state:", {
+      status: transaction.status,
+      hasEventId: !!transaction.eventId
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Transaction is ${transaction.status}`,
+      data: {
+        transaction: {
+          _id: transaction._id,
+          reference: transaction.reference,
+          amount: transaction.totalAmount,
+          status: transaction.status,
+          type: transaction.type,
+          metadata: transaction.metadata,
+        },
+        isDraft: transaction.status === "completed" && !transaction.eventId,
+        event: transaction.eventId || null,
+      }
+    });
+
   } catch (error) {
-    console.error("Service fee verification error:", error);
+    console.error("💥 Service fee verification error:", error);
     next(error);
   }
 };
-
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
