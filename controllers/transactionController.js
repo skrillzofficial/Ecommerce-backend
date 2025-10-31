@@ -1081,7 +1081,7 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("👤 Current user:", {
       userId: req.user.userId,
       role: req.user.role,
-      email: req.user.email,
+      email: req.user.email
     });
 
     // Find the service fee transaction with detailed population
@@ -1089,7 +1089,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       reference,
       type: "service_fee",
       status: "completed",
-    }).populate("userId", "firstName lastName email role");
+    }).populate('userId', 'firstName lastName email role');
 
     if (!transaction) {
       return next(
@@ -1097,20 +1097,23 @@ const completeDraftEventCreation = async (req, res, next) => {
       );
     }
 
+    // ✅ FIX: Proper ObjectId comparison
+    const transactionUserId = transaction.userId?._id?.toString();
+    const currentUserId = req.user.userId.toString(); // Convert to string for comparison
+
     console.log("📊 Transaction details:", {
       transactionId: transaction._id,
-      transactionUserId: transaction.userId?._id?.toString(),
+      transactionUserId: transactionUserId,
       transactionUserEmail: transaction.userId?.email,
       transactionUserRole: transaction.userId?.role,
-      currentUserId: req.user.userId,
+      currentUserId: currentUserId,
       currentUserRole: req.user.role,
       isDraft: transaction.metadata?.isDraft,
-      hasEventId: !!transaction.eventId,
+      hasEventId: !!transaction.eventId
     });
 
-    // ✅ ENHANCED AUTHORIZATION CHECK
-    const isTransactionOwner =
-      transaction.userId?._id?.toString() === req.user.userId;
+    // ✅ FIXED AUTHORIZATION CHECK with proper ObjectId comparison
+    const isTransactionOwner = transactionUserId === currentUserId;
     const isSuperAdmin = req.user.role === "superadmin";
     const isOrganizer = req.user.role === "organizer";
 
@@ -1119,21 +1122,24 @@ const completeDraftEventCreation = async (req, res, next) => {
       isSuperAdmin,
       isOrganizer,
       authorized: isTransactionOwner || isSuperAdmin,
+      transactionUserIdType: typeof transactionUserId,
+      currentUserIdType: typeof currentUserId,
+      idsMatch: transactionUserId === currentUserId
     });
 
     if (!isTransactionOwner && !isSuperAdmin) {
       console.log("❌ Authorization failed:", {
-        transactionOwner: transaction.userId?._id?.toString(),
-        currentUser: req.user.userId,
+        transactionOwner: transactionUserId,
+        currentUser: currentUserId,
         userRole: req.user.role,
+        exactMatch: transactionUserId === currentUserId
       });
       return next(
-        new ErrorResponse(
-          "Not authorized to complete this event. You must be the transaction owner or superadmin.",
-          403
-        )
+        new ErrorResponse("Not authorized to complete this event. You must be the transaction owner or superadmin.", 403)
       );
     }
+
+    console.log("✅ Authorization successful - User owns this transaction");
 
     // Check if event already exists
     if (transaction.eventId) {
@@ -1142,7 +1148,7 @@ const completeDraftEventCreation = async (req, res, next) => {
         console.log("✅ Event already exists:", {
           eventId: existingEvent._id,
           title: existingEvent.title,
-          status: existingEvent.status,
+          status: existingEvent.status
         });
 
         return res.status(200).json({
@@ -1173,12 +1179,14 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("📝 Creating event from draft:", {
       draftEventId,
       hasEventData: !!eventData,
-      hasMetadataEventData: !!transaction.metadata?.eventData,
+      hasMetadataEventData: !!transaction.metadata?.eventData
     });
 
     // ✅ ADDITIONAL VALIDATION: Ensure the current user can create events
     if (!isOrganizer && !isSuperAdmin) {
-      return next(new ErrorResponse("Only organizers can create events", 403));
+      return next(
+        new ErrorResponse("Only organizers can create events", 403)
+      );
     }
 
     // ✅ VERIFY USER EXISTS AND CAN CREATE EVENTS
@@ -1200,36 +1208,21 @@ const completeDraftEventCreation = async (req, res, next) => {
       serviceFeeTransaction: transaction._id,
       publishedAt: new Date(),
       // Ensure required fields exist
-      title:
-        eventData?.title ||
-        transaction.metadata?.eventData?.title ||
-        "Event Title",
-      description:
-        eventData?.description ||
-        transaction.metadata?.eventData?.description ||
-        "Event description",
-      date:
-        eventData?.date || transaction.metadata?.eventData?.date || new Date(),
+      title: eventData?.title || transaction.metadata?.eventData?.title || "Event Title",
+      description: eventData?.description || transaction.metadata?.eventData?.description || "Event description",
+      date: eventData?.date || transaction.metadata?.eventData?.date || new Date(),
       // Map frontend fields to database fields
-      city:
-        eventData?.state || transaction.metadata?.eventData?.state || "Lagos", // Map state to city
-      venue:
-        eventData?.venue || transaction.metadata?.eventData?.venue || "Venue",
-      address:
-        eventData?.address ||
-        transaction.metadata?.eventData?.address ||
-        "Address",
-      category:
-        eventData?.category ||
-        transaction.metadata?.eventData?.category ||
-        "Other",
+      city: eventData?.state || transaction.metadata?.eventData?.state || "Lagos", // Map state to city
+      venue: eventData?.venue || transaction.metadata?.eventData?.venue || "Venue",
+      address: eventData?.address || transaction.metadata?.eventData?.address || "Address",
+      category: eventData?.category || transaction.metadata?.eventData?.category || "Other"
     };
 
     console.log("🛠 Final event data prepared:", {
       title: finalEventData.title,
       organizer: finalEventData.organizer,
       hasDate: !!finalEventData.date,
-      hasVenue: !!finalEventData.venue,
+      hasVenue: !!finalEventData.venue
     });
 
     // Create the actual event
@@ -1246,7 +1239,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       title: event.title,
       status: event.status,
       organizer: event.organizer,
-      serviceFeePaid: event.serviceFeePaymentStatus,
+      serviceFeePaid: event.serviceFeePaymentStatus
     });
 
     res.status(201).json({
@@ -1265,20 +1258,13 @@ const completeDraftEventCreation = async (req, res, next) => {
     });
   } catch (error) {
     console.error("💥 Error completing draft event:", error);
-
+    
     // More detailed error logging
-    if (error.name === "ValidationError") {
-      console.error("Validation errors:", error.errors);
-      return next(
-        new ErrorResponse(
-          `Event validation failed: ${Object.values(error.errors)
-            .map((err) => err.message)
-            .join(", ")}`,
-          400
-        )
-      );
+    if (error.name === 'ValidationError') {
+      console.error('Validation errors:', error.errors);
+      return next(new ErrorResponse(`Event validation failed: ${Object.values(error.errors).map(err => err.message).join(', ')}`, 400));
     }
-
+    
     next(error);
   }
 };
