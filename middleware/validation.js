@@ -234,15 +234,59 @@ const validateEventCreation = (req, res, next) => {
       hasPaidTickets = priceNum > 0;
     }
 
-    // CRITICAL FIX: Validate terms acceptance for paid events
+    // CRITICAL FIX: Validate and SET terms acceptance for paid events
     if (hasPaidTickets) {
-      const hasAcceptedTerms =
-        termsAccepted === true ||
-        termsAccepted === "true" ||
-        (agreement && JSON.parse(agreement).acceptedTerms === true);
+      // Check if terms are accepted from any source
+      let hasAcceptedTerms = false;
+
+      if (termsAccepted === true || termsAccepted === "true") {
+        hasAcceptedTerms = true;
+      } else if (agreement) {
+        try {
+          const parsedAgreement =
+            typeof agreement === "string" ? JSON.parse(agreement) : agreement;
+          if (parsedAgreement.acceptedTerms === true) {
+            hasAcceptedTerms = true;
+          }
+        } catch (e) {
+          // Invalid agreement format - continue with hasAcceptedTerms = false
+        }
+      }
 
       if (!hasAcceptedTerms) {
         errors.push("Terms must be accepted for paid events");
+      } else {
+        // IMPORTANT: Properly set the agreement object in req.body for the model
+        if (!req.body.agreement || typeof req.body.agreement === "string") {
+          try {
+            req.body.agreement =
+              typeof req.body.agreement === "string"
+                ? JSON.parse(req.body.agreement)
+                : {};
+          } catch (e) {
+            req.body.agreement = {};
+          }
+        }
+
+        // Ensure acceptedTerms and acceptedAt are set
+        req.body.agreement.acceptedTerms = true;
+        if (!req.body.agreement.acceptedAt) {
+          req.body.agreement.acceptedAt = new Date();
+        }
+
+        // Set default values if not provided
+        if (!req.body.agreement.serviceFee) {
+          req.body.agreement.serviceFee = {
+            type: "percentage",
+            amount: 3,
+          };
+        }
+        if (!req.body.agreement.paymentTerms) {
+          req.body.agreement.paymentTerms = "post-event";
+        }
+        if (!req.body.agreement.agreementVersion) {
+          req.body.agreement.agreementVersion = "1.0";
+        }
       }
     }
 
@@ -309,7 +353,6 @@ const validateEventCreation = (req, res, next) => {
 
   next();
 };
-
 // Validate event update data - UPDATED TO MATCH FRONTEND FIELDS
 const validateEventUpdate = (req, res, next) => {
   const errors = [];

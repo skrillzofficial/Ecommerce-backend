@@ -1145,9 +1145,9 @@ eventSchema.pre("save", function (next) {
     }
   }
 
-  // Payment agreement validation - CRITICAL FIX
+  // Payment agreement validation - SIMPLIFIED VERSION
   if (this.status === "published") {
-    // Determine if event has paid tickets by checking actual fields
+    // Determine if event has paid tickets
     let hasPaidTickets = false;
 
     if (this.ticketTypes && this.ticketTypes.length > 0) {
@@ -1158,30 +1158,20 @@ eventSchema.pre("save", function (next) {
 
     // Check terms acceptance for paid events
     if (hasPaidTickets) {
-      // Check if terms are already accepted in agreement
-      const termsAccepted =
-        this.agreement?.acceptedTerms === true ||
-        this.termsAccepted === true ||
-        this.termsAccepted === "true";
-
-      if (!termsAccepted) {
+      // The validation middleware should have already set this
+      // This is just a safety check
+      if (!this.agreement?.acceptedTerms) {
         return next(new Error("Terms must be accepted for paid events"));
       }
 
-      // Ensure agreement object is properly set
-      if (!this.agreement) {
-        this.agreement = {};
-      }
-
-      // Set accepted terms in agreement object
-      this.agreement.acceptedTerms = true;
+      // Ensure acceptedAt is set if not already
       if (!this.agreement.acceptedAt) {
         this.agreement.acceptedAt = new Date();
       }
     }
   }
 
-  // NEW: Initialize approval settings for free tickets
+  // Initialize approval settings for free tickets
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     this.ticketTypes.forEach((ticketType) => {
       // Set default approval requirement for free tickets
@@ -1201,7 +1191,6 @@ eventSchema.pre("save", function (next) {
 
   next();
 });
-
 // ==================== INSTANCE METHODS ====================
 
 eventSchema.methods.regenerateSlug = async function () {
