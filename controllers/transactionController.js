@@ -1092,8 +1092,12 @@ const completeDraftEventCreation = async (req, res, next) => {
       );
     }
 
-    // Check if user owns this transaction
-    if (transaction.userId.toString() !== req.user.userId) {
+    // ✅ IMPROVED AUTHORIZATION CHECK
+    // Check if user owns this transaction OR is a superadmin
+    if (
+      transaction.userId.toString() !== req.user.userId &&
+      req.user.role !== "superadmin"
+    ) {
       return next(
         new ErrorResponse("Not authorized to complete this event", 403)
       );
@@ -1119,20 +1123,34 @@ const completeDraftEventCreation = async (req, res, next) => {
     const isDraft = transaction.metadata?.isDraft;
     const draftEventId = transaction.metadata?.draftEventId;
 
-    if (!isDraft || !draftEventId) {
+    if (!isDraft) {
       return next(new ErrorResponse("Not a draft event transaction", 400));
     }
 
     console.log("📝 Creating event from draft:", {
       draftEventId,
       hasEventData: !!eventData,
+      transactionUserId: transaction.userId.toString(),
+      currentUserId: req.user.userId,
     });
+
+    // ✅ ADDITIONAL VALIDATION: Ensure the current user is authorized to create events
+    // Verify the user exists and can create events
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    // For organizers, ensure they can create events
+    if (user.role !== "organizer" && user.role !== "superadmin") {
+      return next(new ErrorResponse("Not authorized to create events", 403));
+    }
 
     // Create the actual event
     const event = await Event.create({
       // Use provided event data or metadata from transaction
       ...(eventData || transaction.metadata?.eventData),
-      organizer: req.user.userId,
+      organizer: req.user.userId, // Ensure the organizer is set to current user
       status: "published",
       isActive: true,
       serviceFeePaymentStatus: "paid",
@@ -1150,6 +1168,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       eventId: event._id,
       title: event.title,
       status: event.status,
+      organizer: event.organizer,
     });
 
     res.status(201).json({
@@ -1163,6 +1182,12 @@ const completeDraftEventCreation = async (req, res, next) => {
     });
   } catch (error) {
     console.error("💥 Error completing draft event:", error);
+
+    // More detailed error logging
+    if (error.name === "ValidationError") {
+      console.error("Validation errors:", error.errors);
+    }
+
     next(error);
   }
 };
