@@ -96,8 +96,7 @@ const VALID_STATES = [
   "Zamfara",
 ];
 
-// Validate event creation data 
-// Validate event creation data - COMPLETELY REWRITTEN
+
 // Validate event creation data - TERMS REQUIRED FOR ALL EVENTS
 const validateEventCreation = (req, res, next) => {
   // Use frontend field names
@@ -245,7 +244,7 @@ const validateEventCreation = (req, res, next) => {
           amount: 5 
         },
         estimatedAttendance: agreementData.estimatedAttendance,
-        paymentTerms: agreementData.paymentTerms || "post-event",
+        paymentTerms: agreementData.paymentTerms || "upfront",
         agreementVersion: agreementData.agreementVersion || "1.0",
         termsUrl: agreementData.termsUrl
       };

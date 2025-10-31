@@ -90,15 +90,13 @@ const processTicketTypeApproval = (ticketType) => {
   return ticketType;
 };
 
-// @desc    Create new event
+// @desc    Create new event with payment flow
 // @route   POST /api/v1/events
 // @access  Private (Organizer only)
 const createEvent = async (req, res, next) => {
   try {
     console.log('=== EVENT CREATION STARTED ===');
     console.log('Request body:', JSON.stringify(req.body, null, 2));
-    console.log('Files:', req.files);
-    console.log('User:', req.user.userId);
 
     // Process form data
     const processedBody = processFormDataArrays(req.body);
@@ -127,16 +125,14 @@ const createEvent = async (req, res, next) => {
       price,
       capacity,
       ticketTypes,
-      agreement, // REQUIRED FOR ALL EVENTS
-      status = "published",
+      agreement,
+      status = "draft",
     } = parsedBody;
-
-    console.log('✅ Processed agreement object:', agreement);
 
     // Validate required fields
     const requiredFields = [
       "title",
-      "description",
+      "description", 
       "category",
       "startDate",
       "time",
@@ -147,11 +143,6 @@ const createEvent = async (req, res, next) => {
       requiredFields.push("venue", "address", "city", "state");
     }
 
-    // CRITICAL: Check that agreement exists and terms are accepted
-    if (!agreement || !agreement.acceptedTerms) {
-      return next(new ErrorResponse("Terms must be accepted for all events", 400));
-    }
-
     // Check required fields
     for (const field of requiredFields) {
       if (!parsedBody[field]) {
@@ -160,12 +151,7 @@ const createEvent = async (req, res, next) => {
     }
 
     if (eventType === "virtual" && !virtualEventLink) {
-      return next(
-        new ErrorResponse(
-          "Virtual event link is required for virtual events",
-          400
-        )
-      );
+      return next(new ErrorResponse("Virtual event link is required for virtual events", 400));
     }
 
     // Validate organizer role
@@ -189,21 +175,20 @@ const createEvent = async (req, res, next) => {
       if (imageFiles.length > 3) {
         return next(new ErrorResponse("Maximum 3 images allowed", 400));
       }
-
       uploadedImages = await uploadImages(imageFiles);
     }
 
-    // Prepare dates - store in both date and startDate for compatibility
+    // Prepare dates
     const eventDate = new Date(startDate);
     const eventEndDate = endDate ? new Date(endDate) : eventDate;
 
-    // Build event data - AGREEMENT IS REQUIRED FOR ALL EVENTS
+    // Build event data
     const eventData = {
       title,
       description,
       category,
-      date: eventDate, // For backwards compatibility
-      startDate: eventDate, // For new code
+      date: eventDate,
+      startDate: eventDate,
       endDate: eventEndDate,
       time,
       endTime,
@@ -217,20 +202,22 @@ const createEvent = async (req, res, next) => {
         companyName: organizer.organizerInfo?.companyName || "",
       },
       images: uploadedImages,
-      status,
+      status: "draft", // Always start as draft until payment is processed
       isActive: true,
       venue,
       address,
       state,
       city,
-      // CRITICAL: Include agreement for ALL events
-      agreement: {
-        ...agreement,
-        acceptedAt: new Date(agreement.acceptedAt || new Date()),
-      }
     };
 
-    console.log('✅ Adding agreement to ALL events:', eventData.agreement);
+    // Handle agreement with upfront payment for free events
+    if (agreement && agreement.acceptedTerms) {
+      eventData.agreement = {
+        ...agreement,
+        paymentTerms: "upfront", // Force upfront payment for service fees
+        acceptedAt: new Date(agreement.acceptedAt || new Date()),
+      };
+    }
 
     // Handle ticket types or legacy pricing
     let parsedTicketTypes = ticketTypes;
@@ -252,7 +239,8 @@ const createEvent = async (req, res, next) => {
         benefits: ticket.benefits || [],
         accessType: ticket.accessType || (eventType === "hybrid" ? "both" : "physical"),
         isFree: safeParseNumber(ticket.price, 0) === 0,
-        requiresApproval: ticket.requiresApproval !== undefined ? ticket.requiresApproval : safeParseNumber(ticket.price, 0) === 0,
+        requiresApproval: ticket.requiresApproval !== undefined ? 
+          ticket.requiresApproval : safeParseNumber(ticket.price, 0) === 0,
       }));
 
       // Set legacy fields for compatibility
@@ -266,36 +254,68 @@ const createEvent = async (req, res, next) => {
       eventData.availableTickets = safeParseNumber(capacity, 1);
     }
 
-    console.log('✅ Final event data before creation:', JSON.stringify({
-      title: eventData.title,
-      hasAgreement: !!eventData.agreement,
-      agreement: eventData.agreement,
-      price: eventData.price,
-      hasTicketTypes: !!(eventData.ticketTypes && eventData.ticketTypes.length > 0)
-    }, null, 2));
-
-    // Create event
+    // Create event as draft
     const event = await Event.create(eventData);
+    console.log('✅ Event created as draft:', event._id);
 
-    console.log('✅ Event created successfully:', event._id);
+    // Check if this is a free event requiring service fee payment
+    if (event.isFreeEvent && event.requiresServiceFeePayment) {
+      console.log('💰 Free event requires service fee payment');
+      
+      try {
+        // Initialize service fee payment
+        const paymentData = await event.initializeServiceFeePayment(
+          organizer.email,
+          {
+            firstName: organizer.firstName,
+            lastName: organizer.lastName,
+            phone: organizer.phone
+          }
+        );
 
-    // Send notification
-    try {
-      await NotificationService.createSystemNotification(req.user.userId, {
-        title: "🎉 Event Created Successfully!",
-        message: `Your event "${event.title}" has been created and is now live.`,
-        priority: "medium",
-        data: { eventId: event._id, eventTitle: event.title },
-      });
-    } catch (notificationError) {
-      console.error("Notification error:", notificationError);
+        // Return payment initialization data to frontend
+        res.status(201).json({
+          success: true,
+          message: "Event created successfully. Payment required to publish.",
+          event,
+          requiresPayment: true,
+          paymentData: {
+            eventId: event._id,
+            amount: paymentData.amount,
+            email: paymentData.email,
+            metadata: paymentData.metadata
+          }
+        });
+        return;
+
+      } catch (paymentError) {
+        console.error('❌ Payment initialization failed:', paymentError);
+        
+        res.status(201).json({
+          success: true,
+          message: "Event created as draft. Payment initialization failed.",
+          event,
+          requiresPayment: true,
+          paymentError: paymentError.message
+        });
+        return;
+      }
+    } else if (!event.isFreeEvent) {
+      // Paid event - publish immediately (no service fee required)
+      console.log('🎉 Paid event - publishing immediately');
+      event.status = "published";
+      event.publishedAt = new Date();
+      await event.save();
     }
 
+    // For events that don't require payment
     res.status(201).json({
       success: true,
       message: "Event created successfully",
       event,
+      requiresPayment: false
     });
+
   } catch (error) {
     console.error('❌ Event creation error:', error);
     next(error);
