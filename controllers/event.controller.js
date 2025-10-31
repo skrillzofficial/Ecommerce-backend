@@ -95,6 +95,11 @@ const processTicketTypeApproval = (ticketType) => {
 // @access  Private (Organizer only)
 const createEvent = async (req, res, next) => {
   try {
+    console.log('=== EVENT CREATION STARTED ===');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Files:', req.files);
+    console.log('User:', req.user.userId);
+
     // Process form data
     const processedBody = processFormDataArrays(req.body);
     const parsedBody = parseJSONFields(processedBody, [
@@ -108,7 +113,6 @@ const createEvent = async (req, res, next) => {
     const {
       title,
       description,
-      longDescription,
       category,
       startDate,
       endDate,
@@ -120,18 +124,14 @@ const createEvent = async (req, res, next) => {
       city,
       eventType = "physical",
       virtualEventLink,
-      tags,
-      includes,
-      requirements,
-      cancellationPolicy,
-      refundPolicy,
-      ticketTypes,
       price,
       capacity,
-      ticketDescription,
-      ticketBenefits,
-      attendanceApproval,
+      ticketTypes,
+      agreement, // REQUIRED FOR ALL EVENTS
+      status = "published",
     } = parsedBody;
+
+    console.log('✅ Processed agreement object:', agreement);
 
     // Validate required fields
     const requiredFields = [
@@ -144,7 +144,19 @@ const createEvent = async (req, res, next) => {
     ];
 
     if (eventType !== "virtual") {
-      requiredFields.push("venue", "address", "city");
+      requiredFields.push("venue", "address", "city", "state");
+    }
+
+    // CRITICAL: Check that agreement exists and terms are accepted
+    if (!agreement || !agreement.acceptedTerms) {
+      return next(new ErrorResponse("Terms must be accepted for all events", 400));
+    }
+
+    // Check required fields
+    for (const field of requiredFields) {
+      if (!parsedBody[field]) {
+        return next(new ErrorResponse(`${field} is required`, 400));
+      }
     }
 
     if (eventType === "virtual" && !virtualEventLink) {
@@ -156,26 +168,9 @@ const createEvent = async (req, res, next) => {
       );
     }
 
-    validateRequiredFields(parsedBody, requiredFields);
-    validateOrganizerRole(req.user.role);
-
-    // Validate ticket types or legacy pricing
-    let parsedTicketTypes = ticketTypes;
-    if (typeof ticketTypes === "string") {
-      try {
-        parsedTicketTypes = JSON.parse(ticketTypes);
-      } catch (e) {
-        parsedTicketTypes = null;
-      }
-    }
-
-    if (parsedTicketTypes && Array.isArray(parsedTicketTypes)) {
-      const validation = validateTicketTypes(parsedTicketTypes);
-      if (!validation.isValid) {
-        return next(new ErrorResponse(validation.error, 400));
-      }
-    } else if (price === undefined || !capacity) {
-      return next(new ErrorResponse("Please provide pricing information", 400));
+    // Validate organizer role
+    if (req.user.role !== "organizer" && req.user.role !== "superadmin") {
+      return next(new ErrorResponse("Only organizers can create events", 403));
     }
 
     // Get organizer info
@@ -198,18 +193,17 @@ const createEvent = async (req, res, next) => {
       uploadedImages = await uploadImages(imageFiles);
     }
 
-    // ✅ FLEXIBLE: Store in both date and startDate for compatibility
+    // Prepare dates - store in both date and startDate for compatibility
     const eventDate = new Date(startDate);
     const eventEndDate = endDate ? new Date(endDate) : eventDate;
 
-    // Prepare event data
+    // Build event data - AGREEMENT IS REQUIRED FOR ALL EVENTS
     const eventData = {
       title,
       description,
-      longDescription: longDescription || description,
       category,
-      date: eventDate, // ✅ For backwards compatibility
-      startDate: eventDate, // ✅ For new code
+      date: eventDate, // For backwards compatibility
+      startDate: eventDate, // For new code
       endDate: eventEndDate,
       time,
       endTime,
@@ -217,109 +211,75 @@ const createEvent = async (req, res, next) => {
       virtualEventLink,
       organizer: req.user.userId,
       organizerInfo: {
-        name: organizer.fullName,
+        name: organizer.fullName || `${organizer.firstName} ${organizer.lastName}`,
         email: organizer.email,
         phone: organizer.phone,
         companyName: organizer.organizerInfo?.companyName || "",
       },
       images: uploadedImages,
-      tags: safeParseArray(tags),
-      includes: safeParseArray(includes),
-      requirements: safeParseArray(requirements),
-      cancellationPolicy,
-      refundPolicy: refundPolicy || "partial",
-      status: "published",
+      status,
       isActive: true,
+      venue,
+      address,
+      state,
+      city,
+      // CRITICAL: Include agreement for ALL events
+      agreement: {
+        ...agreement,
+        acceptedAt: new Date(agreement.acceptedAt || new Date()),
+      }
     };
 
-    // Add location for physical/hybrid events
-    if (eventType !== "virtual") {
-      eventData.venue = venue;
-      eventData.address = address;
-      eventData.state = state;
-      eventData.city = city;
-    }
+    console.log('✅ Adding agreement to ALL events:', eventData.agreement);
 
     // Handle ticket types or legacy pricing
-    if (parsedTicketTypes && Array.isArray(parsedTicketTypes)) {
-      eventData.ticketTypes = parsedTicketTypes.map((ticket) => {
-        const processedTicket = {
-          name: ticket.name,
-          price: safeParseNumber(ticket.price, 0),
-          capacity: safeParseNumber(ticket.capacity, 1),
-          availableTickets: safeParseNumber(ticket.capacity, 1),
-          description: ticket.description || "",
-          benefits: ticket.benefits || [],
-          accessType:
-            ticket.accessType || (eventType === "hybrid" ? "both" : "physical"),
-          isFree: safeParseNumber(ticket.price, 0) === 0,
-        };
-
-        // NEW: Handle approval settings for ticket types
-        if (ticket.requiresApproval !== undefined) {
-          processedTicket.requiresApproval = ticket.requiresApproval;
-        }
-
-        if (
-          ticket.approvalQuestions &&
-          Array.isArray(ticket.approvalQuestions)
-        ) {
-          processedTicket.approvalQuestions = ticket.approvalQuestions.map(
-            (q) => ({
-              question: q.question,
-              required: q.required || false,
-            })
-          );
-        }
-
-        return processTicketTypeApproval(processedTicket);
-      });
-
-      eventData.price = Math.min(
-        ...parsedTicketTypes.map((t) => safeParseNumber(t.price, 0))
-      );
-      eventData.capacity = parsedTicketTypes.reduce(
-        (sum, t) => sum + safeParseNumber(t.capacity, 1),
-        0
-      );
-      eventData.availableTickets = eventData.capacity;
-
-      // NEW: Enable global approval if any ticket type requires approval
-      const hasApprovalRequired = eventData.ticketTypes.some(
-        (ticket) => ticket.requiresApproval
-      );
-      if (hasApprovalRequired) {
-        eventData.attendanceApproval = {
-          enabled: true,
-          autoApprove: attendanceApproval?.autoApprove || false,
-          approvalDeadline: attendanceApproval?.approvalDeadline
-            ? new Date(attendanceApproval.approvalDeadline)
-            : undefined,
-          instructions: attendanceApproval?.instructions || "",
-        };
+    let parsedTicketTypes = ticketTypes;
+    if (typeof ticketTypes === "string") {
+      try {
+        parsedTicketTypes = JSON.parse(ticketTypes);
+      } catch (e) {
+        parsedTicketTypes = null;
       }
+    }
+
+    if (parsedTicketTypes && Array.isArray(parsedTicketTypes)) {
+      eventData.ticketTypes = parsedTicketTypes.map((ticket) => ({
+        name: ticket.name,
+        price: safeParseNumber(ticket.price, 0),
+        capacity: safeParseNumber(ticket.capacity, 1),
+        availableTickets: safeParseNumber(ticket.capacity, 1),
+        description: ticket.description || "",
+        benefits: ticket.benefits || [],
+        accessType: ticket.accessType || (eventType === "hybrid" ? "both" : "physical"),
+        isFree: safeParseNumber(ticket.price, 0) === 0,
+        requiresApproval: ticket.requiresApproval !== undefined ? ticket.requiresApproval : safeParseNumber(ticket.price, 0) === 0,
+      }));
+
+      // Set legacy fields for compatibility
+      eventData.price = Math.min(...parsedTicketTypes.map(t => safeParseNumber(t.price, 0)));
+      eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + safeParseNumber(t.capacity, 1), 0);
+      eventData.availableTickets = eventData.capacity;
     } else {
+      // Legacy pricing
       eventData.price = safeParseNumber(price, 0);
       eventData.capacity = safeParseNumber(capacity, 1);
       eventData.availableTickets = safeParseNumber(capacity, 1);
-      eventData.ticketDescription = ticketDescription;
-      eventData.ticketBenefits = safeParseArray(ticketBenefits);
-
-      // NEW: Handle approval for legacy free tickets
-      if (eventData.price === 0) {
-        eventData.attendanceApproval = {
-          enabled: true,
-          autoApprove: attendanceApproval?.autoApprove || false,
-          approvalDeadline: attendanceApproval?.approvalDeadline
-            ? new Date(attendanceApproval.approvalDeadline)
-            : undefined,
-          instructions: attendanceApproval?.instructions || "",
-        };
-      }
     }
 
+    console.log('✅ Final event data before creation:', JSON.stringify({
+      title: eventData.title,
+      hasAgreement: !!eventData.agreement,
+      agreement: eventData.agreement,
+      price: eventData.price,
+      hasTicketTypes: !!(eventData.ticketTypes && eventData.ticketTypes.length > 0)
+    }, null, 2));
+
+    // Create event
     const event = await Event.create(eventData);
 
+    console.log('✅ Event created successfully:', event._id);
+
+    // Send notification
     try {
       await NotificationService.createSystemNotification(req.user.userId, {
         title: "🎉 Event Created Successfully!",
@@ -337,6 +297,7 @@ const createEvent = async (req, res, next) => {
       event,
     });
   } catch (error) {
+    console.error('❌ Event creation error:', error);
     next(error);
   }
 };

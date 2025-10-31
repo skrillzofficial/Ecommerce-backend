@@ -295,7 +295,7 @@ const eventSchema = new mongoose.Schema(
         requiresApproval: {
           type: Boolean,
           default: function () {
-            return this.price === 0; // Default to requiring approval for free tickets
+            return this.price === 0;
           },
         },
         approvalQuestions: [
@@ -377,6 +377,7 @@ const eventSchema = new mongoose.Schema(
       publicId: String,
       alt: String,
     },
+    
     // Shareable Banner Feature
     shareableBanner: {
       enabled: {
@@ -447,6 +448,7 @@ const eventSchema = new mongoose.Schema(
         maxlength: [500, "Instructions cannot exceed 500 characters"],
       },
     },
+    
     // Community/Groups Feature
     community: {
       whatsapp: {
@@ -460,9 +462,7 @@ const eventSchema = new mongoose.Schema(
           validate: {
             validator: function (v) {
               if (!v) return true;
-              return /^https?:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//.test(
-                v
-              );
+              return /^https?:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//.test(v);
             },
             message: "Invalid WhatsApp link format",
           },
@@ -504,9 +504,7 @@ const eventSchema = new mongoose.Schema(
           validate: {
             validator: function (v) {
               if (!v) return true;
-              return /^https?:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//.test(
-                v
-              );
+              return /^https?:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//.test(v);
             },
             message: "Invalid Discord link format",
           },
@@ -543,7 +541,7 @@ const eventSchema = new mongoose.Schema(
       default: false,
     },
 
-    // Payment Agreement
+    // Payment Agreement - REQUIRED FOR ALL EVENTS
     agreement: {
       acceptedTerms: {
         type: Boolean,
@@ -586,10 +584,10 @@ const eventSchema = new mongoose.Schema(
       },
       autoApprove: {
         type: Boolean,
-        default: false, // If true, automatically approve after questions are answered
+        default: false,
       },
       approvalDeadline: {
-        type: Date, // Deadline for organizer to approve/reject attendees
+        type: Date,
       },
       instructions: {
         type: String,
@@ -664,6 +662,7 @@ const eventSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    
     // NEW: Approval statistics
     pendingApprovals: {
       type: Number,
@@ -754,8 +753,8 @@ eventSchema.index({ price: 1 });
 eventSchema.index({ createdAt: -1 });
 eventSchema.index({ isFeatured: 1, status: 1 });
 eventSchema.index({ communityEnabled: 1, status: 1 });
-eventSchema.index({ socialBannerEnabled: 1 });
 eventSchema.index({ "agreement.acceptedTerms": 1 });
+
 // NEW: Approval indexes
 eventSchema.index({ "attendanceApproval.enabled": 1 });
 eventSchema.index({ pendingApprovals: -1 });
@@ -881,7 +880,7 @@ eventSchema.virtual("activeCommunityLinks").get(function () {
 });
 
 eventSchema.virtual("hasSocialBanner").get(function () {
-  return this.socialBannerEnabled && this.socialBanner?.url;
+  return this.socialBanner?.url;
 });
 
 eventSchema.virtual("isPaidEvent").get(function () {
@@ -1145,30 +1144,24 @@ eventSchema.pre("save", function (next) {
     }
   }
 
-  // Payment agreement validation - SIMPLIFIED VERSION
+  // TERMS ACCEPTANCE VALIDATION - REQUIRED FOR ALL PUBLISHED EVENTS
   if (this.status === "published") {
-    // Determine if event has paid tickets
-    let hasPaidTickets = false;
+    console.log("🔍 Model Pre-save Check for ALL events:");
+    console.log(" - Agreement:", this.agreement);
+    console.log(" - Accepted terms:", this.agreement?.acceptedTerms);
 
-    if (this.ticketTypes && this.ticketTypes.length > 0) {
-      hasPaidTickets = this.ticketTypes.some((tt) => tt.price > 0);
-    } else if (this.price > 0) {
-      hasPaidTickets = true;
+    // Check terms acceptance for ALL published events (both free and paid)
+    if (!this.agreement?.acceptedTerms) {
+      console.log("❌ Model validation failing: Terms not accepted for event");
+      return next(new Error("Terms must be accepted for all events"));
     }
 
-    // Check terms acceptance for paid events
-    if (hasPaidTickets) {
-      // The validation middleware should have already set this
-      // This is just a safety check
-      if (!this.agreement?.acceptedTerms) {
-        return next(new Error("Terms must be accepted for paid events"));
-      }
-
-      // Ensure acceptedAt is set if not already
-      if (!this.agreement.acceptedAt) {
-        this.agreement.acceptedAt = new Date();
-      }
+    // Ensure acceptedAt is set if not already
+    if (!this.agreement.acceptedAt) {
+      this.agreement.acceptedAt = new Date();
     }
+
+    console.log("✅ Terms accepted for event");
   }
 
   // Initialize approval settings for free tickets
@@ -1191,6 +1184,7 @@ eventSchema.pre("save", function (next) {
 
   next();
 });
+
 // ==================== INSTANCE METHODS ====================
 
 eventSchema.methods.regenerateSlug = async function () {
@@ -1275,7 +1269,6 @@ eventSchema.methods.setSocialBanner = async function (bannerData) {
     publicId: bannerData.publicId,
     alt: bannerData.alt || this.title,
   };
-  this.socialBannerEnabled = true;
 
   await this.save();
   return this.socialBanner;

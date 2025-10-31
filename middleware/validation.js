@@ -96,26 +96,29 @@ const VALID_STATES = [
   "Zamfara",
 ];
 
-// Validate event creation data - UPDATED TO MATCH FRONTEND FIELDS
+// Validate event creation data 
+// Validate event creation data - COMPLETELY REWRITTEN
+// Validate event creation data - TERMS REQUIRED FOR ALL EVENTS
 const validateEventCreation = (req, res, next) => {
-  // CRITICAL FIX: Use frontend field names
+  // Use frontend field names
   const {
     title,
     description,
     category,
-    startDate, // Frontend sends startDate, not date
-    eventDate, // Also accept eventDate if sent
+    startDate,
+    eventDate,
     time,
     endTime,
     venue,
     address,
-    state, // Frontend sends state for state
-    city, // Frontend sends city for city
+    state,
+    city,
     price,
     capacity,
     status = "draft",
-    termsAccepted, // Check for terms acceptance
-    agreement, // Check agreement data
+    termsAccepted, // Required for ALL events
+    agreement, // Required for ALL events
+    ticketTypes,
   } = req.body;
 
   const errors = [];
@@ -129,7 +132,7 @@ const validateEventCreation = (req, res, next) => {
     errors.push("Title must not exceed 200 characters");
   }
 
-  // CRITICAL FIX: Determine which date field to use
+  // Determine which date field to use
   const effectiveDate = startDate || eventDate;
 
   // Conditional validation for published events
@@ -149,7 +152,6 @@ const validateEventCreation = (req, res, next) => {
       );
     }
 
-    // CRITICAL FIX: Use effectiveDate instead of date
     if (!effectiveDate) {
       errors.push("Event date is required to publish");
     } else {
@@ -200,93 +202,69 @@ const validateEventCreation = (req, res, next) => {
       errors.push("Address must not exceed 500 characters");
     }
 
-    // CRITICAL FIX: Use state field for state validation, not city
     if (!state) {
       errors.push("State is required to publish");
     } else if (!VALID_STATES.includes(state)) {
       errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
     }
 
-    // CRITICAL FIX: City is also required but not validated against states
     if (!city || city.trim().length < 2) {
       errors.push("City is required to publish");
     }
 
+    // ========== CRITICAL: TERMS ACCEPTANCE REQUIRED FOR ALL EVENTS ==========
+    let hasAcceptedTerms = false;
+    let agreementData = {};
+
+    // Check multiple sources for terms acceptance
+    if (termsAccepted === true || termsAccepted === "true") {
+      hasAcceptedTerms = true;
+    } else if (agreement) {
+      try {
+        const parsedAgreement = typeof agreement === 'string' 
+          ? JSON.parse(agreement) 
+          : agreement;
+        if (parsedAgreement.acceptedTerms === true) {
+          hasAcceptedTerms = true;
+          agreementData = parsedAgreement;
+        }
+      } catch (e) {
+        console.log('Failed to parse agreement:', e);
+      }
+    }
+
+    if (!hasAcceptedTerms) {
+      errors.push("Terms must be accepted for all events");
+    } else {
+      // PROPERLY STRUCTURE THE AGREEMENT OBJECT FOR DATABASE
+      req.body.agreement = {
+        acceptedTerms: true,
+        acceptedAt: new Date().toISOString(),
+        serviceFee: agreementData.serviceFee || { 
+          type: "percentage", 
+          amount: 5 
+        },
+        estimatedAttendance: agreementData.estimatedAttendance,
+        paymentTerms: agreementData.paymentTerms || "post-event",
+        agreementVersion: agreementData.agreementVersion || "1.0",
+        termsUrl: agreementData.termsUrl
+      };
+
+      console.log('✅ Terms accepted - Agreement object:', req.body.agreement);
+    }
+
     // Check if using ticket types
-    const ticketTypes = req.body.ticketTypes;
     let hasTicketTypes = false;
-    let hasPaidTickets = false;
+    let parsedTicketTypes = null;
 
     if (ticketTypes) {
       try {
-        const parsed =
-          typeof ticketTypes === "string"
-            ? JSON.parse(ticketTypes)
-            : ticketTypes;
-        hasTicketTypes = Array.isArray(parsed) && parsed.length > 0;
-        hasPaidTickets = parsed.some((ticket) => ticket.price > 0);
-      } catch (e) {}
-    }
-
-    // Check legacy pricing for paid tickets
-    if (!hasTicketTypes) {
-      const priceNum = safeParseNumber(price, 0);
-      hasPaidTickets = priceNum > 0;
-    }
-
-    // CRITICAL FIX: Validate and SET terms acceptance for paid events
-    if (hasPaidTickets) {
-      // Check if terms are accepted from any source
-      let hasAcceptedTerms = false;
-
-      if (termsAccepted === true || termsAccepted === "true") {
-        hasAcceptedTerms = true;
-      } else if (agreement) {
-        try {
-          const parsedAgreement =
-            typeof agreement === "string" ? JSON.parse(agreement) : agreement;
-          if (parsedAgreement.acceptedTerms === true) {
-            hasAcceptedTerms = true;
-          }
-        } catch (e) {
-          // Invalid agreement format - continue with hasAcceptedTerms = false
-        }
-      }
-
-      if (!hasAcceptedTerms) {
-        errors.push("Terms must be accepted for paid events");
-      } else {
-        // IMPORTANT: Properly set the agreement object in req.body for the model
-        if (!req.body.agreement || typeof req.body.agreement === "string") {
-          try {
-            req.body.agreement =
-              typeof req.body.agreement === "string"
-                ? JSON.parse(req.body.agreement)
-                : {};
-          } catch (e) {
-            req.body.agreement = {};
-          }
-        }
-
-        // Ensure acceptedTerms and acceptedAt are set
-        req.body.agreement.acceptedTerms = true;
-        if (!req.body.agreement.acceptedAt) {
-          req.body.agreement.acceptedAt = new Date();
-        }
-
-        // Set default values if not provided
-        if (!req.body.agreement.serviceFee) {
-          req.body.agreement.serviceFee = {
-            type: "percentage",
-            amount: 3,
-          };
-        }
-        if (!req.body.agreement.paymentTerms) {
-          req.body.agreement.paymentTerms = "post-event";
-        }
-        if (!req.body.agreement.agreementVersion) {
-          req.body.agreement.agreementVersion = "1.0";
-        }
+        parsedTicketTypes = typeof ticketTypes === "string"
+          ? JSON.parse(ticketTypes)
+          : ticketTypes;
+        hasTicketTypes = Array.isArray(parsedTicketTypes) && parsedTicketTypes.length > 0;
+      } catch (e) {
+        errors.push("Invalid ticket types format");
       }
     }
 
@@ -318,7 +296,6 @@ const validateEventCreation = (req, res, next) => {
       errors.push(`Category must be one of: ${VALID_CATEGORIES.join(", ")}`);
     }
 
-    // CRITICAL FIX: Validate state field for drafts
     if (state && !VALID_STATES.includes(state)) {
       errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
     }
@@ -347,10 +324,11 @@ const validateEventCreation = (req, res, next) => {
     return next(new ErrorResponse(errors.join(", "), 400));
   }
 
-  // CRITICAL FIX: Normalize field names for database
+  // Normalize field names for database
   req.body.date = effectiveDate; // Map to date field for database
-  req.body.city = state; // Map state to city field for database (if needed by existing code)
+  // DO NOT map state to city - keep them separate
 
+  console.log('✅ Validation passed - proceeding to event creation');
   next();
 };
 // Validate event update data - UPDATED TO MATCH FRONTEND FIELDS
