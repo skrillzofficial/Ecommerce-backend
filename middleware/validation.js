@@ -52,18 +52,21 @@ const VALID_STATES = [
   "Rivers", "Sokoto", "Taraba", "Yobe", "Zamfara"
 ];
 
-// Validate event creation data
+// Validate event creation data - UPDATED TO MATCH FRONTEND FIELDS
 const validateEventCreation = (req, res, next) => {
+  // CRITICAL FIX: Use frontend field names
   const {
     title,
     description,
     category,
-    date,
+    startDate,  // Frontend sends startDate, not date
+    eventDate,  // Also accept eventDate if sent
     time,
     endTime,
     venue,
     address,
-    city,
+    state,      // Frontend sends state for state
+    city,       // Frontend sends city for city
     price,
     capacity,
     status = "draft",
@@ -80,6 +83,9 @@ const validateEventCreation = (req, res, next) => {
     errors.push("Title must not exceed 200 characters");
   }
 
+  // CRITICAL FIX: Determine which date field to use
+  const effectiveDate = startDate || eventDate;
+
   // Conditional validation for published events
   if (isPublishing) {
     if (!description || description.trim().length < 50) {
@@ -93,18 +99,19 @@ const validateEventCreation = (req, res, next) => {
       errors.push(`Category is required to publish. Must be one of: ${VALID_CATEGORIES.join(", ")}`);
     }
 
-    if (!date) {
+    // CRITICAL FIX: Use effectiveDate instead of date
+    if (!effectiveDate) {
       errors.push("Event date is required to publish");
     } else {
-      const eventDate = new Date(date);
+      const eventDateObj = new Date(effectiveDate);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
-      if (isNaN(eventDate.getTime())) {
+      if (isNaN(eventDateObj.getTime())) {
         errors.push("Invalid date format");
       } else {
-        eventDate.setHours(0, 0, 0, 0);
-        if (eventDate < today) {
+        eventDateObj.setHours(0, 0, 0, 0);
+        if (eventDateObj < today) {
           errors.push("Event date must be in the future");
         }
       }
@@ -143,8 +150,16 @@ const validateEventCreation = (req, res, next) => {
       errors.push("Address must not exceed 500 characters");
     }
 
-    if (!city || !VALID_STATES.includes(city)) {
-      errors.push(`State is required to publish. Must be one of: ${VALID_STATES.join(", ")}`);
+    // CRITICAL FIX: Use state field for state validation, not city
+    if (!state) {
+      errors.push("State is required to publish");
+    } else if (!VALID_STATES.includes(state)) {
+      errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
+    }
+
+    // CRITICAL FIX: City is also required but not validated against states
+    if (!city || city.trim().length < 2) {
+      errors.push("City is required to publish");
     }
 
     // Check if using ticket types
@@ -184,12 +199,15 @@ const validateEventCreation = (req, res, next) => {
     if (category && !VALID_CATEGORIES.includes(category)) {
       errors.push(`Category must be one of: ${VALID_CATEGORIES.join(", ")}`);
     }
-    if (city && !VALID_STATES.includes(city)) {
+    
+    // CRITICAL FIX: Validate state field for drafts
+    if (state && !VALID_STATES.includes(state)) {
       errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
     }
-    if (date) {
-      const eventDate = new Date(date);
-      if (isNaN(eventDate.getTime())) errors.push("Invalid date format");
+    
+    if (effectiveDate) {
+      const eventDateObj = new Date(effectiveDate);
+      if (isNaN(eventDateObj.getTime())) errors.push("Invalid date format");
     }
     if (time && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
       errors.push("Invalid time format (HH:MM)");
@@ -211,18 +229,24 @@ const validateEventCreation = (req, res, next) => {
     return next(new ErrorResponse(errors.join(", "), 400));
   }
 
+  // CRITICAL FIX: Normalize field names for database
+  req.body.date = effectiveDate; // Map to date field for database
+  req.body.city = state; // Map state to city field for database (if needed by existing code)
+  
   next();
 };
 
-// Validate event update data
+// Validate event update data - UPDATED TO MATCH FRONTEND FIELDS
 const validateEventUpdate = (req, res, next) => {
   const errors = [];
 
   const title = getValue(req.body, 'title');
   const description = getValue(req.body, 'description');
   const category = getValue(req.body, 'category');
-  const city = getValue(req.body, 'city');
-  const date = getValue(req.body, 'date');
+  const state = getValue(req.body, 'state'); // Frontend field
+  const city = getValue(req.body, 'city');   // Frontend field
+  const startDate = getValue(req.body, 'startDate'); // Frontend field
+  const eventDate = getValue(req.body, 'eventDate'); // Alternative frontend field
   const time = getValue(req.body, 'time');
   const endTime = getValue(req.body, 'endTime');
   const price = getValue(req.body, 'price');
@@ -230,6 +254,9 @@ const validateEventUpdate = (req, res, next) => {
   const status = getValue(req.body, 'status');
 
   const isPublishing = status === 'published';
+
+  // CRITICAL FIX: Determine which date field to use
+  const effectiveDate = startDate || eventDate;
 
   if (title !== undefined) {
     if (title.trim().length < 5) errors.push("Title must be at least 5 characters long");
@@ -249,20 +276,21 @@ const validateEventUpdate = (req, res, next) => {
     errors.push(`Category must be one of: ${VALID_CATEGORIES.join(", ")}`);
   }
 
-  if (city !== undefined && !VALID_STATES.includes(city)) {
+  // CRITICAL FIX: Validate state field, not city for states
+  if (state !== undefined && !VALID_STATES.includes(state)) {
     errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
   }
 
-  if (date !== undefined) {
-    const eventDate = new Date(date);
+  if (effectiveDate !== undefined) {
+    const eventDateObj = new Date(effectiveDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
-    if (isNaN(eventDate.getTime())) {
+    if (isNaN(eventDateObj.getTime())) {
       errors.push("Invalid date format");
     } else if (status !== 'draft') {
-      eventDate.setHours(0, 0, 0, 0);
-      if (eventDate < today) errors.push("Event date must be in the future");
+      eventDateObj.setHours(0, 0, 0, 0);
+      if (eventDateObj < today) errors.push("Event date must be in the future");
     }
   }
 
@@ -295,6 +323,14 @@ const validateEventUpdate = (req, res, next) => {
 
   if (errors.length > 0) {
     return next(new ErrorResponse(errors.join(", "), 400));
+  }
+
+  // CRITICAL FIX: Normalize field names for database
+  if (effectiveDate !== undefined) {
+    req.body.date = effectiveDate;
+  }
+  if (state !== undefined) {
+    req.body.city = state; // Map state to city field for database compatibility
   }
 
   next();
