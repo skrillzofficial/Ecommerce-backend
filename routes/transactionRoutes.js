@@ -9,9 +9,10 @@ const {
   requestRefund,
   processRefund,
   getRevenueStats,
-  initializeServiceFeePayment, // ✅ MOVE THIS FROM BOOKING CONTROLLER
-  verifyServiceFeePayment, // ✅ MOVE THIS FROM BOOKING CONTROLLER
+  initializeServiceFeePayment, 
+  verifyServiceFeePayment, 
   paystackWebhook,
+  completeDraftEventCreation, 
 } = require("../controllers/transactionController");
 
 const { protect, authorize } = require("../middleware/auth");
@@ -34,6 +35,15 @@ router.get("/verify/:reference", verifyTransaction);
 // @route   POST /api/v1/transactions/verify-service-fee/:reference
 // @access  Public
 router.post("/verify-service-fee/:reference", verifyServiceFeePayment);
+
+
+// Complete draft event creation after service fee payment
+router.post(
+  "/:reference/complete-draft-event",
+  protect,
+  authorize("organizer", "superadmin"),
+  completeDraftEventCreation
+);
 
 // ============================================
 // PROTECTED USER ROUTES
