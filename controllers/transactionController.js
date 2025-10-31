@@ -1078,13 +1078,18 @@ const completeDraftEventCreation = async (req, res, next) => {
     const { eventData } = req.body;
 
     console.log("🎯 Completing draft event creation:", reference);
+    console.log("👤 Current user:", {
+      userId: req.user.userId,
+      role: req.user.role,
+      email: req.user.email,
+    });
 
-    // Find the service fee transaction
+    // Find the service fee transaction with detailed population
     const transaction = await Transaction.findOne({
       reference,
       type: "service_fee",
       status: "completed",
-    });
+    }).populate("userId", "firstName lastName email role");
 
     if (!transaction) {
       return next(
@@ -1092,14 +1097,41 @@ const completeDraftEventCreation = async (req, res, next) => {
       );
     }
 
-    // ✅ IMPROVED AUTHORIZATION CHECK
-    // Check if user owns this transaction OR is a superadmin
-    if (
-      transaction.userId.toString() !== req.user.userId &&
-      req.user.role !== "superadmin"
-    ) {
+    console.log("📊 Transaction details:", {
+      transactionId: transaction._id,
+      transactionUserId: transaction.userId?._id?.toString(),
+      transactionUserEmail: transaction.userId?.email,
+      transactionUserRole: transaction.userId?.role,
+      currentUserId: req.user.userId,
+      currentUserRole: req.user.role,
+      isDraft: transaction.metadata?.isDraft,
+      hasEventId: !!transaction.eventId,
+    });
+
+    // ✅ ENHANCED AUTHORIZATION CHECK
+    const isTransactionOwner =
+      transaction.userId?._id?.toString() === req.user.userId;
+    const isSuperAdmin = req.user.role === "superadmin";
+    const isOrganizer = req.user.role === "organizer";
+
+    console.log("🔐 Authorization check:", {
+      isTransactionOwner,
+      isSuperAdmin,
+      isOrganizer,
+      authorized: isTransactionOwner || isSuperAdmin,
+    });
+
+    if (!isTransactionOwner && !isSuperAdmin) {
+      console.log("❌ Authorization failed:", {
+        transactionOwner: transaction.userId?._id?.toString(),
+        currentUser: req.user.userId,
+        userRole: req.user.role,
+      });
       return next(
-        new ErrorResponse("Not authorized to complete this event", 403)
+        new ErrorResponse(
+          "Not authorized to complete this event. You must be the transaction owner or superadmin.",
+          403
+        )
       );
     }
 
@@ -1107,11 +1139,22 @@ const completeDraftEventCreation = async (req, res, next) => {
     if (transaction.eventId) {
       const existingEvent = await Event.findById(transaction.eventId);
       if (existingEvent) {
+        console.log("✅ Event already exists:", {
+          eventId: existingEvent._id,
+          title: existingEvent.title,
+          status: existingEvent.status,
+        });
+
         return res.status(200).json({
           success: true,
           message: "Event already created",
           data: {
-            transaction,
+            transaction: {
+              _id: transaction._id,
+              reference: transaction.reference,
+              amount: transaction.totalAmount,
+              status: transaction.status,
+            },
             event: existingEvent,
             isDraft: false,
           },
@@ -1130,38 +1173,72 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("📝 Creating event from draft:", {
       draftEventId,
       hasEventData: !!eventData,
-      transactionUserId: transaction.userId.toString(),
-      currentUserId: req.user.userId,
+      hasMetadataEventData: !!transaction.metadata?.eventData,
     });
 
-    // ✅ ADDITIONAL VALIDATION: Ensure the current user is authorized to create events
-    // Verify the user exists and can create events
+    // ✅ ADDITIONAL VALIDATION: Ensure the current user can create events
+    if (!isOrganizer && !isSuperAdmin) {
+      return next(new ErrorResponse("Only organizers can create events", 403));
+    }
+
+    // ✅ VERIFY USER EXISTS AND CAN CREATE EVENTS
     const user = await User.findById(req.user.userId);
     if (!user) {
       return next(new ErrorResponse("User not found", 404));
     }
 
-    // For organizers, ensure they can create events
-    if (user.role !== "organizer" && user.role !== "superadmin") {
-      return next(new ErrorResponse("Not authorized to create events", 403));
-    }
-
-    // Create the actual event
-    const event = await Event.create({
+    // Prepare event creation data
+    const finalEventData = {
       // Use provided event data or metadata from transaction
       ...(eventData || transaction.metadata?.eventData),
-      organizer: req.user.userId, // Ensure the organizer is set to current user
+      // Ensure critical fields are set correctly
+      organizer: req.user.userId, // Always set to current user
       status: "published",
       isActive: true,
       serviceFeePaymentStatus: "paid",
       serviceFeeReference: reference,
       serviceFeeTransaction: transaction._id,
       publishedAt: new Date(),
+      // Ensure required fields exist
+      title:
+        eventData?.title ||
+        transaction.metadata?.eventData?.title ||
+        "Event Title",
+      description:
+        eventData?.description ||
+        transaction.metadata?.eventData?.description ||
+        "Event description",
+      date:
+        eventData?.date || transaction.metadata?.eventData?.date || new Date(),
+      // Map frontend fields to database fields
+      city:
+        eventData?.state || transaction.metadata?.eventData?.state || "Lagos", // Map state to city
+      venue:
+        eventData?.venue || transaction.metadata?.eventData?.venue || "Venue",
+      address:
+        eventData?.address ||
+        transaction.metadata?.eventData?.address ||
+        "Address",
+      category:
+        eventData?.category ||
+        transaction.metadata?.eventData?.category ||
+        "Other",
+    };
+
+    console.log("🛠 Final event data prepared:", {
+      title: finalEventData.title,
+      organizer: finalEventData.organizer,
+      hasDate: !!finalEventData.date,
+      hasVenue: !!finalEventData.venue,
     });
+
+    // Create the actual event
+    const event = await Event.create(finalEventData);
 
     // Update transaction with the created event ID
     transaction.eventId = event._id;
     transaction.metadata.isDraft = false;
+    transaction.metadata.eventCreatedAt = new Date();
     await transaction.save();
 
     console.log("✅ Event created successfully:", {
@@ -1169,13 +1246,19 @@ const completeDraftEventCreation = async (req, res, next) => {
       title: event.title,
       status: event.status,
       organizer: event.organizer,
+      serviceFeePaid: event.serviceFeePaymentStatus,
     });
 
     res.status(201).json({
       success: true,
       message: "Event created and published successfully",
       data: {
-        transaction,
+        transaction: {
+          _id: transaction._id,
+          reference: transaction.reference,
+          amount: transaction.totalAmount,
+          status: transaction.status,
+        },
         event,
         isDraft: false,
       },
@@ -1186,6 +1269,14 @@ const completeDraftEventCreation = async (req, res, next) => {
     // More detailed error logging
     if (error.name === "ValidationError") {
       console.error("Validation errors:", error.errors);
+      return next(
+        new ErrorResponse(
+          `Event validation failed: ${Object.values(error.errors)
+            .map((err) => err.message)
+            .join(", ")}`,
+          400
+        )
+      );
     }
 
     next(error);
