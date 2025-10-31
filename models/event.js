@@ -1145,7 +1145,7 @@ eventSchema.pre("save", function (next) {
     }
   }
 
-  // Payment agreement validation
+  // Payment agreement validation - CRITICAL FIX
   if (this.status === "published") {
     // Determine if event has paid tickets by checking actual fields
     let hasPaidTickets = false;
@@ -1156,16 +1156,28 @@ eventSchema.pre("save", function (next) {
       hasPaidTickets = true;
     }
 
-    // Only validate when document is new or relevant fields are being modified
-    const isRelevantChange =
-      this.isNew ||
-      this.isModified("status") ||
-      this.isModified("ticketTypes") ||
-      this.isModified("price");
-
     // Check terms acceptance for paid events
-    if (hasPaidTickets && isRelevantChange && !this.agreement?.acceptedTerms) {
-      return next(new Error("Terms must be accepted for paid events"));
+    if (hasPaidTickets) {
+      // Check if terms are already accepted in agreement
+      const termsAccepted =
+        this.agreement?.acceptedTerms === true ||
+        this.termsAccepted === true ||
+        this.termsAccepted === "true";
+
+      if (!termsAccepted) {
+        return next(new Error("Terms must be accepted for paid events"));
+      }
+
+      // Ensure agreement object is properly set
+      if (!this.agreement) {
+        this.agreement = {};
+      }
+
+      // Set accepted terms in agreement object
+      this.agreement.acceptedTerms = true;
+      if (!this.agreement.acceptedAt) {
+        this.agreement.acceptedAt = new Date();
+      }
     }
   }
 
