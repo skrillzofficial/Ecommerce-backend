@@ -1195,10 +1195,53 @@ const completeDraftEventCreation = async (req, res, next) => {
       return next(new ErrorResponse("User not found", 404));
     }
 
-    // Prepare event creation data
+    // ✅ FIX: Parse and validate capacity to ensure it's a whole number
+    const parseCapacity = (capacityValue) => {
+      if (capacityValue === undefined || capacityValue === null) {
+        return 100; // Default capacity
+      }
+      
+      // Convert to number and ensure it's an integer
+      const num = Number(capacityValue);
+      if (isNaN(num)) {
+        return 100; // Default if not a number
+      }
+      
+      // Round to nearest whole number and ensure minimum of 1
+      return Math.max(1, Math.round(num));
+    };
+
+    // ✅ FIX: Parse and validate price to ensure it's a valid number
+    const parsePrice = (priceValue) => {
+      if (priceValue === undefined || priceValue === null) {
+        return 0; // Default price for free events
+      }
+      
+      const num = Number(priceValue);
+      return isNaN(num) ? 0 : Math.max(0, num);
+    };
+
+    // Get event data from either request or transaction metadata
+    const sourceEventData = eventData || transaction.metadata?.eventData || {};
+    
+    console.log("🔍 Raw event data for parsing:", {
+      rawCapacity: sourceEventData.capacity,
+      rawPrice: sourceEventData.price,
+      capacityType: typeof sourceEventData.capacity,
+      priceType: typeof sourceEventData.price
+    });
+
+    // Prepare event creation data with proper parsing
     const finalEventData = {
       // Use provided event data or metadata from transaction
-      ...(eventData || transaction.metadata?.eventData),
+      ...sourceEventData,
+      
+      // ✅ FIXED: Ensure capacity is a whole number
+      capacity: parseCapacity(sourceEventData.capacity),
+      
+      // ✅ FIXED: Ensure price is a valid number
+      price: parsePrice(sourceEventData.price),
+      
       // Ensure critical fields are set correctly
       organizer: req.user.userId, // Always set to current user
       status: "published",
@@ -1207,23 +1250,45 @@ const completeDraftEventCreation = async (req, res, next) => {
       serviceFeeReference: reference,
       serviceFeeTransaction: transaction._id,
       publishedAt: new Date(),
-      // Ensure required fields exist
-      title: eventData?.title || transaction.metadata?.eventData?.title || "Event Title",
-      description: eventData?.description || transaction.metadata?.eventData?.description || "Event description",
-      date: eventData?.date || transaction.metadata?.eventData?.date || new Date(),
+      
+      // Ensure required fields exist with defaults
+      title: sourceEventData.title || "Event Title",
+      description: sourceEventData.description || "Event description",
+      date: sourceEventData.date || new Date(),
+      
       // Map frontend fields to database fields
-      city: eventData?.state || transaction.metadata?.eventData?.state || "Lagos", // Map state to city
-      venue: eventData?.venue || transaction.metadata?.eventData?.venue || "Venue",
-      address: eventData?.address || transaction.metadata?.eventData?.address || "Address",
-      category: eventData?.category || transaction.metadata?.eventData?.category || "Other"
+      city: sourceEventData.state || sourceEventData.city || "Lagos", // Map state to city
+      venue: sourceEventData.venue || "Venue",
+      address: sourceEventData.address || "Address",
+      category: sourceEventData.category || "Other",
+      
+      // Ensure other numeric fields are properly parsed
+      availableTickets: parseCapacity(sourceEventData.capacity),
+      totalTickets: parseCapacity(sourceEventData.capacity)
     };
 
     console.log("🛠 Final event data prepared:", {
       title: finalEventData.title,
       organizer: finalEventData.organizer,
+      capacity: finalEventData.capacity,
+      price: finalEventData.price,
+      capacityType: typeof finalEventData.capacity,
+      priceType: typeof finalEventData.price,
       hasDate: !!finalEventData.date,
       hasVenue: !!finalEventData.venue
     });
+
+    // Validate the final event data before creation
+    try {
+      // Test if the data passes Mongoose validation
+      const testEvent = new Event(finalEventData);
+      await testEvent.validate();
+    } catch (validationError) {
+      console.error("❌ Event validation failed:", validationError);
+      return next(
+        new ErrorResponse(`Event validation failed: ${validationError.message}`, 400)
+      );
+    }
 
     // Create the actual event
     const event = await Event.create(finalEventData);
@@ -1239,6 +1304,8 @@ const completeDraftEventCreation = async (req, res, next) => {
       title: event.title,
       status: event.status,
       organizer: event.organizer,
+      capacity: event.capacity,
+      price: event.price,
       serviceFeePaid: event.serviceFeePaymentStatus
     });
 
@@ -1262,7 +1329,13 @@ const completeDraftEventCreation = async (req, res, next) => {
     // More detailed error logging
     if (error.name === 'ValidationError') {
       console.error('Validation errors:', error.errors);
-      return next(new ErrorResponse(`Event validation failed: ${Object.values(error.errors).map(err => err.message).join(', ')}`, 400));
+      const errorMessages = Object.values(error.errors).map(err => err.message).join(', ');
+      return next(new ErrorResponse(`Event validation failed: ${errorMessages}`, 400));
+    }
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      return next(new ErrorResponse('Event with similar details already exists', 400));
     }
     
     next(error);
