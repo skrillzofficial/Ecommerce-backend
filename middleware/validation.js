@@ -15,12 +15,15 @@ const parseArray = (value) => {
   if (Array.isArray(value)) {
     return value;
   }
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
       return Array.isArray(parsed) ? parsed : [value];
     } catch (e) {
-      return value.split(',').map(v => v.trim()).filter(Boolean);
+      return value
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
     }
   }
   return [];
@@ -28,7 +31,7 @@ const parseArray = (value) => {
 
 // Safe number parsing function
 const safeParseNumber = (value, defaultValue = 0) => {
-  if (value === undefined || value === null || value === '') {
+  if (value === undefined || value === null || value === "") {
     return defaultValue;
   }
   const num = Number(value);
@@ -37,19 +40,60 @@ const safeParseNumber = (value, defaultValue = 0) => {
 
 // Valid categories (added Lifestyle)
 const VALID_CATEGORIES = [
-  "Technology", "Business", "Marketing", "Arts", "Health", 
-  "Education", "Music", "Food", "Sports", "Entertainment", 
-  "Networking", "Lifestyle", "Other"
+  "Technology",
+  "Business",
+  "Marketing",
+  "Arts",
+  "Health",
+  "Education",
+  "Music",
+  "Food",
+  "Sports",
+  "Entertainment",
+  "Networking",
+  "Lifestyle",
+  "Other",
 ];
 
 // Valid states (all 36 Nigerian states + FCT)
 const VALID_STATES = [
-  "Abia", "Adamawa", "Akwa Ibom", "Anambra", "Bauchi", "Bayelsa", 
-  "Benue", "Borno", "Cross River", "Delta", "Ebonyi", "Edo", 
-  "Ekiti", "Enugu", "FCT (Abuja)", "Gombe", "Imo", "Jigawa", 
-  "Kaduna", "Kano", "Katsina", "Kebbi", "Kogi", "Kwara", "Lagos", 
-  "Nasarawa", "Niger", "Ogun", "Ondo", "Osun", "Oyo", "Plateau", 
-  "Rivers", "Sokoto", "Taraba", "Yobe", "Zamfara"
+  "Abia",
+  "Adamawa",
+  "Akwa Ibom",
+  "Anambra",
+  "Bauchi",
+  "Bayelsa",
+  "Benue",
+  "Borno",
+  "Cross River",
+  "Delta",
+  "Ebonyi",
+  "Edo",
+  "Ekiti",
+  "Enugu",
+  "FCT (Abuja)",
+  "Gombe",
+  "Imo",
+  "Jigawa",
+  "Kaduna",
+  "Kano",
+  "Katsina",
+  "Kebbi",
+  "Kogi",
+  "Kwara",
+  "Lagos",
+  "Nasarawa",
+  "Niger",
+  "Ogun",
+  "Ondo",
+  "Osun",
+  "Oyo",
+  "Plateau",
+  "Rivers",
+  "Sokoto",
+  "Taraba",
+  "Yobe",
+  "Zamfara",
 ];
 
 // Validate event creation data - UPDATED TO MATCH FRONTEND FIELDS
@@ -59,17 +103,19 @@ const validateEventCreation = (req, res, next) => {
     title,
     description,
     category,
-    startDate,  // Frontend sends startDate, not date
-    eventDate,  // Also accept eventDate if sent
+    startDate, // Frontend sends startDate, not date
+    eventDate, // Also accept eventDate if sent
     time,
     endTime,
     venue,
     address,
-    state,      // Frontend sends state for state
-    city,       // Frontend sends city for city
+    state, // Frontend sends state for state
+    city, // Frontend sends city for city
     price,
     capacity,
     status = "draft",
+    termsAccepted, // Check for terms acceptance
+    agreement, // Check agreement data
   } = req.body;
 
   const errors = [];
@@ -96,7 +142,11 @@ const validateEventCreation = (req, res, next) => {
     }
 
     if (!category || !VALID_CATEGORIES.includes(category)) {
-      errors.push(`Category is required to publish. Must be one of: ${VALID_CATEGORIES.join(", ")}`);
+      errors.push(
+        `Category is required to publish. Must be one of: ${VALID_CATEGORIES.join(
+          ", "
+        )}`
+      );
     }
 
     // CRITICAL FIX: Use effectiveDate instead of date
@@ -106,7 +156,7 @@ const validateEventCreation = (req, res, next) => {
       const eventDateObj = new Date(effectiveDate);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      
+
       if (isNaN(eventDateObj.getTime())) {
         errors.push("Invalid date format");
       } else {
@@ -130,7 +180,7 @@ const validateEventCreation = (req, res, next) => {
       const [endHour, endMin] = endTime.split(":").map(Number);
       const startMinutes = startHour * 60 + startMin;
       const endMinutes = endHour * 60 + endMin;
-      
+
       if (endMinutes <= startMinutes) {
         errors.push("End time must be after start time");
       }
@@ -165,17 +215,40 @@ const validateEventCreation = (req, res, next) => {
     // Check if using ticket types
     const ticketTypes = req.body.ticketTypes;
     let hasTicketTypes = false;
-    
+    let hasPaidTickets = false;
+
     if (ticketTypes) {
       try {
-        const parsed = typeof ticketTypes === 'string' ? JSON.parse(ticketTypes) : ticketTypes;
+        const parsed =
+          typeof ticketTypes === "string"
+            ? JSON.parse(ticketTypes)
+            : ticketTypes;
         hasTicketTypes = Array.isArray(parsed) && parsed.length > 0;
+        hasPaidTickets = parsed.some((ticket) => ticket.price > 0);
       } catch (e) {}
+    }
+
+    // Check legacy pricing for paid tickets
+    if (!hasTicketTypes) {
+      const priceNum = safeParseNumber(price, 0);
+      hasPaidTickets = priceNum > 0;
+    }
+
+    // CRITICAL FIX: Validate terms acceptance for paid events
+    if (hasPaidTickets) {
+      const hasAcceptedTerms =
+        termsAccepted === true ||
+        termsAccepted === "true" ||
+        (agreement && JSON.parse(agreement).acceptedTerms === true);
+
+      if (!hasAcceptedTerms) {
+        errors.push("Terms must be accepted for paid events");
+      }
     }
 
     // Only validate price/capacity if no ticket types
     if (!hasTicketTypes) {
-      if (price === undefined || price === null || price === '') {
+      if (price === undefined || price === null || price === "") {
         errors.push("Price is required to publish");
       } else {
         const priceNum = safeParseNumber(price, 0);
@@ -183,12 +256,13 @@ const validateEventCreation = (req, res, next) => {
         if (priceNum > 10000000) errors.push("Price seems unreasonably high");
       }
 
-      if (!capacity || capacity === '') {
+      if (!capacity || capacity === "") {
         errors.push("Capacity is required to publish");
       } else {
         const capacityNum = safeParseNumber(capacity, 1);
         if (capacityNum < 1) errors.push("Capacity must be at least 1");
-        if (capacityNum > 100000) errors.push("Capacity seems unreasonably high");
+        if (capacityNum > 100000)
+          errors.push("Capacity seems unreasonably high");
       }
     }
   } else {
@@ -199,12 +273,12 @@ const validateEventCreation = (req, res, next) => {
     if (category && !VALID_CATEGORIES.includes(category)) {
       errors.push(`Category must be one of: ${VALID_CATEGORIES.join(", ")}`);
     }
-    
+
     // CRITICAL FIX: Validate state field for drafts
     if (state && !VALID_STATES.includes(state)) {
       errors.push(`State must be one of: ${VALID_STATES.join(", ")}`);
     }
-    
+
     if (effectiveDate) {
       const eventDateObj = new Date(effectiveDate);
       if (isNaN(eventDateObj.getTime())) errors.push("Invalid date format");
@@ -215,11 +289,11 @@ const validateEventCreation = (req, res, next) => {
     if (endTime && !/^([01]\d|2[0-3]):([0-5]\d)$/.test(endTime)) {
       errors.push("Invalid end time format (HH:MM)");
     }
-    if (price !== undefined && price !== null && price !== '') {
+    if (price !== undefined && price !== null && price !== "") {
       const priceNum = safeParseNumber(price, 0);
       if (priceNum < 0) errors.push("Price must be a non-negative number");
     }
-    if (capacity !== undefined && capacity !== '') {
+    if (capacity !== undefined && capacity !== "") {
       const capacityNum = safeParseNumber(capacity, 1);
       if (capacityNum < 1) errors.push("Capacity must be at least 1");
     }
@@ -232,7 +306,7 @@ const validateEventCreation = (req, res, next) => {
   // CRITICAL FIX: Normalize field names for database
   req.body.date = effectiveDate; // Map to date field for database
   req.body.city = state; // Map state to city field for database (if needed by existing code)
-  
+
   next();
 };
 
@@ -240,36 +314,41 @@ const validateEventCreation = (req, res, next) => {
 const validateEventUpdate = (req, res, next) => {
   const errors = [];
 
-  const title = getValue(req.body, 'title');
-  const description = getValue(req.body, 'description');
-  const category = getValue(req.body, 'category');
-  const state = getValue(req.body, 'state'); // Frontend field
-  const city = getValue(req.body, 'city');   // Frontend field
-  const startDate = getValue(req.body, 'startDate'); // Frontend field
-  const eventDate = getValue(req.body, 'eventDate'); // Alternative frontend field
-  const time = getValue(req.body, 'time');
-  const endTime = getValue(req.body, 'endTime');
-  const price = getValue(req.body, 'price');
-  const capacity = getValue(req.body, 'capacity');
-  const status = getValue(req.body, 'status');
+  const title = getValue(req.body, "title");
+  const description = getValue(req.body, "description");
+  const category = getValue(req.body, "category");
+  const state = getValue(req.body, "state"); // Frontend field
+  const city = getValue(req.body, "city"); // Frontend field
+  const startDate = getValue(req.body, "startDate"); // Frontend field
+  const eventDate = getValue(req.body, "eventDate"); // Alternative frontend field
+  const time = getValue(req.body, "time");
+  const endTime = getValue(req.body, "endTime");
+  const price = getValue(req.body, "price");
+  const capacity = getValue(req.body, "capacity");
+  const status = getValue(req.body, "status");
 
-  const isPublishing = status === 'published';
+  const isPublishing = status === "published";
 
   // CRITICAL FIX: Determine which date field to use
   const effectiveDate = startDate || eventDate;
 
   if (title !== undefined) {
-    if (title.trim().length < 5) errors.push("Title must be at least 5 characters long");
+    if (title.trim().length < 5)
+      errors.push("Title must be at least 5 characters long");
     if (title.length > 200) errors.push("Title must not exceed 200 characters");
   }
 
   if (description !== undefined) {
     if (isPublishing && description.trim().length < 50) {
       errors.push("Description must be at least 50 characters long to publish");
-    } else if (description.trim().length > 0 && description.trim().length < 50) {
+    } else if (
+      description.trim().length > 0 &&
+      description.trim().length < 50
+    ) {
       errors.push("Description must be at least 50 characters long");
     }
-    if (description.length > 5000) errors.push("Description must not exceed 5000 characters");
+    if (description.length > 5000)
+      errors.push("Description must not exceed 5000 characters");
   }
 
   if (category !== undefined && !VALID_CATEGORIES.includes(category)) {
@@ -285,10 +364,10 @@ const validateEventUpdate = (req, res, next) => {
     const eventDateObj = new Date(effectiveDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     if (isNaN(eventDateObj.getTime())) {
       errors.push("Invalid date format");
-    } else if (status !== 'draft') {
+    } else if (status !== "draft") {
       eventDateObj.setHours(0, 0, 0, 0);
       if (eventDateObj < today) errors.push("Event date must be in the future");
     }
@@ -307,8 +386,9 @@ const validateEventUpdate = (req, res, next) => {
     const [endHour, endMin] = endTime.split(":").map(Number);
     const startMinutes = startHour * 60 + startMin;
     const endMinutes = endHour * 60 + endMin;
-    
-    if (endMinutes <= startMinutes) errors.push("End time must be after start time");
+
+    if (endMinutes <= startMinutes)
+      errors.push("End time must be after start time");
   }
 
   if (price !== undefined) {
@@ -343,10 +423,10 @@ const validateBooking = (req, res, next) => {
 
   if (ticketBookings && Array.isArray(ticketBookings)) {
     let totalQuantity = 0;
-    
+
     for (const booking of ticketBookings) {
       const { ticketType: bookingType, quantity: bookingQuantity } = booking;
-      
+
       if (!bookingType) {
         errors.push("Each booking must have a ticket type");
         continue;
@@ -358,18 +438,22 @@ const validateBooking = (req, res, next) => {
       }
 
       const qty = safeParseNumber(bookingQuantity, 0);
-      if (qty < 1) errors.push(`Quantity for ${bookingType} must be at least 1`);
-      if (qty > 10) errors.push(`Cannot book more than 10 ${bookingType} tickets at once`);
+      if (qty < 1)
+        errors.push(`Quantity for ${bookingType} must be at least 1`);
+      if (qty > 10)
+        errors.push(`Cannot book more than 10 ${bookingType} tickets at once`);
 
       totalQuantity += qty;
 
       if (!["Regular", "VIP", "VVIP", "Free"].includes(bookingType)) {
-        errors.push(`Ticket type must be Regular, VIP, VVIP, or Free. Received: ${bookingType}`);
+        errors.push(
+          `Ticket type must be Regular, VIP, VVIP, or Free. Received: ${bookingType}`
+        );
       }
     }
 
-    if (totalQuantity > 20) errors.push("Cannot book more than 20 tickets total in one transaction");
-
+    if (totalQuantity > 20)
+      errors.push("Cannot book more than 20 tickets total in one transaction");
   } else {
     // Single ticket type (legacy)
     if (quantity !== undefined) {
@@ -378,7 +462,10 @@ const validateBooking = (req, res, next) => {
       if (qty > 10) errors.push("Cannot book more than 10 tickets at once");
     }
 
-    if (ticketType && !["Regular", "VIP", "VVIP", "Free"].includes(ticketType)) {
+    if (
+      ticketType &&
+      !["Regular", "VIP", "VVIP", "Free"].includes(ticketType)
+    ) {
       errors.push("Ticket type must be Regular, VIP, VVIP, or Free");
     }
   }
@@ -410,17 +497,20 @@ const validateQueryParams = (req, res, next) => {
 
   if (req.query.limit) {
     const limit = safeParseNumber(req.query.limit, 12);
-    if (limit < 1 || limit > 100) errors.push("Limit must be between 1 and 100");
+    if (limit < 1 || limit > 100)
+      errors.push("Limit must be between 1 and 100");
   }
 
   if (req.query.minPrice) {
     const minPrice = safeParseNumber(req.query.minPrice, 0);
-    if (minPrice < 0) errors.push("Minimum price must be a non-negative number");
+    if (minPrice < 0)
+      errors.push("Minimum price must be a non-negative number");
   }
 
   if (req.query.maxPrice) {
     const maxPrice = safeParseNumber(req.query.maxPrice, 0);
-    if (maxPrice < 0) errors.push("Maximum price must be a non-negative number");
+    if (maxPrice < 0)
+      errors.push("Maximum price must be a non-negative number");
   }
 
   if (req.query.startDate) {
@@ -434,14 +524,35 @@ const validateQueryParams = (req, res, next) => {
   }
 
   if (req.query.sort) {
-    const validSorts = ["date", "-date", "price", "-price", "popular", "newest", "eventDate", "-eventDate", "purchaseDate", "-purchaseDate"];
+    const validSorts = [
+      "date",
+      "-date",
+      "price",
+      "-price",
+      "popular",
+      "newest",
+      "eventDate",
+      "-eventDate",
+      "purchaseDate",
+      "-purchaseDate",
+    ];
     if (!validSorts.includes(req.query.sort)) {
       errors.push(`Sort must be one of: ${validSorts.join(", ")}`);
     }
   }
 
   if (req.query.status) {
-    const validStatuses = ["draft", "published", "cancelled", "completed", "postponed", "confirmed", "used", "cancelled", "expired"];
+    const validStatuses = [
+      "draft",
+      "published",
+      "cancelled",
+      "completed",
+      "postponed",
+      "confirmed",
+      "used",
+      "cancelled",
+      "expired",
+    ];
     if (!validStatuses.includes(req.query.status)) {
       errors.push(`Status must be one of: ${validStatuses.join(", ")}`);
     }
@@ -470,8 +581,8 @@ const sanitizeInput = (req, res, next) => {
 
   const sanitizeValue = (value) => {
     if (Array.isArray(value)) return value.map(sanitizeValue);
-    if (typeof value === 'string') return sanitizeString(value);
-    if (value && typeof value === 'object') {
+    if (typeof value === "string") return sanitizeString(value);
+    if (value && typeof value === "object") {
       const sanitized = {};
       for (const key in value) {
         sanitized[key] = sanitizeValue(value[key]);
@@ -498,34 +609,48 @@ const sanitizeInput = (req, res, next) => {
 
 // Validate registration data
 const validateRegistration = (req, res, next) => {
-  const { firstName, lastName, userName, email, password, role, phoneNumber } = req.body;
+  const { firstName, lastName, userName, email, password, role, phoneNumber } =
+    req.body;
   const errors = [];
 
-  if (!firstName || firstName.trim().length < 2) errors.push("First name must be at least 2 characters long");
-  if (firstName && firstName.length > 50) errors.push("First name must not exceed 50 characters");
+  if (!firstName || firstName.trim().length < 2)
+    errors.push("First name must be at least 2 characters long");
+  if (firstName && firstName.length > 50)
+    errors.push("First name must not exceed 50 characters");
 
-  if (!lastName || lastName.trim().length < 2) errors.push("Last name must be at least 2 characters long");
-  if (lastName && lastName.length > 50) errors.push("Last name must not exceed 50 characters");
+  if (!lastName || lastName.trim().length < 2)
+    errors.push("Last name must be at least 2 characters long");
+  if (lastName && lastName.length > 50)
+    errors.push("Last name must not exceed 50 characters");
 
-  if (!userName || userName.trim().length < 3) errors.push("Username must be at least 3 characters long");
-  if (userName && userName.length > 30) errors.push("Username must not exceed 30 characters");
+  if (!userName || userName.trim().length < 3)
+    errors.push("Username must be at least 3 characters long");
+  if (userName && userName.length > 30)
+    errors.push("Username must not exceed 30 characters");
   if (userName && !/^[a-zA-Z0-9_]+$/.test(userName)) {
     errors.push("Username can only contain letters, numbers, and underscores");
   }
 
   if (!email) errors.push("Email is required");
-  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("Please provide a valid email address");
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    errors.push("Please provide a valid email address");
 
   if (!password) errors.push("Password is required");
-  else if (password.length < 6) errors.push("Password must be at least 6 characters long");
-  if (password && password.length > 128) errors.push("Password must not exceed 128 characters");
+  else if (password.length < 6)
+    errors.push("Password must be at least 6 characters long");
+  if (password && password.length > 128)
+    errors.push("Password must not exceed 128 characters");
 
   if (role) {
     const validRoles = ["attendee", "organizer"];
-    if (!validRoles.includes(role)) errors.push("Role must be either 'attendee' or 'organizer'");
+    if (!validRoles.includes(role))
+      errors.push("Role must be either 'attendee' or 'organizer'");
   }
 
-  if (phoneNumber && !/^\+?[1-9]\d{1,14}$/.test(phoneNumber.replace(/[\s-]/g, ""))) {
+  if (
+    phoneNumber &&
+    !/^\+?[1-9]\d{1,14}$/.test(phoneNumber.replace(/[\s-]/g, ""))
+  ) {
     errors.push("Please provide a valid phone number");
   }
 
@@ -539,7 +664,8 @@ const validateLogin = (req, res, next) => {
   const errors = [];
 
   if (!email) errors.push("Email is required");
-  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("Please provide a valid email address");
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    errors.push("Please provide a valid email address");
 
   if (!password) errors.push("Password is required");
 
@@ -550,7 +676,9 @@ const validateLogin = (req, res, next) => {
 // Validate user is organizer
 const validateOrganizer = (req, res, next) => {
   if (req.user.role !== "organizer" && req.user.role !== "superadmin") {
-    return next(new ErrorResponse("Only organizers can perform this action", 403));
+    return next(
+      new ErrorResponse("Only organizers can perform this action", 403)
+    );
   }
   next();
 };
@@ -558,7 +686,9 @@ const validateOrganizer = (req, res, next) => {
 // Validate user is attendee
 const validateAttendee = (req, res, next) => {
   if (req.user.role !== "attendee" && req.user.role !== "superadmin") {
-    return next(new ErrorResponse("Only attendees can perform this action", 403));
+    return next(
+      new ErrorResponse("Only attendees can perform this action", 403)
+    );
   }
   next();
 };
@@ -587,5 +717,5 @@ module.exports = {
   VALID_STATES,
   safeParseNumber,
   parseArray,
-  getValue
+  getValue,
 };
