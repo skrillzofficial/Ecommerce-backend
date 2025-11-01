@@ -561,7 +561,7 @@ const initializeServiceFeePayment = async (req, res, next) => {
       amount: amountNum,
       email,
       hasAgreementData: !!metadata?.agreementData,
-      agreementAcceptedTerms: metadata?.agreementData?.acceptedTerms
+      agreementAcceptedTerms: metadata?.agreementData?.acceptedTerms,
     });
 
     let event = null;
@@ -615,7 +615,8 @@ const initializeServiceFeePayment = async (req, res, next) => {
         agreementData: {
           ...(metadata?.agreementData || {}),
           acceptedTerms: true,
-          acceptedAt: metadata?.agreementData?.acceptedAt || new Date().toISOString()
+          acceptedAt:
+            metadata?.agreementData?.acceptedAt || new Date().toISOString(),
         },
         attendanceRange: metadata?.attendanceRange || "unknown",
         userInfo: metadata?.userInfo || {},
@@ -628,7 +629,8 @@ const initializeServiceFeePayment = async (req, res, next) => {
       type: transactionData.type,
       isDraft: isDraftEvent,
       hasAgreementData: !!transactionData.metadata.agreementData,
-      agreementAcceptedTerms: transactionData.metadata.agreementData.acceptedTerms
+      agreementAcceptedTerms:
+        transactionData.metadata.agreementData.acceptedTerms,
     });
 
     const transaction = await Transaction.create(transactionData);
@@ -638,7 +640,8 @@ const initializeServiceFeePayment = async (req, res, next) => {
       reference: transaction.reference,
       type: transaction.type,
       hasMetadata: !!transaction.metadata,
-      agreementAcceptedTerms: transaction.metadata?.agreementData?.acceptedTerms
+      agreementAcceptedTerms:
+        transaction.metadata?.agreementData?.acceptedTerms,
     });
 
     const paymentData = {
@@ -901,6 +904,127 @@ const verifyServiceFeePayment = async (req, res, next) => {
   }
 };
 
+// ============================================
+// COMPLETE FIXED completeDraftEventCreation FUNCTION
+// Replace your existing completeDraftEventCreation function with this
+// ============================================
+
+// Helper function to transform ticket types - ADD THIS BEFORE completeDraftEventCreation
+const transformTicketTypes = (ticketTypes) => {
+  if (!Array.isArray(ticketTypes)) {
+    console.warn("⚠️ ticketTypes is not an array:", typeof ticketTypes);
+    return [];
+  }
+
+  return ticketTypes.map((ticket, index) => {
+    console.log(`\n🎫 Processing ticket ${index + 1}:`, {
+      name: ticket.name,
+      requiresApproval: ticket.requiresApproval,
+      approvalQuestionsType: typeof ticket.approvalQuestions,
+      approvalQuestionsValue: ticket.approvalQuestions,
+    });
+
+    const transformedTicket = {
+      name: ticket.name || "General Admission",
+      price: parseFloat(ticket.price) || 0,
+      quantity: parseInt(ticket.quantity) || parseInt(ticket.capacity) || 0,
+      available:
+        parseInt(ticket.available) ||
+        parseInt(ticket.quantity) ||
+        parseInt(ticket.capacity) ||
+        0,
+      description: ticket.description || "",
+      requiresApproval:
+        ticket.requiresApproval === true || ticket.requiresApproval === "true",
+    };
+
+    // ✅ CRITICAL: Transform approval questions to proper schema format
+    if (transformedTicket.requiresApproval && ticket.approvalQuestions) {
+      // Case 1: Already an array
+      if (Array.isArray(ticket.approvalQuestions)) {
+        transformedTicket.approvalQuestions = ticket.approvalQuestions
+          .map((q) => {
+            if (typeof q === "string") {
+              return { question: q, type: "text", required: true };
+            }
+            return {
+              question: q.question || q.text || "",
+              type: q.type || "text",
+              required: q.required !== false,
+              options: q.options || undefined,
+            };
+          })
+          .filter((q) => q.question && q.question.trim());
+      }
+      // Case 2: Single string
+      else if (typeof ticket.approvalQuestions === "string") {
+        console.log(
+          `✅ Converting string to array: "${ticket.approvalQuestions}"`
+        );
+        transformedTicket.approvalQuestions = [
+          {
+            question: ticket.approvalQuestions,
+            type: "text",
+            required: true,
+          },
+        ];
+      }
+      // Case 3: Single object
+      else if (
+        typeof ticket.approvalQuestions === "object" &&
+        ticket.approvalQuestions !== null
+      ) {
+        console.log(`✅ Wrapping object in array:`, ticket.approvalQuestions);
+        transformedTicket.approvalQuestions = [
+          {
+            question:
+              ticket.approvalQuestions.question ||
+              ticket.approvalQuestions.text ||
+              "",
+            type: ticket.approvalQuestions.type || "text",
+            required: ticket.approvalQuestions.required !== false,
+            options: ticket.approvalQuestions.options || undefined,
+          },
+        ];
+      }
+
+      // Ensure at least one question
+      if (
+        !transformedTicket.approvalQuestions ||
+        transformedTicket.approvalQuestions.length === 0
+      ) {
+        console.warn(
+          `⚠️ Ticket "${ticket.name}" requires approval but has no valid questions.`
+        );
+        transformedTicket.approvalQuestions = [
+          {
+            question: "Why would you like to attend this event?",
+            type: "text",
+            required: true,
+          },
+        ];
+      }
+
+      console.log(
+        `✅ Final approval questions for "${transformedTicket.name}":`,
+        transformedTicket.approvalQuestions
+      );
+    } else {
+      transformedTicket.approvalQuestions = [];
+    }
+
+    // Add additional fields
+    if (ticket.benefits) transformedTicket.benefits = ticket.benefits;
+    if (ticket.accessType) transformedTicket.accessType = ticket.accessType;
+    if (ticket.maxAttendees)
+      transformedTicket.maxAttendees = parseInt(ticket.maxAttendees);
+    if (ticket.approvalDeadline)
+      transformedTicket.approvalDeadline = new Date(ticket.approvalDeadline);
+
+    return transformedTicket;
+  });
+};
+
 // @desc    Complete draft event creation after service fee payment
 // @route   POST /api/v1/transactions/:reference/complete-draft-event
 // @access  Private (Organizer only)
@@ -913,14 +1037,14 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("👤 Current user:", {
       userId: req.user.userId,
       role: req.user.role,
-      email: req.user.email
+      email: req.user.email,
     });
 
     const transaction = await Transaction.findOne({
       reference,
       type: "service_fee",
       status: "completed",
-    }).populate('userId', 'firstName lastName email role');
+    }).populate("userId", "firstName lastName email role");
 
     if (!transaction) {
       return next(
@@ -931,56 +1055,27 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("💾 Transaction metadata:", {
       hasMetadata: !!transaction?.metadata,
       hasAgreementData: !!transaction?.metadata?.agreementData,
-      agreementData: transaction?.metadata?.agreementData
+      hasEventData: !!transaction?.metadata?.eventData,
+      hasTicketTypes: !!transaction?.metadata?.eventData?.ticketTypes,
     });
 
     const transactionUserId = transaction.userId?._id?.toString();
     const currentUserId = req.user.userId.toString();
 
-    console.log("📊 Transaction details:", {
-      transactionId: transaction._id,
-      transactionUserId: transactionUserId,
-      transactionUserEmail: transaction.userId?.email,
-      transactionUserRole: transaction.userId?.role,
-      currentUserId: currentUserId,
-      currentUserRole: req.user.role,
-      isDraft: transaction.metadata?.isDraft,
-      hasEventId: !!transaction.eventId
-    });
-
     const isTransactionOwner = transactionUserId === currentUserId;
     const isSuperAdmin = req.user.role === "superadmin";
     const isOrganizer = req.user.role === "organizer";
 
-    console.log("🔐 Authorization check:", {
-      isTransactionOwner,
-      isSuperAdmin,
-      isOrganizer,
-      authorized: isTransactionOwner || isSuperAdmin,
-    });
-
     if (!isTransactionOwner && !isSuperAdmin) {
-      console.log("❌ Authorization failed:", {
-        transactionOwner: transactionUserId,
-        currentUser: currentUserId,
-        userRole: req.user.role,
-      });
       return next(
-        new ErrorResponse("Not authorized to complete this event. You must be the transaction owner or superadmin.", 403)
+        new ErrorResponse("Not authorized to complete this event.", 403)
       );
     }
 
-    console.log("✅ Authorization successful - User owns this transaction");
-
+    // Check if event already exists
     if (transaction.eventId) {
       const existingEvent = await Event.findById(transaction.eventId);
       if (existingEvent) {
-        console.log("✅ Event already exists:", {
-          eventId: existingEvent._id,
-          title: existingEvent.title,
-          status: existingEvent.status
-        });
-
         return res.status(200).json({
           success: true,
           message: "Event already created",
@@ -999,22 +1094,12 @@ const completeDraftEventCreation = async (req, res, next) => {
     }
 
     const isDraft = transaction.metadata?.isDraft;
-    const draftEventId = transaction.metadata?.draftEventId;
-
     if (!isDraft) {
       return next(new ErrorResponse("Not a draft event transaction", 400));
     }
 
-    console.log("📝 Creating event from draft:", {
-      draftEventId,
-      hasEventData: !!eventData,
-      hasMetadataEventData: !!transaction.metadata?.eventData
-    });
-
     if (!isOrganizer && !isSuperAdmin) {
-      return next(
-        new ErrorResponse("Only organizers can create events", 403)
-      );
+      return next(new ErrorResponse("Only organizers can create events", 403));
     }
 
     const user = await User.findById(req.user.userId);
@@ -1022,79 +1107,94 @@ const completeDraftEventCreation = async (req, res, next) => {
       return next(new ErrorResponse("User not found", 404));
     }
 
+    // Helper functions
     const parseCapacity = (capacityValue) => {
-      if (capacityValue === undefined || capacityValue === null) {
-        return 100;
-      }
+      if (capacityValue === undefined || capacityValue === null) return 100;
       const num = Number(capacityValue);
-      if (isNaN(num)) {
-        return 100;
-      }
-      return Math.max(1, Math.round(num));
+      return isNaN(num) ? 100 : Math.max(1, Math.round(num));
     };
 
     const parsePrice = (priceValue) => {
-      if (priceValue === undefined || priceValue === null) {
-        return 0;
-      }
+      if (priceValue === undefined || priceValue === null) return 0;
       const num = Number(priceValue);
       return isNaN(num) ? 0 : Math.max(0, num);
     };
 
     const sourceEventData = eventData || transaction.metadata?.eventData || {};
-    
-    // ✅ CRITICAL FIX: Extract agreement data from transaction metadata
     const agreementData = transaction.metadata?.agreementData || {};
-    
-    console.log("🔍 Raw event data for parsing:", {
-      rawCapacity: sourceEventData.capacity,
-      rawPrice: sourceEventData.price,
-      capacityType: typeof sourceEventData.capacity,
-      priceType: typeof sourceEventData.price,
-      hasAgreementData: !!agreementData,
-      agreementAcceptedTerms: agreementData.acceptedTerms,
-      fullAgreementData: agreementData
+
+    console.log("🔍 Source event data:", {
+      hasTicketTypes: !!sourceEventData.ticketTypes,
+      ticketTypesCount: sourceEventData.ticketTypes?.length,
+      firstTicket: sourceEventData.ticketTypes?.[0]
+        ? {
+            name: sourceEventData.ticketTypes[0].name,
+            requiresApproval: sourceEventData.ticketTypes[0].requiresApproval,
+            approvalQuestionsType:
+              typeof sourceEventData.ticketTypes[0].approvalQuestions,
+            approvalQuestions: sourceEventData.ticketTypes[0].approvalQuestions,
+          }
+        : null,
     });
 
-    // ✅ CRITICAL: Build proper agreement object with acceptedTerms = true
-    // Valid enum values: "1-100", "101-500", "501-1000", "1001-5000", "5001+"
-    const validEstimatedAttendance = ["1-100", "101-500", "501-1000", "1001-5000", "5001+"];
-    const rawEstimatedAttendance = agreementData.estimatedAttendance || transaction.metadata?.attendanceRange;
-    
-    // Ensure estimatedAttendance is a valid enum value
-    let estimatedAttendance = "1-100"; // Default
-    if (rawEstimatedAttendance && validEstimatedAttendance.includes(rawEstimatedAttendance)) {
+    // Build agreement object
+    const validEstimatedAttendance = [
+      "1-100",
+      "101-500",
+      "501-1000",
+      "1001-5000",
+      "5001+",
+    ];
+    const rawEstimatedAttendance =
+      agreementData.estimatedAttendance ||
+      transaction.metadata?.attendanceRange;
+
+    let estimatedAttendance = "1-100";
+    if (
+      rawEstimatedAttendance &&
+      validEstimatedAttendance.includes(rawEstimatedAttendance)
+    ) {
       estimatedAttendance = rawEstimatedAttendance;
-    } else {
-      console.warn("⚠️ Invalid estimatedAttendance:", rawEstimatedAttendance, "- using default: 1-100");
     }
-    
+
     const eventAgreement = {
-      acceptedTerms: true, // ✅ Always true for paid service fee events
-      acceptedAt: agreementData.acceptedAt ? new Date(agreementData.acceptedAt) : new Date(),
-      serviceFee: agreementData.serviceFee || { 
-        type: "percentage", 
-        amount: 5 
-      },
-      estimatedAttendance: estimatedAttendance, // ✅ Guaranteed valid enum value
+      acceptedTerms: true,
+      acceptedAt: agreementData.acceptedAt
+        ? new Date(agreementData.acceptedAt)
+        : new Date(),
+      serviceFee: agreementData.serviceFee || { type: "percentage", amount: 5 },
+      estimatedAttendance: estimatedAttendance,
       paymentTerms: "upfront",
       agreementVersion: agreementData.agreementVersion || "1.0",
-      termsUrl: agreementData.termsUrl || undefined
+      termsUrl: agreementData.termsUrl || undefined,
     };
 
-    console.log("✅ Event agreement object prepared:", {
-      acceptedTerms: eventAgreement.acceptedTerms,
-      acceptedAt: eventAgreement.acceptedAt,
-      serviceFee: eventAgreement.serviceFee,
-      estimatedAttendance: eventAgreement.estimatedAttendance
+    // ✅ CRITICAL: Transform ticket types
+    const transformedTicketTypes = sourceEventData.ticketTypes
+      ? transformTicketTypes(sourceEventData.ticketTypes)
+      : [];
+
+    console.log("🎫 Ticket types transformation complete:", {
+      originalCount: sourceEventData.ticketTypes?.length || 0,
+      transformedCount: transformedTicketTypes.length,
+      ticketsWithApproval: transformedTicketTypes.filter(
+        (t) => t.requiresApproval
+      ).length,
+      details: transformedTicketTypes.map((t) => ({
+        name: t.name,
+        requiresApproval: t.requiresApproval,
+        approvalQuestionsCount: t.approvalQuestions?.length || 0,
+        approvalQuestions: t.approvalQuestions,
+      })),
     });
 
+    // Build final event data
     const finalEventData = {
       ...sourceEventData,
-      
+
       capacity: parseCapacity(sourceEventData.capacity),
       price: parsePrice(sourceEventData.price),
-      
+
       organizer: req.user.userId,
       status: "published",
       isActive: true,
@@ -1102,62 +1202,61 @@ const completeDraftEventCreation = async (req, res, next) => {
       serviceFeeReference: reference,
       serviceFeeTransaction: transaction._id,
       publishedAt: new Date(),
-      
-      // ✅ CRITICAL: Add agreement object
+
       agreement: eventAgreement,
-      
+
       title: sourceEventData.title || "Event Title",
       description: sourceEventData.description || "Event description",
       date: sourceEventData.date || sourceEventData.startDate || new Date(),
-      startDate: sourceEventData.startDate || sourceEventData.date || new Date(),
-      endDate: sourceEventData.endDate || sourceEventData.startDate || sourceEventData.date || new Date(),
+      startDate:
+        sourceEventData.startDate || sourceEventData.date || new Date(),
+      endDate:
+        sourceEventData.endDate ||
+        sourceEventData.startDate ||
+        sourceEventData.date ||
+        new Date(),
       time: sourceEventData.time || "12:00",
       endTime: sourceEventData.endTime || "13:00",
-      
+
       city: sourceEventData.city || sourceEventData.state || "Lagos",
       state: sourceEventData.state || "Lagos",
       venue: sourceEventData.venue || "Venue",
       address: sourceEventData.address || "Address",
       category: sourceEventData.category || "Other",
       eventType: sourceEventData.eventType || "physical",
-      
+
       availableTickets: parseCapacity(sourceEventData.capacity),
-      totalTickets: parseCapacity(sourceEventData.capacity)
+      totalTickets: parseCapacity(sourceEventData.capacity),
+
+      // ✅ CRITICAL: Use transformed ticket types
+      ticketTypes: transformedTicketTypes,
     };
 
     console.log("🛠 Final event data prepared:", {
       title: finalEventData.title,
-      organizer: finalEventData.organizer,
-      capacity: finalEventData.capacity,
-      price: finalEventData.price,
-      capacityType: typeof finalEventData.capacity,
-      priceType: typeof finalEventData.price,
-      hasDate: !!finalEventData.date,
-      hasStartDate: !!finalEventData.startDate,
-      hasVenue: !!finalEventData.venue,
+      ticketTypesCount: finalEventData.ticketTypes?.length,
       hasAgreement: !!finalEventData.agreement,
-      agreementAcceptedTerms: finalEventData.agreement?.acceptedTerms,
-      agreementServiceFee: finalEventData.agreement?.serviceFee,
-      agreementEstimatedAttendance: finalEventData.agreement?.estimatedAttendance
     });
 
+    // Validate before creating
     try {
       const testEvent = new Event(finalEventData);
       await testEvent.validate();
       console.log("✅ Event validation passed");
     } catch (validationError) {
-      console.error("❌ Event validation failed:", {
-        name: validationError.name,
-        message: validationError.message,
-        errors: validationError.errors
-      });
+      console.error("❌ Event validation failed:", validationError.message);
       return next(
-        new ErrorResponse(`Event validation failed: ${validationError.message}`, 400)
+        new ErrorResponse(
+          `Event validation failed: ${validationError.message}`,
+          400
+        )
       );
     }
 
+    // Create event
     const event = await Event.create(finalEventData);
 
+    // Update transaction
     transaction.eventId = event._id;
     transaction.metadata.isDraft = false;
     transaction.metadata.eventCreatedAt = new Date();
@@ -1166,13 +1265,7 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("✅ Event created successfully:", {
       eventId: event._id,
       title: event.title,
-      status: event.status,
-      organizer: event.organizer,
-      capacity: event.capacity,
-      price: event.price,
-      serviceFeePaid: event.serviceFeePaymentStatus,
-      hasAgreement: !!event.agreement,
-      agreementAcceptedTerms: event.agreement?.acceptedTerms
+      ticketTypes: event.ticketTypes?.length,
     });
 
     res.status(201).json({
@@ -1191,17 +1284,22 @@ const completeDraftEventCreation = async (req, res, next) => {
     });
   } catch (error) {
     console.error("💥 Error completing draft event:", error);
-    
-    if (error.name === 'ValidationError') {
-      console.error('Validation errors:', error.errors);
-      const errorMessages = Object.values(error.errors).map(err => err.message).join(', ');
-      return next(new ErrorResponse(`Event validation failed: ${errorMessages}`, 400));
+
+    if (error.name === "ValidationError") {
+      const errorMessages = Object.values(error.errors)
+        .map((err) => err.message)
+        .join(", ");
+      return next(
+        new ErrorResponse(`Event validation failed: ${errorMessages}`, 400)
+      );
     }
-    
+
     if (error.code === 11000) {
-      return next(new ErrorResponse('Event with similar details already exists', 400));
+      return next(
+        new ErrorResponse("Event with similar details already exists", 400)
+      );
     }
-    
+
     next(error);
   }
 };
