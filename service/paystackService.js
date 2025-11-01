@@ -25,7 +25,7 @@ const initializePayment = async (paymentData) => {
 
     const data = {
       email,
-      amount: amount * 100, // Convert to kobo
+      amount: amount , 
       reference,
       metadata,
       callback_url,
@@ -139,7 +139,7 @@ const chargeAuthorization = async (chargeData) => {
 
     const data = {
       email,
-      amount: amount * 100, // Convert to kobo
+      amount: amount , 
       authorization_code,
       reference,
       metadata,
@@ -173,7 +173,7 @@ const createRefund = async (reference, refundData = {}) => {
 
     const data = {
       transaction: reference,
-      ...(amount && { amount: amount * 100 }), // If partial refund
+      ...(amount && { amount: amount }), // If partial refund
       ...(merchant_note && { merchant_note }),
       ...(customer_note && { customer_note }),
     };
