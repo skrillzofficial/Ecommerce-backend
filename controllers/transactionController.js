@@ -913,40 +913,28 @@ const completeDraftEventCreation = async (req, res, next) => {
 
     console.log("🎯 Completing draft event creation:", reference);
 
-    // ✅ CRITICAL FIX: Check if event already exists for this transaction FIRST
-    // Find transaction (any status - remove "completed" requirement)
+    // ✅ STEP 1: Find transaction (any status)
     let transaction = await Transaction.findOne({
       reference,
-      type: "service_fee", // ✅ Don't require status: "completed"
+      type: "service_fee",
     }).populate("eventId");
 
     if (!transaction) {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
-    // If transaction is still pending, verify payment first
-    if (transaction.status === "pending") {
-      console.log("💳 Verifying payment with Paystack...");
+    console.log("📋 Transaction found:", {
+      id: transaction._id,
+      status: transaction.status,
+      hasEvent: !!transaction.eventId,
+    });
 
-      const verification = await verifyPayment(reference);
-
-      if (verification.data.status === "success") {
-        transaction.status = "completed";
-        transaction.paymentDetails = verification.data;
-        transaction.completedAt = new Date();
-        await transaction.save();
-        console.log("✅ Transaction updated to completed");
-      } else {
-        return next(new ErrorResponse("Payment verification failed", 400));
-      }
-    }
-
-    // ✅ CRITICAL: If event already exists, return it immediately
-    if (existingTransaction.eventId) {
+    // ✅ STEP 2: If event already exists, return it immediately
+    if (transaction.eventId) {
       console.log("✅ Event already created for this payment:", {
-        transactionId: existingTransaction._id,
-        eventId: existingTransaction.eventId._id,
-        eventTitle: existingTransaction.eventId.title,
+        transactionId: transaction._id,
+        eventId: transaction.eventId._id,
+        eventTitle: transaction.eventId.title,
       });
 
       return res.status(200).json({
@@ -954,22 +942,59 @@ const completeDraftEventCreation = async (req, res, next) => {
         message: "Event already created for this payment",
         data: {
           transaction: {
-            _id: existingTransaction._id,
-            reference: existingTransaction.reference,
-            amount: existingTransaction.totalAmount,
-            status: existingTransaction.status,
+            _id: transaction._id,
+            reference: transaction.reference,
+            amount: transaction.totalAmount,
+            status: transaction.status,
           },
-          event: existingTransaction.eventId,
+          event: transaction.eventId,
           isDraft: false,
           alreadyProcessed: true,
         },
       });
     }
 
-    // ✅ Authorization checks
+    // ✅ STEP 3: If transaction is pending, verify payment with Paystack
+    if (transaction.status === "pending") {
+      console.log("💳 Transaction is pending, verifying payment with Paystack...");
+
+      const verification = await verifyPayment(reference);
+
+      if (verification.data.status === "success") {
+        console.log("✅ Payment verified successfully");
+
+        transaction.status = "completed";
+        transaction.paymentDetails = verification.data;
+        transaction.completedAt = new Date();
+        transaction.paymentMethod = verification.data.channel || "card";
+        await transaction.save();
+
+        console.log("✅ Transaction status updated to completed");
+      } else {
+        console.log("❌ Payment verification failed:", verification.data.status);
+        return next(
+          new ErrorResponse(
+            `Payment verification failed: ${verification.data.status}`,
+            400
+          )
+        );
+      }
+    }
+
+    // ✅ STEP 4: Verify transaction is completed
+    if (transaction.status !== "completed") {
+      return next(
+        new ErrorResponse(
+          `Transaction is ${transaction.status}, not completed`,
+          400
+        )
+      );
+    }
+
+    // ✅ STEP 5: Authorization checks
     const transactionUserId =
-      existingTransaction.userId?._id?.toString() ||
-      existingTransaction.userId?.toString();
+      transaction.userId?._id?.toString() ||
+      transaction.userId?.toString();
     const currentUserId = req.user.userId.toString();
 
     const isTransactionOwner = transactionUserId === currentUserId;
@@ -986,7 +1011,8 @@ const completeDraftEventCreation = async (req, res, next) => {
       return next(new ErrorResponse("Only organizers can create events", 403));
     }
 
-    const isDraft = existingTransaction.metadata?.isDraft;
+    // ✅ STEP 6: Verify this is a draft event transaction
+    const isDraft = transaction.metadata?.isDraft;
     if (!isDraft) {
       return next(new ErrorResponse("Not a draft event transaction", 400));
     }
@@ -996,7 +1022,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       return next(new ErrorResponse("User not found", 404));
     }
 
-    // Helper functions
+    // ✅ STEP 7: Helper functions
     const parseCapacity = (capacityValue) => {
       if (capacityValue === undefined || capacityValue === null) return 100;
       const num = Number(capacityValue);
@@ -1009,15 +1035,16 @@ const completeDraftEventCreation = async (req, res, next) => {
       return isNaN(num) ? 0 : Math.max(0, num);
     };
 
-    const sourceEventData = existingTransaction.metadata?.eventData || {};
-    const agreementData = existingTransaction.metadata?.agreementData || {};
+    // ✅ STEP 8: Extract event and agreement data from transaction
+    const sourceEventData = transaction.metadata?.eventData || {};
+    const agreementData = transaction.metadata?.agreementData || {};
 
     console.log("🔍 Source event data:", {
       hasTicketTypes: !!sourceEventData.ticketTypes,
       ticketTypesCount: sourceEventData.ticketTypes?.length,
     });
 
-    // Build agreement object
+    // ✅ STEP 9: Build agreement object
     const validEstimatedAttendance = [
       "1-100",
       "101-500",
@@ -1027,7 +1054,7 @@ const completeDraftEventCreation = async (req, res, next) => {
     ];
     const rawEstimatedAttendance =
       agreementData.estimatedAttendance ||
-      existingTransaction.metadata?.attendanceRange;
+      transaction.metadata?.attendanceRange;
 
     let estimatedAttendance = "1-100";
     if (
@@ -1049,7 +1076,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       termsUrl: agreementData.termsUrl || undefined,
     };
 
-    // Transform ticket types
+    // ✅ STEP 10: Transform ticket types
     const transformTicketTypes = (ticketTypes) => {
       if (!Array.isArray(ticketTypes)) {
         console.warn("⚠️ ticketTypes is not an array:", typeof ticketTypes);
@@ -1149,7 +1176,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       transformedCount: transformedTicketTypes.length,
     });
 
-    // Build final event data
+    // ✅ STEP 11: Build final event data
     const finalEventData = {
       ...sourceEventData,
 
@@ -1161,7 +1188,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       isActive: true,
       serviceFeePaymentStatus: "paid",
       serviceFeeReference: reference,
-      serviceFeeTransaction: existingTransaction._id,
+      serviceFeeTransaction: transaction._id,
       publishedAt: new Date(),
 
       agreement: eventAgreement,
@@ -1197,14 +1224,14 @@ const completeDraftEventCreation = async (req, res, next) => {
       ticketTypesCount: finalEventData.ticketTypes?.length,
     });
 
-    // ✅ CRITICAL: Create event with transaction lock
+    // ✅ STEP 12: Create event
     const event = await Event.create(finalEventData);
 
-    // ✅ CRITICAL: Immediately update transaction to link event
-    existingTransaction.eventId = event._id;
-    existingTransaction.metadata.isDraft = false;
-    existingTransaction.metadata.eventCreatedAt = new Date();
-    await existingTransaction.save();
+    // ✅ STEP 13: Immediately update transaction to link event
+    transaction.eventId = event._id;
+    transaction.metadata.isDraft = false;
+    transaction.metadata.eventCreatedAt = new Date();
+    await transaction.save();
 
     console.log("✅ Event created successfully:", {
       eventId: event._id,
@@ -1212,15 +1239,16 @@ const completeDraftEventCreation = async (req, res, next) => {
       ticketTypes: event.ticketTypes?.length,
     });
 
+    // ✅ STEP 14: Return success response
     res.status(201).json({
       success: true,
       message: "Event created and published successfully",
       data: {
         transaction: {
-          _id: existingTransaction._id,
-          reference: existingTransaction.reference,
-          amount: existingTransaction.totalAmount,
-          status: existingTransaction.status,
+          _id: transaction._id,
+          reference: transaction.reference,
+          amount: transaction.totalAmount,
+          status: transaction.status,
         },
         event,
         isDraft: false,
@@ -1247,7 +1275,6 @@ const completeDraftEventCreation = async (req, res, next) => {
     next(error);
   }
 };
-
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
