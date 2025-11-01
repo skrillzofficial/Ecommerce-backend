@@ -927,12 +927,7 @@ const transformTicketTypes = (ticketTypes) => {
     const transformedTicket = {
       name: ticket.name || "General Admission",
       price: parseFloat(ticket.price) || 0,
-      quantity: parseInt(ticket.quantity) || parseInt(ticket.capacity) || 0,
-      available:
-        parseInt(ticket.available) ||
-        parseInt(ticket.quantity) ||
-        parseInt(ticket.capacity) ||
-        0,
+      capacity: capacityValue,
       description: ticket.description || "",
       requiresApproval:
         ticket.requiresApproval === true || ticket.requiresApproval === "true",
