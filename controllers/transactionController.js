@@ -14,7 +14,6 @@ const markTransactionAsCompleted = async (transaction, paymentData) => {
   if (typeof transaction.markAsCompleted === "function") {
     await transaction.markAsCompleted(paymentData);
   } else {
-    // Manual completion
     transaction.status = "completed";
     transaction.paymentDetails = paymentData;
     transaction.completedAt = new Date();
@@ -28,7 +27,6 @@ const markTransactionAsFailed = async (transaction, reason) => {
   if (typeof transaction.markAsFailed === "function") {
     await transaction.markAsFailed(reason);
   } else {
-    // Manual failure
     transaction.status = "failed";
     transaction.failedAt = new Date();
     transaction.failureReason = reason;
@@ -46,7 +44,6 @@ const updateEventTicketAvailability = async (
     if (typeof Event.updateTicketAvailability === "function") {
       await Event.updateTicketAvailability(eventId, ticketCount, operation);
     } else {
-      // Manual availability update
       const event = await Event.findById(eventId);
       if (event) {
         if (operation === "decrement") {
@@ -72,20 +69,17 @@ const initializeTransaction = async (req, res, next) => {
   try {
     const { bookingId, amount, email, ticketDetails } = req.body;
 
-    // Validate required fields
     if (!bookingId || !amount || !email) {
       return next(
         new ErrorResponse("Booking ID, amount, and email are required", 400)
       );
     }
 
-    // Validate amount
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0 || amountNum > 1000000) {
       return next(new ErrorResponse("Invalid amount", 400));
     }
 
-    // Verify booking exists and belongs to user
     const booking = await Booking.findOne({
       _id: bookingId,
       user: req.user.userId,
@@ -95,7 +89,6 @@ const initializeTransaction = async (req, res, next) => {
       return next(new ErrorResponse("Booking not found", 404));
     }
 
-    // Create transaction record
     const transaction = await Transaction.create({
       userId: req.user.userId,
       bookingId: bookingId,
@@ -107,10 +100,9 @@ const initializeTransaction = async (req, res, next) => {
       paymentMethod: "paystack",
     });
 
-    // Initialize payment with Paystack
     const paymentData = {
       email: email,
-      amount: Math.round(amountNum * 100), // Convert to kobo
+      amount: Math.round(amountNum * 1),
       reference: transaction.reference,
       metadata: {
         bookingId: bookingId,
@@ -121,7 +113,6 @@ const initializeTransaction = async (req, res, next) => {
 
     const paymentResponse = await initializePayment(paymentData);
 
-    // Update transaction with payment authorization URL
     transaction.paymentUrl = paymentResponse.data.authorization_url;
     await transaction.save();
 
@@ -151,20 +142,16 @@ const verifyTransaction = async (req, res, next) => {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
-    // Verify payment with Paystack
     const verification = await verifyPayment(reference);
 
     if (verification.data.status === "success") {
-      // Update transaction status
       await markTransactionAsCompleted(transaction, verification.data);
 
-      // Update booking status
       await Booking.findByIdAndUpdate(transaction.bookingId, {
         paymentStatus: "completed",
         status: "confirmed",
       });
 
-      // Update event ticket counts
       const booking = await Booking.findById(transaction.bookingId);
       if (booking && booking.event) {
         await updateEventTicketAvailability(
@@ -213,7 +200,6 @@ const getUserTransactions = async (req, res, next) => {
 
     const query = { userId };
 
-    // Add filters if provided
     if (status && status !== "all") {
       query.status = status;
     }
@@ -262,7 +248,6 @@ const getTransaction = async (req, res, next) => {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
-    // Check authorization - user can view their own transactions or organizers can view their event transactions
     const isOwner = transaction.userId._id.toString() === req.user.userId;
     const isOrganizer =
       transaction.eventId?.organizer?.toString() === req.user.userId;
@@ -290,7 +275,6 @@ const getEventTransactions = async (req, res, next) => {
     const { eventId } = req.params;
     const { page = 1, limit = 10, status } = req.query;
 
-    // Verify event exists and belongs to organizer
     const event = await Event.findOne({
       _id: eventId,
       organizer: req.user.userId,
@@ -343,7 +327,6 @@ const requestRefund = async (req, res, next) => {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
-    // Check if user owns the transaction
     if (transaction.userId.toString() !== req.user.userId) {
       return next(
         new ErrorResponse(
@@ -353,7 +336,6 @@ const requestRefund = async (req, res, next) => {
       );
     }
 
-    // Check if transaction is eligible for refund
     if (transaction.status !== "completed") {
       return next(
         new ErrorResponse("Only completed transactions can be refunded", 400)
@@ -366,7 +348,6 @@ const requestRefund = async (req, res, next) => {
       );
     }
 
-    // Check event refund policy
     const event = await Event.findById(transaction.eventId);
     if (!event) {
       return next(new ErrorResponse("Event not found", 404));
@@ -377,7 +358,6 @@ const requestRefund = async (req, res, next) => {
       (eventStartDate - new Date()) / (1000 * 60 * 60 * 24)
     );
 
-    // Use event's refund policy or default to 7 days
     const minDaysBeforeEvent = event.refundPolicy?.minDaysBeforeEvent || 7;
 
     if (daysUntilEvent < minDaysBeforeEvent) {
@@ -389,7 +369,6 @@ const requestRefund = async (req, res, next) => {
       );
     }
 
-    // Create refund request
     transaction.refundStatus = "requested";
     transaction.refundRequestedAt = new Date();
     transaction.refundReason = req.body.reason || "Customer request";
@@ -412,7 +391,6 @@ const processRefund = async (req, res, next) => {
   try {
     const { action, reason } = req.body;
 
-    // Validate action
     if (!["approve", "reject"].includes(action)) {
       return next(
         new ErrorResponse('Action must be "approve" or "reject"', 400)
@@ -427,7 +405,6 @@ const processRefund = async (req, res, next) => {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
-    // Check if user is event organizer or admin
     const isOrganizer =
       transaction.eventId.organizer.toString() === req.user.userId;
     if (!isOrganizer && req.user.role !== "superadmin") {
@@ -444,19 +421,16 @@ const processRefund = async (req, res, next) => {
     }
 
     if (action === "approve") {
-      // Process refund
       transaction.refundStatus = "approved";
       transaction.refundProcessedAt = new Date();
-      transaction.refundAmount = transaction.amount * 0.8; // 80% refund as example
+      transaction.refundAmount = transaction.amount * 0.8;
       transaction.status = "refunded";
 
-      // Update booking status
       await Booking.findByIdAndUpdate(transaction.bookingId, {
         status: "refunded",
         refundAmount: transaction.refundAmount,
       });
 
-      // Update event ticket availability
       if (transaction.bookingId && transaction.bookingId.totalTickets) {
         await updateEventTicketAvailability(
           transaction.eventId._id,
@@ -494,7 +468,6 @@ const getRevenueStats = async (req, res, next) => {
       type: "event_booking",
     };
 
-    // If not superadmin, only show organizer's events
     if (req.user.role !== "superadmin") {
       const organizerEvents = await Event.find({
         organizer: organizerId,
@@ -503,12 +476,10 @@ const getRevenueStats = async (req, res, next) => {
       matchQuery.eventId = { $in: eventIds };
     }
 
-    // Filter by specific event if provided
     if (eventId) {
       matchQuery.eventId = eventId;
     }
 
-    // Date range based on period
     let dateRange = {};
     const now = new Date();
 
@@ -576,13 +547,11 @@ const initializeServiceFeePayment = async (req, res, next) => {
       );
     }
 
-    // Validate amount
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0 || amountNum > 10000000) {
       return next(new ErrorResponse("Invalid service fee amount", 400));
     }
 
-    // ✅ CHECK IF THIS IS A DRAFT EVENT
     const isDraftEvent =
       typeof eventId === "string" && eventId.startsWith("draft-");
 
@@ -591,9 +560,10 @@ const initializeServiceFeePayment = async (req, res, next) => {
       isDraft: isDraftEvent,
       amount: amountNum,
       email,
+      hasAgreementData: !!metadata?.agreementData,
+      agreementAcceptedTerms: metadata?.agreementData?.acceptedTerms
     });
 
-    // Only verify event exists if it's not a draft
     let event = null;
     if (!isDraftEvent) {
       event = await Event.findOne({
@@ -606,7 +576,6 @@ const initializeServiceFeePayment = async (req, res, next) => {
       }
     }
 
-    // ✅ MANUALLY GENERATE REFERENCE (Don't rely on pre-save hook)
     const reference = `TXN-${Date.now()}-${Math.random()
       .toString(36)
       .substring(2, 9)
@@ -614,26 +583,19 @@ const initializeServiceFeePayment = async (req, res, next) => {
 
     console.log("✅ Generated reference:", reference);
 
-    // ✅ Prepare transaction data with ALL required fields
+    // ✅ CRITICAL FIX: Ensure agreement data is stored in metadata
     const transactionData = {
-      // Core identification
-      reference: reference, // ✅ MANUALLY PROVIDED
+      reference: reference,
       userId: req.user.userId,
       type: "service_fee",
-
-      // Event & Booking (conditionally set based on draft status)
-      eventId: isDraftEvent ? undefined : eventId, // Don't set if draft
-      bookingId: undefined, // Service fees never have bookings
-
-      // Amounts (all required)
+      eventId: isDraftEvent ? undefined : eventId,
+      bookingId: undefined,
       totalAmount: amountNum,
       subtotalAmount: amountNum,
       serviceFee: 0,
       taxAmount: 0,
       discountAmount: 0,
       currency: "NGN",
-
-      // Event snapshot (required)
       eventTitle:
         metadata?.eventTitle ||
         metadata?.eventData?.title ||
@@ -642,47 +604,46 @@ const initializeServiceFeePayment = async (req, res, next) => {
         metadata?.eventData?.startDate ||
         metadata?.eventData?.date ||
         new Date(),
-
-      // Payment info
       status: "pending",
       paymentMethod: "card",
       paymentGateway: "paystack",
-
-      // Metadata for draft event handling
       metadata: {
         isDraft: isDraftEvent,
         draftEventId: isDraftEvent ? eventId : null,
         eventData: metadata?.eventData || {},
-        agreementData: metadata?.agreementData || {},
+        // ✅ CRITICAL: Store agreement data with acceptedTerms = true
+        agreementData: {
+          ...(metadata?.agreementData || {}),
+          acceptedTerms: true,
+          acceptedAt: metadata?.agreementData?.acceptedAt || new Date().toISOString()
+        },
         attendanceRange: metadata?.attendanceRange || "unknown",
         userInfo: metadata?.userInfo || {},
         hasApprovalTickets: metadata?.hasApprovalTickets || false,
       },
     };
 
-    console.log("📦 Transaction data prepared:", {
+    console.log("📦 Transaction data prepared with agreement:", {
       reference: transactionData.reference,
       type: transactionData.type,
       isDraft: isDraftEvent,
-      hasEventId: !!transactionData.eventId,
-      hasBookingId: !!transactionData.bookingId,
-      totalAmount: transactionData.totalAmount,
-      eventTitle: transactionData.eventTitle,
+      hasAgreementData: !!transactionData.metadata.agreementData,
+      agreementAcceptedTerms: transactionData.metadata.agreementData.acceptedTerms
     });
 
-    // ✅ Create transaction
     const transaction = await Transaction.create(transactionData);
 
     console.log("✅ Transaction created successfully:", {
       id: transaction._id,
       reference: transaction.reference,
       type: transaction.type,
+      hasMetadata: !!transaction.metadata,
+      agreementAcceptedTerms: transaction.metadata?.agreementData?.acceptedTerms
     });
 
-    // Initialize payment with Paystack
     const paymentData = {
       email: email,
-      amount: Math.round(amountNum * 100), // Convert to kobo
+      amount: Math.round(amountNum * 100),
       reference: transaction.reference,
       metadata: {
         transactionId: transaction._id.toString(),
@@ -704,7 +665,6 @@ const initializeServiceFeePayment = async (req, res, next) => {
 
     const paymentResponse = await initializePayment(paymentData);
 
-    // Update transaction with payment URL
     transaction.authorizationUrl = paymentResponse.data.authorization_url;
     transaction.accessCode = paymentResponse.data.access_code;
     await transaction.save();
@@ -733,7 +693,6 @@ const initializeServiceFeePayment = async (req, res, next) => {
   } catch (error) {
     console.error("💥 Service fee payment initialization error:", error);
 
-    // Log validation errors
     if (error.name === "ValidationError") {
       console.error("Validation errors:", error.errors);
       const messages = Object.values(error.errors).map((err) => err.message);
@@ -753,7 +712,6 @@ const verifyServiceFeePayment = async (req, res, next) => {
 
     console.log("🔍 Verifying service fee payment:", reference);
 
-    // ✅ FIRST: Check if transaction already completed and has event
     const existingTransaction = await Transaction.findOne({
       reference,
       type: "service_fee",
@@ -780,13 +738,12 @@ const verifyServiceFeePayment = async (req, res, next) => {
             metadata: existingTransaction.metadata,
           },
           event: existingTransaction.eventId,
-          isDraft: false, // Important: Mark as not draft
+          isDraft: false,
           alreadyProcessed: true,
         },
       });
     }
 
-    // ✅ SECOND: Check if transaction exists but no event created yet
     const transaction = await Transaction.findOne({
       reference,
       type: "service_fee",
@@ -796,7 +753,6 @@ const verifyServiceFeePayment = async (req, res, next) => {
       return next(new ErrorResponse("Service fee transaction not found", 404));
     }
 
-    // ✅ THIRD: If transaction is already completed but no event, return draft state
     if (transaction.status === "completed" && !transaction.eventId) {
       console.log("📋 Payment verified but waiting for event creation");
 
@@ -814,13 +770,11 @@ const verifyServiceFeePayment = async (req, res, next) => {
           },
           isDraft: true,
           eventData: transaction.metadata?.eventData || null,
-          // ADD THIS: Provide endpoint for completion
           completionEndpoint: `/api/v1/transactions/${reference}/complete-draft-event`,
         },
       });
     }
 
-    // ✅ FOURTH: Verify payment with Paystack (only for pending transactions)
     if (transaction.status === "pending") {
       console.log("💳 Verifying payment with Paystack...");
       const verification = await verifyPayment(reference);
@@ -832,12 +786,10 @@ const verifyServiceFeePayment = async (req, res, next) => {
       });
 
       if (verification.data.status === "success") {
-        // Mark transaction as completed
         await markTransactionAsCompleted(transaction, verification.data);
 
         const isDraft = transaction.metadata?.isDraft;
 
-        // ✅ Only update event if it exists and is not a draft
         if (!isDraft && transaction.eventId) {
           console.log(
             "📝 Updating existing event status:",
@@ -922,7 +874,6 @@ const verifyServiceFeePayment = async (req, res, next) => {
       }
     }
 
-    // ✅ FIFTH: Handle other transaction states
     console.log("ℹ️ Transaction in unexpected state:", {
       status: transaction.status,
       hasEventId: !!transaction.eventId,
@@ -949,6 +900,300 @@ const verifyServiceFeePayment = async (req, res, next) => {
     next(error);
   }
 };
+
+// @desc    Complete draft event creation after service fee payment
+// @route   POST /api/v1/transactions/:reference/complete-draft-event
+// @access  Private (Organizer only)
+const completeDraftEventCreation = async (req, res, next) => {
+  try {
+    const { reference } = req.params;
+    const { eventData } = req.body;
+
+    console.log("🎯 Completing draft event creation:", reference);
+    console.log("👤 Current user:", {
+      userId: req.user.userId,
+      role: req.user.role,
+      email: req.user.email
+    });
+
+    const transaction = await Transaction.findOne({
+      reference,
+      type: "service_fee",
+      status: "completed",
+    }).populate('userId', 'firstName lastName email role');
+
+    if (!transaction) {
+      return next(
+        new ErrorResponse("Transaction not found or not completed", 404)
+      );
+    }
+
+    console.log("💾 Transaction metadata:", {
+      hasMetadata: !!transaction?.metadata,
+      hasAgreementData: !!transaction?.metadata?.agreementData,
+      agreementData: transaction?.metadata?.agreementData
+    });
+
+    const transactionUserId = transaction.userId?._id?.toString();
+    const currentUserId = req.user.userId.toString();
+
+    console.log("📊 Transaction details:", {
+      transactionId: transaction._id,
+      transactionUserId: transactionUserId,
+      transactionUserEmail: transaction.userId?.email,
+      transactionUserRole: transaction.userId?.role,
+      currentUserId: currentUserId,
+      currentUserRole: req.user.role,
+      isDraft: transaction.metadata?.isDraft,
+      hasEventId: !!transaction.eventId
+    });
+
+    const isTransactionOwner = transactionUserId === currentUserId;
+    const isSuperAdmin = req.user.role === "superadmin";
+    const isOrganizer = req.user.role === "organizer";
+
+    console.log("🔐 Authorization check:", {
+      isTransactionOwner,
+      isSuperAdmin,
+      isOrganizer,
+      authorized: isTransactionOwner || isSuperAdmin,
+    });
+
+    if (!isTransactionOwner && !isSuperAdmin) {
+      console.log("❌ Authorization failed:", {
+        transactionOwner: transactionUserId,
+        currentUser: currentUserId,
+        userRole: req.user.role,
+      });
+      return next(
+        new ErrorResponse("Not authorized to complete this event. You must be the transaction owner or superadmin.", 403)
+      );
+    }
+
+    console.log("✅ Authorization successful - User owns this transaction");
+
+    if (transaction.eventId) {
+      const existingEvent = await Event.findById(transaction.eventId);
+      if (existingEvent) {
+        console.log("✅ Event already exists:", {
+          eventId: existingEvent._id,
+          title: existingEvent.title,
+          status: existingEvent.status
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Event already created",
+          data: {
+            transaction: {
+              _id: transaction._id,
+              reference: transaction.reference,
+              amount: transaction.totalAmount,
+              status: transaction.status,
+            },
+            event: existingEvent,
+            isDraft: false,
+          },
+        });
+      }
+    }
+
+    const isDraft = transaction.metadata?.isDraft;
+    const draftEventId = transaction.metadata?.draftEventId;
+
+    if (!isDraft) {
+      return next(new ErrorResponse("Not a draft event transaction", 400));
+    }
+
+    console.log("📝 Creating event from draft:", {
+      draftEventId,
+      hasEventData: !!eventData,
+      hasMetadataEventData: !!transaction.metadata?.eventData
+    });
+
+    if (!isOrganizer && !isSuperAdmin) {
+      return next(
+        new ErrorResponse("Only organizers can create events", 403)
+      );
+    }
+
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    const parseCapacity = (capacityValue) => {
+      if (capacityValue === undefined || capacityValue === null) {
+        return 100;
+      }
+      const num = Number(capacityValue);
+      if (isNaN(num)) {
+        return 100;
+      }
+      return Math.max(1, Math.round(num));
+    };
+
+    const parsePrice = (priceValue) => {
+      if (priceValue === undefined || priceValue === null) {
+        return 0;
+      }
+      const num = Number(priceValue);
+      return isNaN(num) ? 0 : Math.max(0, num);
+    };
+
+    const sourceEventData = eventData || transaction.metadata?.eventData || {};
+    
+    // ✅ CRITICAL FIX: Extract agreement data from transaction metadata
+    const agreementData = transaction.metadata?.agreementData || {};
+    
+    console.log("🔍 Raw event data for parsing:", {
+      rawCapacity: sourceEventData.capacity,
+      rawPrice: sourceEventData.price,
+      capacityType: typeof sourceEventData.capacity,
+      priceType: typeof sourceEventData.price,
+      hasAgreementData: !!agreementData,
+      agreementAcceptedTerms: agreementData.acceptedTerms,
+      fullAgreementData: agreementData
+    });
+
+    // ✅ CRITICAL: Build proper agreement object with acceptedTerms = true
+    const eventAgreement = {
+      acceptedTerms: true, // ✅ Always true for paid service fee events
+      acceptedAt: agreementData.acceptedAt ? new Date(agreementData.acceptedAt) : new Date(),
+      serviceFee: agreementData.serviceFee || { 
+        type: "percentage", 
+        amount: 5 
+      },
+      estimatedAttendance: agreementData.estimatedAttendance || transaction.metadata?.attendanceRange || "1-100",
+      paymentTerms: "upfront",
+      agreementVersion: agreementData.agreementVersion || "1.0",
+      termsUrl: agreementData.termsUrl || undefined
+    };
+
+    console.log("✅ Event agreement object prepared:", {
+      acceptedTerms: eventAgreement.acceptedTerms,
+      acceptedAt: eventAgreement.acceptedAt,
+      serviceFee: eventAgreement.serviceFee,
+      estimatedAttendance: eventAgreement.estimatedAttendance
+    });
+
+    const finalEventData = {
+      ...sourceEventData,
+      
+      capacity: parseCapacity(sourceEventData.capacity),
+      price: parsePrice(sourceEventData.price),
+      
+      organizer: req.user.userId,
+      status: "published",
+      isActive: true,
+      serviceFeePaymentStatus: "paid",
+      serviceFeeReference: reference,
+      serviceFeeTransaction: transaction._id,
+      publishedAt: new Date(),
+      
+      // ✅ CRITICAL: Add agreement object
+      agreement: eventAgreement,
+      
+      title: sourceEventData.title || "Event Title",
+      description: sourceEventData.description || "Event description",
+      date: sourceEventData.date || sourceEventData.startDate || new Date(),
+      startDate: sourceEventData.startDate || sourceEventData.date || new Date(),
+      endDate: sourceEventData.endDate || sourceEventData.startDate || sourceEventData.date || new Date(),
+      time: sourceEventData.time || "12:00",
+      endTime: sourceEventData.endTime || "13:00",
+      
+      city: sourceEventData.city || sourceEventData.state || "Lagos",
+      state: sourceEventData.state || "Lagos",
+      venue: sourceEventData.venue || "Venue",
+      address: sourceEventData.address || "Address",
+      category: sourceEventData.category || "Other",
+      eventType: sourceEventData.eventType || "physical",
+      
+      availableTickets: parseCapacity(sourceEventData.capacity),
+      totalTickets: parseCapacity(sourceEventData.capacity)
+    };
+
+    console.log("🛠 Final event data prepared:", {
+      title: finalEventData.title,
+      organizer: finalEventData.organizer,
+      capacity: finalEventData.capacity,
+      price: finalEventData.price,
+      capacityType: typeof finalEventData.capacity,
+      priceType: typeof finalEventData.price,
+      hasDate: !!finalEventData.date,
+      hasStartDate: !!finalEventData.startDate,
+      hasVenue: !!finalEventData.venue,
+      hasAgreement: !!finalEventData.agreement,
+      agreementAcceptedTerms: finalEventData.agreement?.acceptedTerms,
+      agreementServiceFee: finalEventData.agreement?.serviceFee,
+      agreementEstimatedAttendance: finalEventData.agreement?.estimatedAttendance
+    });
+
+    try {
+      const testEvent = new Event(finalEventData);
+      await testEvent.validate();
+      console.log("✅ Event validation passed");
+    } catch (validationError) {
+      console.error("❌ Event validation failed:", {
+        name: validationError.name,
+        message: validationError.message,
+        errors: validationError.errors
+      });
+      return next(
+        new ErrorResponse(`Event validation failed: ${validationError.message}`, 400)
+      );
+    }
+
+    const event = await Event.create(finalEventData);
+
+    transaction.eventId = event._id;
+    transaction.metadata.isDraft = false;
+    transaction.metadata.eventCreatedAt = new Date();
+    await transaction.save();
+
+    console.log("✅ Event created successfully:", {
+      eventId: event._id,
+      title: event.title,
+      status: event.status,
+      organizer: event.organizer,
+      capacity: event.capacity,
+      price: event.price,
+      serviceFeePaid: event.serviceFeePaymentStatus,
+      hasAgreement: !!event.agreement,
+      agreementAcceptedTerms: event.agreement?.acceptedTerms
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Event created and published successfully",
+      data: {
+        transaction: {
+          _id: transaction._id,
+          reference: transaction.reference,
+          amount: transaction.totalAmount,
+          status: transaction.status,
+        },
+        event,
+        isDraft: false,
+      },
+    });
+  } catch (error) {
+    console.error("💥 Error completing draft event:", error);
+    
+    if (error.name === 'ValidationError') {
+      console.error('Validation errors:', error.errors);
+      const errorMessages = Object.values(error.errors).map(err => err.message).join(', ');
+      return next(new ErrorResponse(`Event validation failed: ${errorMessages}`, 400));
+    }
+    
+    if (error.code === 11000) {
+      return next(new ErrorResponse('Event with similar details already exists', 400));
+    }
+    
+    next(error);
+  }
+};
+
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
@@ -989,7 +1234,6 @@ const paystackWebhook = async (req, res) => {
   }
 };
 
-// Webhook helper functions
 async function handleSuccessfulCharge(data) {
   try {
     const transaction = await Transaction.findOne({
@@ -999,7 +1243,6 @@ async function handleSuccessfulCharge(data) {
       await markTransactionAsCompleted(transaction, data);
 
       if (transaction.type === "event_booking") {
-        // Update associated booking status
         await Booking.findOneAndUpdate(
           { _id: transaction.bookingId },
           {
@@ -1008,7 +1251,6 @@ async function handleSuccessfulCharge(data) {
           }
         );
 
-        // Update event ticket counts
         const booking = await Booking.findById(transaction.bookingId);
         if (booking && booking.event) {
           await updateEventTicketAvailability(
@@ -1018,7 +1260,6 @@ async function handleSuccessfulCharge(data) {
           );
         }
       } else if (transaction.type === "service_fee") {
-        // Update event status for service fee payments
         await Event.findByIdAndUpdate(transaction.eventId, {
           status: "published",
           isActive: true,
@@ -1039,7 +1280,6 @@ async function handleFailedCharge(data) {
       await markTransactionAsFailed(transaction, data.gateway_response);
 
       if (transaction.type === "event_booking") {
-        // Update associated booking status
         await Booking.findOneAndUpdate(
           { _id: transaction.bookingId },
           {
@@ -1060,7 +1300,6 @@ async function handleRefundProcessed(data) {
       reference: data.reference,
     });
     if (transaction) {
-      // Manual refund completion
       transaction.refundStatus = "completed";
       transaction.refundProcessedAt = new Date();
       await transaction.save();
@@ -1069,278 +1308,6 @@ async function handleRefundProcessed(data) {
     console.error("Handle refund processed error:", error);
   }
 }
-// @desc    Complete draft event creation after service fee payment
-// @route   POST /api/v1/transactions/:reference/complete-draft-event
-// @access  Private (Organizer only)
-const completeDraftEventCreation = async (req, res, next) => {
-  try {
-    const { reference } = req.params;
-    const { eventData } = req.body;
-
-    console.log("🎯 Completing draft event creation:", reference);
-    console.log("👤 Current user:", {
-      userId: req.user.userId,
-      role: req.user.role,
-      email: req.user.email
-    });
-
-    // Find the service fee transaction with detailed population
-    const transaction = await Transaction.findOne({
-      reference,
-      type: "service_fee",
-      status: "completed",
-    }).populate('userId', 'firstName lastName email role');
-
-    if (!transaction) {
-      return next(
-        new ErrorResponse("Transaction not found or not completed", 404)
-      );
-    }
-
-    // ✅ FIX: Proper ObjectId comparison
-    const transactionUserId = transaction.userId?._id?.toString();
-    const currentUserId = req.user.userId.toString(); // Convert to string for comparison
-
-    console.log("📊 Transaction details:", {
-      transactionId: transaction._id,
-      transactionUserId: transactionUserId,
-      transactionUserEmail: transaction.userId?.email,
-      transactionUserRole: transaction.userId?.role,
-      currentUserId: currentUserId,
-      currentUserRole: req.user.role,
-      isDraft: transaction.metadata?.isDraft,
-      hasEventId: !!transaction.eventId
-    });
-
-    // ✅ FIXED AUTHORIZATION CHECK with proper ObjectId comparison
-    const isTransactionOwner = transactionUserId === currentUserId;
-    const isSuperAdmin = req.user.role === "superadmin";
-    const isOrganizer = req.user.role === "organizer";
-
-    console.log("🔐 Authorization check:", {
-      isTransactionOwner,
-      isSuperAdmin,
-      isOrganizer,
-      authorized: isTransactionOwner || isSuperAdmin,
-      transactionUserIdType: typeof transactionUserId,
-      currentUserIdType: typeof currentUserId,
-      idsMatch: transactionUserId === currentUserId
-    });
-
-    if (!isTransactionOwner && !isSuperAdmin) {
-      console.log("❌ Authorization failed:", {
-        transactionOwner: transactionUserId,
-        currentUser: currentUserId,
-        userRole: req.user.role,
-        exactMatch: transactionUserId === currentUserId
-      });
-      return next(
-        new ErrorResponse("Not authorized to complete this event. You must be the transaction owner or superadmin.", 403)
-      );
-    }
-
-    console.log("✅ Authorization successful - User owns this transaction");
-
-    // Check if event already exists
-    if (transaction.eventId) {
-      const existingEvent = await Event.findById(transaction.eventId);
-      if (existingEvent) {
-        console.log("✅ Event already exists:", {
-          eventId: existingEvent._id,
-          title: existingEvent.title,
-          status: existingEvent.status
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: "Event already created",
-          data: {
-            transaction: {
-              _id: transaction._id,
-              reference: transaction.reference,
-              amount: transaction.totalAmount,
-              status: transaction.status,
-            },
-            event: existingEvent,
-            isDraft: false,
-          },
-        });
-      }
-    }
-
-    // Check if this is a draft transaction
-    const isDraft = transaction.metadata?.isDraft;
-    const draftEventId = transaction.metadata?.draftEventId;
-
-    if (!isDraft) {
-      return next(new ErrorResponse("Not a draft event transaction", 400));
-    }
-
-    console.log("📝 Creating event from draft:", {
-      draftEventId,
-      hasEventData: !!eventData,
-      hasMetadataEventData: !!transaction.metadata?.eventData
-    });
-
-    // ✅ ADDITIONAL VALIDATION: Ensure the current user can create events
-    if (!isOrganizer && !isSuperAdmin) {
-      return next(
-        new ErrorResponse("Only organizers can create events", 403)
-      );
-    }
-
-    // ✅ VERIFY USER EXISTS AND CAN CREATE EVENTS
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return next(new ErrorResponse("User not found", 404));
-    }
-
-    // ✅ FIX: Parse and validate capacity to ensure it's a whole number
-    const parseCapacity = (capacityValue) => {
-      if (capacityValue === undefined || capacityValue === null) {
-        return 100; // Default capacity
-      }
-      
-      // Convert to number and ensure it's an integer
-      const num = Number(capacityValue);
-      if (isNaN(num)) {
-        return 100; // Default if not a number
-      }
-      
-      // Round to nearest whole number and ensure minimum of 1
-      return Math.max(1, Math.round(num));
-    };
-
-    // ✅ FIX: Parse and validate price to ensure it's a valid number
-    const parsePrice = (priceValue) => {
-      if (priceValue === undefined || priceValue === null) {
-        return 0; // Default price for free events
-      }
-      
-      const num = Number(priceValue);
-      return isNaN(num) ? 0 : Math.max(0, num);
-    };
-
-    // Get event data from either request or transaction metadata
-    const sourceEventData = eventData || transaction.metadata?.eventData || {};
-    
-    console.log("🔍 Raw event data for parsing:", {
-      rawCapacity: sourceEventData.capacity,
-      rawPrice: sourceEventData.price,
-      capacityType: typeof sourceEventData.capacity,
-      priceType: typeof sourceEventData.price
-    });
-
-    // Prepare event creation data with proper parsing
-    const finalEventData = {
-      // Use provided event data or metadata from transaction
-      ...sourceEventData,
-      
-      // ✅ FIXED: Ensure capacity is a whole number
-      capacity: parseCapacity(sourceEventData.capacity),
-      
-      // ✅ FIXED: Ensure price is a valid number
-      price: parsePrice(sourceEventData.price),
-      
-      // Ensure critical fields are set correctly
-      organizer: req.user.userId, // Always set to current user
-      status: "published",
-      isActive: true,
-      serviceFeePaymentStatus: "paid",
-      serviceFeeReference: reference,
-      serviceFeeTransaction: transaction._id,
-      publishedAt: new Date(),
-      
-      // Ensure required fields exist with defaults
-      title: sourceEventData.title || "Event Title",
-      description: sourceEventData.description || "Event description",
-      date: sourceEventData.date || new Date(),
-      
-      // Map frontend fields to database fields
-      city: sourceEventData.state || sourceEventData.city || "Lagos", // Map state to city
-      venue: sourceEventData.venue || "Venue",
-      address: sourceEventData.address || "Address",
-      category: sourceEventData.category || "Other",
-      
-      // Ensure other numeric fields are properly parsed
-      availableTickets: parseCapacity(sourceEventData.capacity),
-      totalTickets: parseCapacity(sourceEventData.capacity)
-    };
-
-    console.log("🛠 Final event data prepared:", {
-      title: finalEventData.title,
-      organizer: finalEventData.organizer,
-      capacity: finalEventData.capacity,
-      price: finalEventData.price,
-      capacityType: typeof finalEventData.capacity,
-      priceType: typeof finalEventData.price,
-      hasDate: !!finalEventData.date,
-      hasVenue: !!finalEventData.venue
-    });
-
-    // Validate the final event data before creation
-    try {
-      // Test if the data passes Mongoose validation
-      const testEvent = new Event(finalEventData);
-      await testEvent.validate();
-    } catch (validationError) {
-      console.error("❌ Event validation failed:", validationError);
-      return next(
-        new ErrorResponse(`Event validation failed: ${validationError.message}`, 400)
-      );
-    }
-
-    // Create the actual event
-    const event = await Event.create(finalEventData);
-
-    // Update transaction with the created event ID
-    transaction.eventId = event._id;
-    transaction.metadata.isDraft = false;
-    transaction.metadata.eventCreatedAt = new Date();
-    await transaction.save();
-
-    console.log("✅ Event created successfully:", {
-      eventId: event._id,
-      title: event.title,
-      status: event.status,
-      organizer: event.organizer,
-      capacity: event.capacity,
-      price: event.price,
-      serviceFeePaid: event.serviceFeePaymentStatus
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "Event created and published successfully",
-      data: {
-        transaction: {
-          _id: transaction._id,
-          reference: transaction.reference,
-          amount: transaction.totalAmount,
-          status: transaction.status,
-        },
-        event,
-        isDraft: false,
-      },
-    });
-  } catch (error) {
-    console.error("💥 Error completing draft event:", error);
-    
-    // More detailed error logging
-    if (error.name === 'ValidationError') {
-      console.error('Validation errors:', error.errors);
-      const errorMessages = Object.values(error.errors).map(err => err.message).join(', ');
-      return next(new ErrorResponse(`Event validation failed: ${errorMessages}`, 400));
-    }
-    
-    // Handle duplicate key errors
-    if (error.code === 11000) {
-      return next(new ErrorResponse('Event with similar details already exists', 400));
-    }
-    
-    next(error);
-  }
-};
 
 module.exports = {
   initializeTransaction,
