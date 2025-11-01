@@ -905,8 +905,8 @@ const verifyServiceFeePayment = async (req, res, next) => {
 };
 
 // ============================================
-// COMPLETE FIXED completeDraftEventCreation FUNCTION
-// Replace your existing completeDraftEventCreation function with this
+// COMPLETE FIXED transformTicketTypes AND completeDraftEventCreation
+// Replace both functions with these corrected versions
 // ============================================
 
 // Helper function to transform ticket types - ADD THIS BEFORE completeDraftEventCreation
@@ -919,102 +919,89 @@ const transformTicketTypes = (ticketTypes) => {
   return ticketTypes.map((ticket, index) => {
     console.log(`\n🎫 Processing ticket ${index + 1}:`, {
       name: ticket.name,
+      price: ticket.price,
+      capacity: ticket.capacity,
       requiresApproval: ticket.requiresApproval,
       approvalQuestionsType: typeof ticket.approvalQuestions,
-      approvalQuestionsValue: ticket.approvalQuestions,
+      approvalQuestionsValue: ticket.approvalQuestions
     });
 
+    // ✅ Parse capacity BEFORE creating object
+    const capacityValue = parseInt(ticket.capacity) || parseInt(ticket.quantity) || 100;
+
     const transformedTicket = {
-      name: ticket.name || "General Admission",
+      name: ticket.name || 'General Admission',
       price: parseFloat(ticket.price) || 0,
-      capacity: capacityValue,
-      description: ticket.description || "",
-      requiresApproval:
-        ticket.requiresApproval === true || ticket.requiresApproval === "true",
+      capacity: capacityValue, // ✅ Use parsed capacity
+      description: ticket.description || '',
+      requiresApproval: ticket.requiresApproval === true || ticket.requiresApproval === 'true',
     };
 
     // ✅ CRITICAL: Transform approval questions to proper schema format
     if (transformedTicket.requiresApproval && ticket.approvalQuestions) {
+      
       // Case 1: Already an array
       if (Array.isArray(ticket.approvalQuestions)) {
-        transformedTicket.approvalQuestions = ticket.approvalQuestions
-          .map((q) => {
-            if (typeof q === "string") {
-              return { question: q, type: "text", required: true };
-            }
-            return {
-              question: q.question || q.text || "",
-              type: q.type || "text",
-              required: q.required !== false,
-              options: q.options || undefined,
-            };
-          })
-          .filter((q) => q.question && q.question.trim());
-      }
+        transformedTicket.approvalQuestions = ticket.approvalQuestions.map(q => {
+          if (typeof q === 'string') {
+            return { question: q, type: 'text', required: true };
+          }
+          return {
+            question: q.question || q.text || '',
+            type: q.type || 'text',
+            required: q.required !== false,
+            options: q.options || undefined
+          };
+        }).filter(q => q.question && q.question.trim());
+      } 
       // Case 2: Single string
-      else if (typeof ticket.approvalQuestions === "string") {
-        console.log(
-          `✅ Converting string to array: "${ticket.approvalQuestions}"`
-        );
-        transformedTicket.approvalQuestions = [
-          {
-            question: ticket.approvalQuestions,
-            type: "text",
-            required: true,
-          },
-        ];
+      else if (typeof ticket.approvalQuestions === 'string') {
+        console.log(`✅ Converting string to array: "${ticket.approvalQuestions}"`);
+        transformedTicket.approvalQuestions = [{
+          question: ticket.approvalQuestions,
+          type: 'text',
+          required: true
+        }];
       }
       // Case 3: Single object
-      else if (
-        typeof ticket.approvalQuestions === "object" &&
-        ticket.approvalQuestions !== null
-      ) {
+      else if (typeof ticket.approvalQuestions === 'object' && ticket.approvalQuestions !== null) {
         console.log(`✅ Wrapping object in array:`, ticket.approvalQuestions);
-        transformedTicket.approvalQuestions = [
-          {
-            question:
-              ticket.approvalQuestions.question ||
-              ticket.approvalQuestions.text ||
-              "",
-            type: ticket.approvalQuestions.type || "text",
-            required: ticket.approvalQuestions.required !== false,
-            options: ticket.approvalQuestions.options || undefined,
-          },
-        ];
+        transformedTicket.approvalQuestions = [{
+          question: ticket.approvalQuestions.question || ticket.approvalQuestions.text || '',
+          type: ticket.approvalQuestions.type || 'text',
+          required: ticket.approvalQuestions.required !== false,
+          options: ticket.approvalQuestions.options || undefined
+        }];
       }
-
+      
       // Ensure at least one question
-      if (
-        !transformedTicket.approvalQuestions ||
-        transformedTicket.approvalQuestions.length === 0
-      ) {
-        console.warn(
-          `⚠️ Ticket "${ticket.name}" requires approval but has no valid questions.`
-        );
-        transformedTicket.approvalQuestions = [
-          {
-            question: "Why would you like to attend this event?",
-            type: "text",
-            required: true,
-          },
-        ];
+      if (!transformedTicket.approvalQuestions || transformedTicket.approvalQuestions.length === 0) {
+        console.warn(`⚠️ Ticket "${ticket.name}" requires approval but has no valid questions.`);
+        transformedTicket.approvalQuestions = [{
+          question: 'Why would you like to attend this event?',
+          type: 'text',
+          required: true
+        }];
       }
-
-      console.log(
-        `✅ Final approval questions for "${transformedTicket.name}":`,
-        transformedTicket.approvalQuestions
-      );
+      
+      console.log(`✅ Final approval questions for "${transformedTicket.name}":`, transformedTicket.approvalQuestions);
     } else {
       transformedTicket.approvalQuestions = [];
     }
 
-    // Add additional fields
+    // Add additional fields if present
     if (ticket.benefits) transformedTicket.benefits = ticket.benefits;
     if (ticket.accessType) transformedTicket.accessType = ticket.accessType;
-    if (ticket.maxAttendees)
-      transformedTicket.maxAttendees = parseInt(ticket.maxAttendees);
-    if (ticket.approvalDeadline)
-      transformedTicket.approvalDeadline = new Date(ticket.approvalDeadline);
+    if (ticket.maxAttendees) transformedTicket.maxAttendees = parseInt(ticket.maxAttendees);
+    if (ticket.approvalDeadline) transformedTicket.approvalDeadline = new Date(ticket.approvalDeadline);
+
+    console.log(`✅ Transformed ticket:`, {
+      name: transformedTicket.name,
+      price: transformedTicket.price,
+      capacity: transformedTicket.capacity,
+      requiresApproval: transformedTicket.requiresApproval,
+      approvalQuestionsCount: transformedTicket.approvalQuestions?.length || 0
+    });
 
     return transformedTicket;
   });
@@ -1032,14 +1019,14 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("👤 Current user:", {
       userId: req.user.userId,
       role: req.user.role,
-      email: req.user.email,
+      email: req.user.email
     });
 
     const transaction = await Transaction.findOne({
       reference,
       type: "service_fee",
       status: "completed",
-    }).populate("userId", "firstName lastName email role");
+    }).populate('userId', 'firstName lastName email role');
 
     if (!transaction) {
       return next(
@@ -1051,7 +1038,7 @@ const completeDraftEventCreation = async (req, res, next) => {
       hasMetadata: !!transaction?.metadata,
       hasAgreementData: !!transaction?.metadata?.agreementData,
       hasEventData: !!transaction?.metadata?.eventData,
-      hasTicketTypes: !!transaction?.metadata?.eventData?.ticketTypes,
+      hasTicketTypes: !!transaction?.metadata?.eventData?.ticketTypes
     });
 
     const transactionUserId = transaction.userId?._id?.toString();
@@ -1117,79 +1104,64 @@ const completeDraftEventCreation = async (req, res, next) => {
 
     const sourceEventData = eventData || transaction.metadata?.eventData || {};
     const agreementData = transaction.metadata?.agreementData || {};
-
+    
     console.log("🔍 Source event data:", {
       hasTicketTypes: !!sourceEventData.ticketTypes,
       ticketTypesCount: sourceEventData.ticketTypes?.length,
-      firstTicket: sourceEventData.ticketTypes?.[0]
-        ? {
-            name: sourceEventData.ticketTypes[0].name,
-            requiresApproval: sourceEventData.ticketTypes[0].requiresApproval,
-            approvalQuestionsType:
-              typeof sourceEventData.ticketTypes[0].approvalQuestions,
-            approvalQuestions: sourceEventData.ticketTypes[0].approvalQuestions,
-          }
-        : null,
+      firstTicket: sourceEventData.ticketTypes?.[0] ? {
+        name: sourceEventData.ticketTypes[0].name,
+        price: sourceEventData.ticketTypes[0].price,
+        capacity: sourceEventData.ticketTypes[0].capacity,
+        requiresApproval: sourceEventData.ticketTypes[0].requiresApproval,
+        approvalQuestionsType: typeof sourceEventData.ticketTypes[0].approvalQuestions,
+        approvalQuestions: sourceEventData.ticketTypes[0].approvalQuestions
+      } : null
     });
 
     // Build agreement object
-    const validEstimatedAttendance = [
-      "1-100",
-      "101-500",
-      "501-1000",
-      "1001-5000",
-      "5001+",
-    ];
-    const rawEstimatedAttendance =
-      agreementData.estimatedAttendance ||
-      transaction.metadata?.attendanceRange;
-
+    const validEstimatedAttendance = ["1-100", "101-500", "501-1000", "1001-5000", "5001+"];
+    const rawEstimatedAttendance = agreementData.estimatedAttendance || transaction.metadata?.attendanceRange;
+    
     let estimatedAttendance = "1-100";
-    if (
-      rawEstimatedAttendance &&
-      validEstimatedAttendance.includes(rawEstimatedAttendance)
-    ) {
+    if (rawEstimatedAttendance && validEstimatedAttendance.includes(rawEstimatedAttendance)) {
       estimatedAttendance = rawEstimatedAttendance;
     }
-
+    
     const eventAgreement = {
       acceptedTerms: true,
-      acceptedAt: agreementData.acceptedAt
-        ? new Date(agreementData.acceptedAt)
-        : new Date(),
+      acceptedAt: agreementData.acceptedAt ? new Date(agreementData.acceptedAt) : new Date(),
       serviceFee: agreementData.serviceFee || { type: "percentage", amount: 5 },
       estimatedAttendance: estimatedAttendance,
       paymentTerms: "upfront",
       agreementVersion: agreementData.agreementVersion || "1.0",
-      termsUrl: agreementData.termsUrl || undefined,
+      termsUrl: agreementData.termsUrl || undefined
     };
 
     // ✅ CRITICAL: Transform ticket types
-    const transformedTicketTypes = sourceEventData.ticketTypes
+    const transformedTicketTypes = sourceEventData.ticketTypes 
       ? transformTicketTypes(sourceEventData.ticketTypes)
       : [];
 
     console.log("🎫 Ticket types transformation complete:", {
       originalCount: sourceEventData.ticketTypes?.length || 0,
       transformedCount: transformedTicketTypes.length,
-      ticketsWithApproval: transformedTicketTypes.filter(
-        (t) => t.requiresApproval
-      ).length,
-      details: transformedTicketTypes.map((t) => ({
+      ticketsWithApproval: transformedTicketTypes.filter(t => t.requiresApproval).length,
+      details: transformedTicketTypes.map(t => ({
         name: t.name,
+        price: t.price,
+        capacity: t.capacity,
         requiresApproval: t.requiresApproval,
-        approvalQuestionsCount: t.approvalQuestions?.length || 0,
-        approvalQuestions: t.approvalQuestions,
-      })),
+        approvalQuestionsCount: t.approvalQuestions?.length || 0
+      }))
     });
 
     // Build final event data
     const finalEventData = {
       ...sourceEventData,
-
+      
       capacity: parseCapacity(sourceEventData.capacity),
       price: parsePrice(sourceEventData.price),
-
+      
       organizer: req.user.userId,
       status: "published",
       isActive: true,
@@ -1197,40 +1169,41 @@ const completeDraftEventCreation = async (req, res, next) => {
       serviceFeeReference: reference,
       serviceFeeTransaction: transaction._id,
       publishedAt: new Date(),
-
+      
       agreement: eventAgreement,
-
+      
       title: sourceEventData.title || "Event Title",
       description: sourceEventData.description || "Event description",
       date: sourceEventData.date || sourceEventData.startDate || new Date(),
-      startDate:
-        sourceEventData.startDate || sourceEventData.date || new Date(),
-      endDate:
-        sourceEventData.endDate ||
-        sourceEventData.startDate ||
-        sourceEventData.date ||
-        new Date(),
+      startDate: sourceEventData.startDate || sourceEventData.date || new Date(),
+      endDate: sourceEventData.endDate || sourceEventData.startDate || sourceEventData.date || new Date(),
       time: sourceEventData.time || "12:00",
       endTime: sourceEventData.endTime || "13:00",
-
+      
       city: sourceEventData.city || sourceEventData.state || "Lagos",
       state: sourceEventData.state || "Lagos",
       venue: sourceEventData.venue || "Venue",
       address: sourceEventData.address || "Address",
       category: sourceEventData.category || "Other",
       eventType: sourceEventData.eventType || "physical",
-
+      
       availableTickets: parseCapacity(sourceEventData.capacity),
       totalTickets: parseCapacity(sourceEventData.capacity),
-
+      
       // ✅ CRITICAL: Use transformed ticket types
-      ticketTypes: transformedTicketTypes,
+      ticketTypes: transformedTicketTypes
     };
 
     console.log("🛠 Final event data prepared:", {
       title: finalEventData.title,
       ticketTypesCount: finalEventData.ticketTypes?.length,
       hasAgreement: !!finalEventData.agreement,
+      ticketTypes: finalEventData.ticketTypes?.map(t => ({
+        name: t.name,
+        price: t.price,
+        capacity: t.capacity,
+        hasApprovalQuestions: t.approvalQuestions?.length > 0
+      }))
     });
 
     // Validate before creating
@@ -1239,12 +1212,13 @@ const completeDraftEventCreation = async (req, res, next) => {
       await testEvent.validate();
       console.log("✅ Event validation passed");
     } catch (validationError) {
-      console.error("❌ Event validation failed:", validationError.message);
+      console.error("❌ Event validation failed:", {
+        name: validationError.name,
+        message: validationError.message,
+        errors: validationError.errors
+      });
       return next(
-        new ErrorResponse(
-          `Event validation failed: ${validationError.message}`,
-          400
-        )
+        new ErrorResponse(`Event validation failed: ${validationError.message}`, 400)
       );
     }
 
@@ -1260,7 +1234,7 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("✅ Event created successfully:", {
       eventId: event._id,
       title: event.title,
-      ticketTypes: event.ticketTypes?.length,
+      ticketTypes: event.ticketTypes?.length
     });
 
     res.status(201).json({
@@ -1279,22 +1253,16 @@ const completeDraftEventCreation = async (req, res, next) => {
     });
   } catch (error) {
     console.error("💥 Error completing draft event:", error);
-
-    if (error.name === "ValidationError") {
-      const errorMessages = Object.values(error.errors)
-        .map((err) => err.message)
-        .join(", ");
-      return next(
-        new ErrorResponse(`Event validation failed: ${errorMessages}`, 400)
-      );
+    
+    if (error.name === 'ValidationError') {
+      const errorMessages = Object.values(error.errors).map(err => err.message).join(', ');
+      return next(new ErrorResponse(`Event validation failed: ${errorMessages}`, 400));
     }
-
+    
     if (error.code === 11000) {
-      return next(
-        new ErrorResponse("Event with similar details already exists", 400)
-      );
+      return next(new ErrorResponse('Event with similar details already exists', 400));
     }
-
+    
     next(error);
   }
 };
