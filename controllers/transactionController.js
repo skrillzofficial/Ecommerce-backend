@@ -102,7 +102,7 @@ const initializeTransaction = async (req, res, next) => {
 
     const paymentData = {
       email: email,
-      amount: Math.round(amountNum * 1),
+      amount: Math.round(amountNum * 100),
       reference: transaction.reference,
       metadata: {
         bookingId: bookingId,
@@ -1057,6 +1057,18 @@ const completeDraftEventCreation = async (req, res, next) => {
     });
 
     // ✅ CRITICAL: Build proper agreement object with acceptedTerms = true
+    // Valid enum values: "1-100", "101-500", "501-1000", "1001-5000", "5001+"
+    const validEstimatedAttendance = ["1-100", "101-500", "501-1000", "1001-5000", "5001+"];
+    const rawEstimatedAttendance = agreementData.estimatedAttendance || transaction.metadata?.attendanceRange;
+    
+    // Ensure estimatedAttendance is a valid enum value
+    let estimatedAttendance = "1-100"; // Default
+    if (rawEstimatedAttendance && validEstimatedAttendance.includes(rawEstimatedAttendance)) {
+      estimatedAttendance = rawEstimatedAttendance;
+    } else {
+      console.warn("⚠️ Invalid estimatedAttendance:", rawEstimatedAttendance, "- using default: 1-100");
+    }
+    
     const eventAgreement = {
       acceptedTerms: true, // ✅ Always true for paid service fee events
       acceptedAt: agreementData.acceptedAt ? new Date(agreementData.acceptedAt) : new Date(),
@@ -1064,7 +1076,7 @@ const completeDraftEventCreation = async (req, res, next) => {
         type: "percentage", 
         amount: 5 
       },
-      estimatedAttendance: agreementData.estimatedAttendance || transaction.metadata?.attendanceRange || "1-100",
+      estimatedAttendance: estimatedAttendance, // ✅ Guaranteed valid enum value
       paymentTerms: "upfront",
       agreementVersion: agreementData.agreementVersion || "1.0",
       termsUrl: agreementData.termsUrl || undefined
