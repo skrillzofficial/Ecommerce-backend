@@ -904,136 +904,6 @@ const verifyServiceFeePayment = async (req, res, next) => {
   }
 };
 
-// ============================================
-// COMPLETE FIXED transformTicketTypes AND completeDraftEventCreation
-// Replace both functions with these corrected versions
-// ============================================
-
-// Helper function to transform ticket types - ADD THIS BEFORE completeDraftEventCreation
-const transformTicketTypes = (ticketTypes) => {
-  if (!Array.isArray(ticketTypes)) {
-    console.warn("⚠️ ticketTypes is not an array:", typeof ticketTypes);
-    return [];
-  }
-
-  return ticketTypes.map((ticket, index) => {
-    console.log(`\n🎫 Processing ticket ${index + 1}:`, {
-      name: ticket.name,
-      price: ticket.price,
-      capacity: ticket.capacity,
-      requiresApproval: ticket.requiresApproval,
-      approvalQuestionsType: typeof ticket.approvalQuestions,
-      approvalQuestionsValue: ticket.approvalQuestions,
-    });
-
-    // ✅ Parse capacity BEFORE creating object
-    const capacityValue =
-      parseInt(ticket.capacity) || parseInt(ticket.quantity) || 100;
-
-    const transformedTicket = {
-      name: ticket.name || "General Admission",
-      price: parseFloat(ticket.price) || 0,
-      capacity: capacityValue, // ✅ Use parsed capacity
-      description: ticket.description || "",
-      requiresApproval:
-        ticket.requiresApproval === true || ticket.requiresApproval === "true",
-    };
-
-    // ✅ CRITICAL: Transform approval questions to proper schema format
-    if (transformedTicket.requiresApproval && ticket.approvalQuestions) {
-      // Case 1: Already an array
-      if (Array.isArray(ticket.approvalQuestions)) {
-        transformedTicket.approvalQuestions = ticket.approvalQuestions
-          .map((q) => {
-            if (typeof q === "string") {
-              return { question: q, type: "text", required: true };
-            }
-            return {
-              question: q.question || q.text || "",
-              type: q.type || "text",
-              required: q.required !== false,
-              options: q.options || undefined,
-            };
-          })
-          .filter((q) => q.question && q.question.trim());
-      }
-      // Case 2: Single string
-      else if (typeof ticket.approvalQuestions === "string") {
-        console.log(
-          `✅ Converting string to array: "${ticket.approvalQuestions}"`
-        );
-        transformedTicket.approvalQuestions = [
-          {
-            question: ticket.approvalQuestions,
-            type: "text",
-            required: true,
-          },
-        ];
-      }
-      // Case 3: Single object
-      else if (
-        typeof ticket.approvalQuestions === "object" &&
-        ticket.approvalQuestions !== null
-      ) {
-        console.log(`✅ Wrapping object in array:`, ticket.approvalQuestions);
-        transformedTicket.approvalQuestions = [
-          {
-            question:
-              ticket.approvalQuestions.question ||
-              ticket.approvalQuestions.text ||
-              "",
-            type: ticket.approvalQuestions.type || "text",
-            required: ticket.approvalQuestions.required !== false,
-            options: ticket.approvalQuestions.options || undefined,
-          },
-        ];
-      }
-
-      // Ensure at least one question
-      if (
-        !transformedTicket.approvalQuestions ||
-        transformedTicket.approvalQuestions.length === 0
-      ) {
-        console.warn(
-          `⚠️ Ticket "${ticket.name}" requires approval but has no valid questions.`
-        );
-        transformedTicket.approvalQuestions = [
-          {
-            question: "Why would you like to attend this event?",
-            type: "text",
-            required: true,
-          },
-        ];
-      }
-
-      console.log(
-        `✅ Final approval questions for "${transformedTicket.name}":`,
-        transformedTicket.approvalQuestions
-      );
-    } else {
-      transformedTicket.approvalQuestions = [];
-    }
-
-    // Add additional fields if present
-    if (ticket.benefits) transformedTicket.benefits = ticket.benefits;
-    if (ticket.accessType) transformedTicket.accessType = ticket.accessType;
-    if (ticket.maxAttendees)
-      transformedTicket.maxAttendees = parseInt(ticket.maxAttendees);
-    if (ticket.approvalDeadline)
-      transformedTicket.approvalDeadline = new Date(ticket.approvalDeadline);
-
-    console.log(`✅ Transformed ticket:`, {
-      name: transformedTicket.name,
-      price: transformedTicket.price,
-      capacity: transformedTicket.capacity,
-      requiresApproval: transformedTicket.requiresApproval,
-      approvalQuestionsCount: transformedTicket.approvalQuestions?.length || 0,
-    });
-
-    return transformedTicket;
-  });
-};
-
 // @desc    Complete draft event creation after service fee payment
 // @route   POST /api/v1/transactions/:reference/complete-draft-event
 // @access  Private (Organizer only)
@@ -1044,16 +914,31 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("🎯 Completing draft event creation:", reference);
 
     // ✅ CRITICAL FIX: Check if event already exists for this transaction FIRST
-    const existingTransaction = await Transaction.findOne({
+    // Find transaction (any status - remove "completed" requirement)
+    let transaction = await Transaction.findOne({
       reference,
-      type: "service_fee",
-      status: "completed",
+      type: "service_fee", // ✅ Don't require status: "completed"
     }).populate("eventId");
 
-    if (!existingTransaction) {
-      return next(
-        new ErrorResponse("Transaction not found or not completed", 404)
-      );
+    if (!transaction) {
+      return next(new ErrorResponse("Transaction not found", 404));
+    }
+
+    // If transaction is still pending, verify payment first
+    if (transaction.status === "pending") {
+      console.log("💳 Verifying payment with Paystack...");
+
+      const verification = await verifyPayment(reference);
+
+      if (verification.data.status === "success") {
+        transaction.status = "completed";
+        transaction.paymentDetails = verification.data;
+        transaction.completedAt = new Date();
+        await transaction.save();
+        console.log("✅ Transaction updated to completed");
+      } else {
+        return next(new ErrorResponse("Payment verification failed", 400));
+      }
     }
 
     // ✅ CRITICAL: If event already exists, return it immediately
