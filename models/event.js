@@ -874,6 +874,8 @@ eventSchema.pre("save", function (next) {
   next();
 });
 
+// Replace the problematic pre-save hook around line 880-920 with this fixed version:
+
 eventSchema.pre("save", function (next) {
   if (this.communityEnabled) {
     const communityPlatforms = ["whatsapp", "telegram", "discord", "slack"];
@@ -889,14 +891,17 @@ eventSchema.pre("save", function (next) {
     }
   }
 
-  if (this.status === "published") {
-    console.log("🔍 Model Pre-save Check for ALL events:");
+  // ✅ FIX: Only validate terms when publishing OR when status/agreement is being modified
+  if (this.status === "published" && (this.isNew || this.isModified('status') || this.isModified('agreement'))) {
+    console.log("🔍 Model Pre-save Check for publishing event:");
     console.log(" - Agreement:", this.agreement);
     console.log(" - Accepted terms:", this.agreement?.acceptedTerms);
+    console.log(" - Is New:", this.isNew);
+    console.log(" - Is Modified Status:", this.isModified('status'));
 
     if (!this.agreement?.acceptedTerms) {
       console.log("❌ Model validation failing: Terms not accepted for event");
-      return next(new Error("Terms must be accepted for all events"));
+      return next(new Error("Terms must be accepted before publishing events"));
     }
 
     if (!this.agreement.acceptedAt) this.agreement.acceptedAt = new Date();
