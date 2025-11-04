@@ -562,6 +562,9 @@ const initializeServiceFeePayment = async (req, res, next) => {
       email,
       hasAgreementData: !!metadata?.agreementData,
       agreementAcceptedTerms: metadata?.agreementData?.acceptedTerms,
+      // ✅ NEW: Log images info
+      hasImages: !!metadata?.eventData?.images,
+      imagesCount: metadata?.eventData?.images?.length || 0,
     });
 
     let event = null;
@@ -583,7 +586,19 @@ const initializeServiceFeePayment = async (req, res, next) => {
 
     console.log("✅ Generated reference:", reference);
 
-    // ✅ CRITICAL FIX: Ensure agreement data is stored in metadata
+    // ✅ CRITICAL FIX: Ensure event data includes images
+    const eventData = metadata?.eventData || {};
+
+    // Log what we received for images
+    console.log("📸 Images in request metadata:", {
+      hasImages: !!eventData.images,
+      imagesType: Array.isArray(eventData.images)
+        ? "array"
+        : typeof eventData.images,
+      imagesCount: eventData.images?.length || 0,
+      firstImage: eventData.images?.[0],
+    });
+
     const transactionData = {
       reference: reference,
       userId: req.user.userId,
@@ -597,21 +612,20 @@ const initializeServiceFeePayment = async (req, res, next) => {
       discountAmount: 0,
       currency: "NGN",
       eventTitle:
-        metadata?.eventTitle ||
-        metadata?.eventData?.title ||
-        "Event Service Fee",
-      eventStartDate:
-        metadata?.eventData?.startDate ||
-        metadata?.eventData?.date ||
-        new Date(),
+        metadata?.eventTitle || eventData.title || "Event Service Fee",
+      eventStartDate: eventData.startDate || eventData.date || new Date(),
       status: "pending",
       paymentMethod: "card",
       paymentGateway: "paystack",
       metadata: {
         isDraft: isDraftEvent,
         draftEventId: isDraftEvent ? eventId : null,
-        eventData: metadata?.eventData || {},
-        // ✅ CRITICAL: Store agreement data with acceptedTerms = true
+        // ✅ CRITICAL: Store complete event data WITH images
+        eventData: {
+          ...eventData,
+          // Ensure images are properly included
+          images: eventData.images || [],
+        },
         agreementData: {
           ...(metadata?.agreementData || {}),
           acceptedTerms: true,
@@ -624,13 +638,16 @@ const initializeServiceFeePayment = async (req, res, next) => {
       },
     };
 
-    console.log("📦 Transaction data prepared with agreement:", {
+    console.log("📦 Transaction data prepared:", {
       reference: transactionData.reference,
       type: transactionData.type,
       isDraft: isDraftEvent,
       hasAgreementData: !!transactionData.metadata.agreementData,
       agreementAcceptedTerms:
         transactionData.metadata.agreementData.acceptedTerms,
+      // ✅ NEW: Log images in final transaction data
+      hasImages: !!transactionData.metadata.eventData.images,
+      imagesCount: transactionData.metadata.eventData.images?.length || 0,
     });
 
     const transaction = await Transaction.create(transactionData);
@@ -642,6 +659,8 @@ const initializeServiceFeePayment = async (req, res, next) => {
       hasMetadata: !!transaction.metadata,
       agreementAcceptedTerms:
         transaction.metadata?.agreementData?.acceptedTerms,
+      // ✅ NEW: Verify images were saved
+      imagesInTransaction: transaction.metadata?.eventData?.images?.length || 0,
     });
 
     const paymentData = {
@@ -927,6 +946,8 @@ const completeDraftEventCreation = async (req, res, next) => {
       id: transaction._id,
       status: transaction.status,
       hasEvent: !!transaction.eventId,
+      hasMetadata: !!transaction.metadata,
+      hasEventData: !!transaction.metadata?.eventData,
     });
 
     // ✅ STEP 2: If event already exists, return it immediately
@@ -956,7 +977,9 @@ const completeDraftEventCreation = async (req, res, next) => {
 
     // ✅ STEP 3: If transaction is pending, verify payment with Paystack
     if (transaction.status === "pending") {
-      console.log("💳 Transaction is pending, verifying payment with Paystack...");
+      console.log(
+        "💳 Transaction is pending, verifying payment with Paystack..."
+      );
 
       const verification = await verifyPayment(reference);
 
@@ -971,7 +994,10 @@ const completeDraftEventCreation = async (req, res, next) => {
 
         console.log("✅ Transaction status updated to completed");
       } else {
-        console.log("❌ Payment verification failed:", verification.data.status);
+        console.log(
+          "❌ Payment verification failed:",
+          verification.data.status
+        );
         return next(
           new ErrorResponse(
             `Payment verification failed: ${verification.data.status}`,
@@ -993,8 +1019,7 @@ const completeDraftEventCreation = async (req, res, next) => {
 
     // ✅ STEP 5: Authorization checks
     const transactionUserId =
-      transaction.userId?._id?.toString() ||
-      transaction.userId?.toString();
+      transaction.userId?._id?.toString() || transaction.userId?.toString();
     const currentUserId = req.user.userId.toString();
 
     const isTransactionOwner = transactionUserId === currentUserId;
@@ -1042,9 +1067,55 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("🔍 Source event data:", {
       hasTicketTypes: !!sourceEventData.ticketTypes,
       ticketTypesCount: sourceEventData.ticketTypes?.length,
+      hasImages: !!sourceEventData.images,
+      imagesCount: sourceEventData.images?.length || 0,
+      title: sourceEventData.title,
     });
 
-    // ✅ STEP 9: Build agreement object
+    // ✅ STEP 9: Extract and transform images from transaction metadata
+    console.log("📸 Extracting images from transaction metadata:", {
+      hasImages: !!sourceEventData.images,
+      imagesType: Array.isArray(sourceEventData.images)
+        ? "array"
+        : typeof sourceEventData.images,
+      imagesCount: sourceEventData.images?.length || 0,
+      rawImages: sourceEventData.images,
+    });
+
+    // Transform images if they exist
+    let eventImages = [];
+    if (sourceEventData.images && Array.isArray(sourceEventData.images)) {
+      eventImages = sourceEventData.images
+        .map((img, index) => {
+          console.log(`📸 Processing image ${index}:`, img);
+
+          if (typeof img === "string") {
+            // If image is just a URL string
+            return {
+              url: img,
+              publicId: img.split("/").pop()?.split(".")[0] || `image-${index}`,
+              alt: sourceEventData.title || "Event image",
+            };
+          } else if (typeof img === "object" && img !== null && img.url) {
+            // If image is already an object with url, publicId, etc.
+            return {
+              url: img.url,
+              publicId: img.publicId || img.public_id || `image-${index}`,
+              alt: img.alt || sourceEventData.title || "Event image",
+            };
+          }
+          console.warn(`⚠️ Invalid image format at index ${index}:`, img);
+          return null;
+        })
+        .filter((img) => img !== null);
+    }
+
+    console.log("📸 Transformed images:", {
+      count: eventImages.length,
+      images: eventImages,
+    });
+
+    // ✅ STEP 10: Build agreement object
     const validEstimatedAttendance = [
       "1-100",
       "101-500",
@@ -1076,7 +1147,12 @@ const completeDraftEventCreation = async (req, res, next) => {
       termsUrl: agreementData.termsUrl || undefined,
     };
 
-    // ✅ STEP 10: Transform ticket types
+    console.log("📋 Agreement data prepared:", {
+      acceptedTerms: eventAgreement.acceptedTerms,
+      estimatedAttendance: eventAgreement.estimatedAttendance,
+    });
+
+    // ✅ STEP 11: Transform ticket types
     const transformTicketTypes = (ticketTypes) => {
       if (!Array.isArray(ticketTypes)) {
         console.warn("⚠️ ticketTypes is not an array:", typeof ticketTypes);
@@ -1176,25 +1252,34 @@ const completeDraftEventCreation = async (req, res, next) => {
       transformedCount: transformedTicketTypes.length,
     });
 
-    // ✅ STEP 11: Build final event data
+    // ✅ STEP 12: Build final event data
     const finalEventData = {
+      // Basic fields from source
       ...sourceEventData,
 
+      // Capacity and pricing
       capacity: parseCapacity(sourceEventData.capacity),
       price: parsePrice(sourceEventData.price),
 
+      // Payment and status fields
       organizer: req.user.userId,
       status: "published",
       isActive: true,
       serviceFeePaymentStatus: "paid",
       serviceFeeReference: reference,
       serviceFeeTransaction: transaction._id,
+      paymentProcessed: true,
+      paymentProcessedAt: new Date(),
       publishedAt: new Date(),
 
+      // Agreement
       agreement: eventAgreement,
 
+      // Required fields with fallbacks
       title: sourceEventData.title || "Event Title",
       description: sourceEventData.description || "Event description",
+
+      // Date fields
       date: sourceEventData.date || sourceEventData.startDate || new Date(),
       startDate:
         sourceEventData.startDate || sourceEventData.date || new Date(),
@@ -1206,28 +1291,70 @@ const completeDraftEventCreation = async (req, res, next) => {
       time: sourceEventData.time || "12:00",
       endTime: sourceEventData.endTime || "13:00",
 
-      city: sourceEventData.city || sourceEventData.state || "Lagos",
+      // Location fields
+      city: sourceEventData.city || "Lagos",
       state: sourceEventData.state || "Lagos",
       venue: sourceEventData.venue || "Venue",
       address: sourceEventData.address || "Address",
+
+      // Event details
       category: sourceEventData.category || "Other",
       eventType: sourceEventData.eventType || "physical",
 
+      // Virtual event link (if applicable)
+      virtualEventLink: sourceEventData.virtualEventLink || undefined,
+
+      // Ticket availability
       availableTickets: parseCapacity(sourceEventData.capacity),
       totalTickets: parseCapacity(sourceEventData.capacity),
 
+      // Ticket types
       ticketTypes: transformedTicketTypes,
+
+      // ✅ CRITICAL: Include images here!
+      images: eventImages,
+
+      // Optional fields
+      longDescription: sourceEventData.longDescription || undefined,
+      tags: sourceEventData.tags || [],
+      includes: sourceEventData.includes || [],
+      requirements: sourceEventData.requirements || [],
+
+      // Community settings
+      communityEnabled: sourceEventData.communityEnabled || false,
+      community: sourceEventData.community || {},
+
+      // Attendance approval settings
+      attendanceApproval: sourceEventData.attendanceApproval || {
+        enabled: false,
+        autoApprove: false,
+      },
+
+      // Refund policy
+      refundPolicy: sourceEventData.refundPolicy || "partial",
+      cancellationPolicy: sourceEventData.cancellationPolicy || undefined,
+
+      // Currency
+      currency: sourceEventData.currency || "NGN",
+
+      // Coordinates
+      coordinates: sourceEventData.coordinates || undefined,
     };
 
     console.log("🛠 Final event data prepared:", {
       title: finalEventData.title,
       ticketTypesCount: finalEventData.ticketTypes?.length,
+      imagesCount: finalEventData.images?.length,
+      hasImages: finalEventData.images?.length > 0,
+      eventType: finalEventData.eventType,
+      status: finalEventData.status,
     });
 
-    // ✅ STEP 12: Create event
+    // ✅ STEP 13: Create event
+    console.log("📝 Creating event in database...");
     const event = await Event.create(finalEventData);
 
-    // ✅ STEP 13: Immediately update transaction to link event
+    // ✅ STEP 14: Immediately update transaction to link event
     transaction.eventId = event._id;
     transaction.metadata.isDraft = false;
     transaction.metadata.eventCreatedAt = new Date();
@@ -1236,10 +1363,20 @@ const completeDraftEventCreation = async (req, res, next) => {
     console.log("✅ Event created successfully:", {
       eventId: event._id,
       title: event.title,
+      slug: event.slug,
+      status: event.status,
       ticketTypes: event.ticketTypes?.length,
+      images: event.images?.length,
+      imagesData: event.images,
     });
 
-    // ✅ STEP 14: Return success response
+    // ✅ STEP 15: Populate event with organizer info for response
+    await event.populate(
+      "organizer",
+      "firstName lastName userName email profilePicture"
+    );
+
+    // ✅ STEP 16: Return success response
     res.status(201).json({
       success: true,
       message: "Event created and published successfully",
@@ -1249,24 +1386,28 @@ const completeDraftEventCreation = async (req, res, next) => {
           reference: transaction.reference,
           amount: transaction.totalAmount,
           status: transaction.status,
+          type: transaction.type,
         },
-        event,
+        event: event.toObject(),
         isDraft: false,
       },
     });
   } catch (error) {
     console.error("💥 Error completing draft event:", error);
+    console.error("Error stack:", error.stack);
 
     if (error.name === "ValidationError") {
       const errorMessages = Object.values(error.errors)
         .map((err) => err.message)
         .join(", ");
+      console.error("Validation errors:", error.errors);
       return next(
         new ErrorResponse(`Event validation failed: ${errorMessages}`, 400)
       );
     }
 
     if (error.code === 11000) {
+      console.error("Duplicate key error:", error.keyPattern);
       return next(
         new ErrorResponse("Event with similar details already exists", 400)
       );
