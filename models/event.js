@@ -860,20 +860,37 @@ eventSchema.pre("save", function (next) {
 
 eventSchema.pre("save", function (next) {
   if (this.status === "draft") return next();
+  
   if (this.time && this.endTime) {
     try {
       const [startHour, startMin] = this.time.split(":").map(Number);
       const [endHour, endMin] = this.endTime.split(":").map(Number);
       const startMinutes = startHour * 60 + startMin;
       const endMinutes = endHour * 60 + endMin;
-      if (endMinutes <= startMinutes) return next(new Error("End time must be after start time"));
+      
+      // Check if event spans multiple days using startDate and endDate
+      const startDateObj = new Date(this.startDate || this.date);
+      const endDateObj = new Date(this.endDate || this.startDate || this.date);
+      
+      // If dates are different, it's a multi-day event - time validation should allow any combination
+      const isDifferentDay = startDateObj.toDateString() !== endDateObj.toDateString();
+      
+      // Only validate time order if it's the same day
+      if (!isDifferentDay && endMinutes <= startMinutes) {
+        return next(new Error("End time must be after start time for same-day events"));
+      }
+      
+      // Optional: Warn if same-day dates but end time is earlier (likely user error)
+      if (!isDifferentDay && endMinutes < startMinutes) {
+        console.warn(`⚠️ Event "${this.title}" has same-day dates but end time (${this.endTime}) is before start time (${this.time}). This might span to the next day.`);
+      }
+      
     } catch (error) {
       return next(new Error("Invalid time format"));
     }
   }
   next();
 });
-
 // Replace the problematic pre-save hook around line 880-920 with this fixed version:
 
 eventSchema.pre("save", function (next) {
