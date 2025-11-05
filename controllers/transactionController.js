@@ -923,16 +923,11 @@ const verifyServiceFeePayment = async (req, res, next) => {
   }
 };
 
-// @desc    Complete draft event creation after service fee payment
-// @route   POST /api/v1/transactions/:reference/complete-draft-event
-// @access  Private (Organizer only)
 const completeDraftEventCreation = async (req, res, next) => {
   try {
     const { reference } = req.params;
 
-    console.log("🎯 Completing draft event creation:", reference);
-
-    // ✅ STEP 1: Find transaction (any status)
+    // ✅ FIX: Check if transaction already has an event (idempotent check)
     let transaction = await Transaction.findOne({
       reference,
       type: "service_fee",
@@ -942,477 +937,62 @@ const completeDraftEventCreation = async (req, res, next) => {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
-    console.log("📋 Transaction found:", {
-      id: transaction._id,
-      status: transaction.status,
-      hasEvent: !!transaction.eventId,
-      hasMetadata: !!transaction.metadata,
-      hasEventData: !!transaction.metadata?.eventData,
-    });
-
-    // ✅ STEP 2: If event already exists, return it immediately
+    // ✅ CRITICAL: If event already exists, return immediately
     if (transaction.eventId) {
-      console.log("✅ Event already created for this payment:", {
-        transactionId: transaction._id,
-        eventId: transaction.eventId._id,
-        eventTitle: transaction.eventId.title,
-      });
-
+      console.log("✅ Event already created, returning existing:", transaction.eventId._id);
+      
       return res.status(200).json({
         success: true,
-        message: "Event already created for this payment",
+        message: "Event already created",
         data: {
-          transaction: {
-            _id: transaction._id,
-            reference: transaction.reference,
-            amount: transaction.totalAmount,
-            status: transaction.status,
-          },
           event: transaction.eventId,
-          isDraft: false,
           alreadyProcessed: true,
         },
       });
     }
 
-    // ✅ STEP 3: If transaction is pending, verify payment with Paystack
-    if (transaction.status === "pending") {
-      console.log(
-        "💳 Transaction is pending, verifying payment with Paystack..."
-      );
-
-      const verification = await verifyPayment(reference);
-
-      if (verification.data.status === "success") {
-        console.log("✅ Payment verified successfully");
-
-        transaction.status = "completed";
-        transaction.paymentDetails = verification.data;
-        transaction.completedAt = new Date();
-        transaction.paymentMethod = verification.data.channel || "card";
-        await transaction.save();
-
-        console.log("✅ Transaction status updated to completed");
-      } else {
-        console.log(
-          "❌ Payment verification failed:",
-          verification.data.status
-        );
-        return next(
-          new ErrorResponse(
-            `Payment verification failed: ${verification.data.status}`,
-            400
-          )
-        );
-      }
+    // ✅ AUTH CHECK
+    if (transaction.userId?.toString() !== req.user.userId.toString() && req.user.role !== "superadmin") {
+      return next(new ErrorResponse("Not authorized", 403));
     }
 
-    // ✅ STEP 4: Verify transaction is completed
+    // ✅ VERIFY PAYMENT STATUS
     if (transaction.status !== "completed") {
-      return next(
-        new ErrorResponse(
-          `Transaction is ${transaction.status}, not completed`,
-          400
-        )
-      );
+      return next(new ErrorResponse(`Transaction is ${transaction.status}`, 400));
     }
 
-    // ✅ STEP 5: Authorization checks
-    const transactionUserId =
-      transaction.userId?._id?.toString() || transaction.userId?.toString();
-    const currentUserId = req.user.userId.toString();
-
-    const isTransactionOwner = transactionUserId === currentUserId;
-    const isSuperAdmin = req.user.role === "superadmin";
-    const isOrganizer = req.user.role === "organizer";
-
-    if (!isTransactionOwner && !isSuperAdmin) {
-      return next(
-        new ErrorResponse("Not authorized to complete this event.", 403)
-      );
-    }
-
-    if (!isOrganizer && !isSuperAdmin) {
-      return next(new ErrorResponse("Only organizers can create events", 403));
-    }
-
-    // ✅ STEP 6: Verify this is a draft event transaction
-    const isDraft = transaction.metadata?.isDraft;
-    if (!isDraft) {
-      return next(new ErrorResponse("Not a draft event transaction", 400));
-    }
-
-    const user = await User.findById(req.user.userId);
-    if (!user) {
-      return next(new ErrorResponse("User not found", 404));
-    }
-
-    // ✅ STEP 7: Helper functions
-    const parseCapacity = (capacityValue) => {
-      if (capacityValue === undefined || capacityValue === null) return 100;
-      const num = Number(capacityValue);
-      return isNaN(num) ? 100 : Math.max(1, Math.round(num));
-    };
-
-    const parsePrice = (priceValue) => {
-      if (priceValue === undefined || priceValue === null) return 0;
-      const num = Number(priceValue);
-      return isNaN(num) ? 0 : Math.max(0, num);
-    };
-
-    // ✅ STEP 8: Extract event and agreement data from transaction
-    const sourceEventData = transaction.metadata?.eventData || {};
+    // ✅ CREATE EVENT (only once)
+    const eventData = transaction.metadata?.eventData || {};
     const agreementData = transaction.metadata?.agreementData || {};
 
-    console.log("🔍 Source event data:", {
-      hasTicketTypes: !!sourceEventData.ticketTypes,
-      ticketTypesCount: sourceEventData.ticketTypes?.length,
-      hasImages: !!sourceEventData.images,
-      imagesCount: sourceEventData.images?.length || 0,
-      title: sourceEventData.title,
-    });
-
-    // ✅ STEP 9: Extract and transform images from transaction metadata
-    console.log("📸 Extracting images from transaction metadata:", {
-      hasImages: !!sourceEventData.images,
-      imagesType: Array.isArray(sourceEventData.images)
-        ? "array"
-        : typeof sourceEventData.images,
-      imagesCount: sourceEventData.images?.length || 0,
-      rawImages: sourceEventData.images,
-    });
-
-    // Transform images if they exist
-    let eventImages = [];
-    if (sourceEventData.images && Array.isArray(sourceEventData.images)) {
-      eventImages = sourceEventData.images
-        .map((img, index) => {
-          console.log(`📸 Processing image ${index}:`, img);
-
-          if (typeof img === "string") {
-            // If image is just a URL string
-            return {
-              url: img,
-              publicId: img.split("/").pop()?.split(".")[0] || `image-${index}`,
-              alt: sourceEventData.title || "Event image",
-            };
-          } else if (typeof img === "object" && img !== null && img.url) {
-            // If image is already an object with url, publicId, etc.
-            return {
-              url: img.url,
-              publicId: img.publicId || img.public_id || `image-${index}`,
-              alt: img.alt || sourceEventData.title || "Event image",
-            };
-          }
-          console.warn(`⚠️ Invalid image format at index ${index}:`, img);
-          return null;
-        })
-        .filter((img) => img !== null);
-    }
-
-    console.log("📸 Transformed images:", {
-      count: eventImages.length,
-      images: eventImages,
-    });
-
-    // ✅ STEP 10: Build agreement object
-    const validEstimatedAttendance = [
-      "1-100",
-      "101-500",
-      "501-1000",
-      "1001-5000",
-      "5001+",
-    ];
-    const rawEstimatedAttendance =
-      agreementData.estimatedAttendance ||
-      transaction.metadata?.attendanceRange;
-
-    let estimatedAttendance = "1-100";
-    if (
-      rawEstimatedAttendance &&
-      validEstimatedAttendance.includes(rawEstimatedAttendance)
-    ) {
-      estimatedAttendance = rawEstimatedAttendance;
-    }
-
-    const eventAgreement = {
-      acceptedTerms: true,
-      acceptedAt: agreementData.acceptedAt
-        ? new Date(agreementData.acceptedAt)
-        : new Date(),
-      serviceFee: agreementData.serviceFee || { type: "percentage", amount: 5 },
-      estimatedAttendance: estimatedAttendance,
-      paymentTerms: "upfront",
-      agreementVersion: agreementData.agreementVersion || "1.0",
-      termsUrl: agreementData.termsUrl || undefined,
-    };
-
-    console.log("📋 Agreement data prepared:", {
-      acceptedTerms: eventAgreement.acceptedTerms,
-      estimatedAttendance: eventAgreement.estimatedAttendance,
-    });
-
-    // ✅ STEP 11: Transform ticket types
-    const transformTicketTypes = (ticketTypes) => {
-      if (!Array.isArray(ticketTypes)) {
-        console.warn("⚠️ ticketTypes is not an array:", typeof ticketTypes);
-        return [];
-      }
-
-      return ticketTypes.map((ticket, index) => {
-        const capacityValue =
-          parseInt(ticket.capacity) || parseInt(ticket.quantity) || 100;
-
-        const transformedTicket = {
-          name: ticket.name || "General Admission",
-          price: parseFloat(ticket.price) || 0,
-          capacity: capacityValue,
-          description: ticket.description || "",
-          requiresApproval:
-            ticket.requiresApproval === true ||
-            ticket.requiresApproval === "true",
-        };
-
-        // Transform approval questions
-        if (transformedTicket.requiresApproval && ticket.approvalQuestions) {
-          if (Array.isArray(ticket.approvalQuestions)) {
-            transformedTicket.approvalQuestions = ticket.approvalQuestions
-              .map((q) => {
-                if (typeof q === "string") {
-                  return { question: q, type: "text", required: true };
-                }
-                return {
-                  question: q.question || q.text || "",
-                  type: q.type || "text",
-                  required: q.required !== false,
-                  options: q.options || undefined,
-                };
-              })
-              .filter((q) => q.question && q.question.trim());
-          } else if (typeof ticket.approvalQuestions === "string") {
-            transformedTicket.approvalQuestions = [
-              {
-                question: ticket.approvalQuestions,
-                type: "text",
-                required: true,
-              },
-            ];
-          } else if (
-            typeof ticket.approvalQuestions === "object" &&
-            ticket.approvalQuestions !== null
-          ) {
-            transformedTicket.approvalQuestions = [
-              {
-                question:
-                  ticket.approvalQuestions.question ||
-                  ticket.approvalQuestions.text ||
-                  "",
-                type: ticket.approvalQuestions.type || "text",
-                required: ticket.approvalQuestions.required !== false,
-                options: ticket.approvalQuestions.options || undefined,
-              },
-            ];
-          }
-
-          if (
-            !transformedTicket.approvalQuestions ||
-            transformedTicket.approvalQuestions.length === 0
-          ) {
-            transformedTicket.approvalQuestions = [
-              {
-                question: "Why would you like to attend this event?",
-                type: "text",
-                required: true,
-              },
-            ];
-          }
-        } else {
-          transformedTicket.approvalQuestions = [];
-        }
-
-        if (ticket.benefits) transformedTicket.benefits = ticket.benefits;
-        if (ticket.accessType) transformedTicket.accessType = ticket.accessType;
-        if (ticket.maxAttendees)
-          transformedTicket.maxAttendees = parseInt(ticket.maxAttendees);
-        if (ticket.approvalDeadline)
-          transformedTicket.approvalDeadline = new Date(
-            ticket.approvalDeadline
-          );
-
-        return transformedTicket;
-      });
-    };
-
-    const transformedTicketTypes = sourceEventData.ticketTypes
-      ? transformTicketTypes(sourceEventData.ticketTypes)
-      : [];
-
-    console.log("🎫 Ticket types transformation complete:", {
-      originalCount: sourceEventData.ticketTypes?.length || 0,
-      transformedCount: transformedTicketTypes.length,
-    });
-
-    // ✅ STEP 12: Build final event data
     const finalEventData = {
-      // Basic fields from source
-      ...sourceEventData,
-
-      // Capacity and pricing
-      capacity: parseCapacity(sourceEventData.capacity),
-      price: parsePrice(sourceEventData.price),
-
-      // Payment and status fields
+      ...eventData,
       organizer: req.user.userId,
       status: "published",
       isActive: true,
+      agreement: agreementData,
       serviceFeePaymentStatus: "paid",
       serviceFeeReference: reference,
       serviceFeeTransaction: transaction._id,
-      paymentProcessed: true,
-      paymentProcessedAt: new Date(),
-      publishedAt: new Date(),
-
-      // Agreement
-      agreement: eventAgreement,
-
-      // Required fields with fallbacks
-      title: sourceEventData.title || "Event Title",
-      description: sourceEventData.description || "Event description",
-
-      // Date fields
-      date: sourceEventData.date || sourceEventData.startDate || new Date(),
-      startDate:
-        sourceEventData.startDate || sourceEventData.date || new Date(),
-      endDate:
-        sourceEventData.endDate ||
-        sourceEventData.startDate ||
-        sourceEventData.date ||
-        new Date(),
-      time: sourceEventData.time || "12:00",
-      endTime: sourceEventData.endTime || "13:00",
-
-      // Location fields
-      city: sourceEventData.city || "Lagos",
-      state: sourceEventData.state || "Lagos",
-      venue: sourceEventData.venue || "Venue",
-      address: sourceEventData.address || "Address",
-
-      // Event details
-      category: sourceEventData.category || "Other",
-      eventType: sourceEventData.eventType || "physical",
-
-      // Virtual event link (if applicable)
-      virtualEventLink: sourceEventData.virtualEventLink || undefined,
-
-      // Ticket availability
-      availableTickets: parseCapacity(sourceEventData.capacity),
-      totalTickets: parseCapacity(sourceEventData.capacity),
-
-      // Ticket types
-      ticketTypes: transformedTicketTypes,
-
-      // ✅ CRITICAL: Include images here!
-      images: eventImages,
-
-      // Optional fields
-      longDescription: sourceEventData.longDescription || undefined,
-      tags: sourceEventData.tags || [],
-      includes: sourceEventData.includes || [],
-      requirements: sourceEventData.requirements || [],
-
-      // Community settings
-      communityEnabled: sourceEventData.communityEnabled || false,
-      community: sourceEventData.community || {},
-
-      // Attendance approval settings
-      attendanceApproval: sourceEventData.attendanceApproval || {
-        enabled: false,
-        autoApprove: false,
-      },
-
-      // Refund policy
-      refundPolicy: sourceEventData.refundPolicy || "partial",
-      cancellationPolicy: sourceEventData.cancellationPolicy || undefined,
-
-      // Currency
-      currency: sourceEventData.currency || "NGN",
-
-      // Coordinates
-      coordinates: sourceEventData.coordinates || undefined,
     };
 
-    console.log("🛠 Final event data prepared:", {
-      title: finalEventData.title,
-      ticketTypesCount: finalEventData.ticketTypes?.length,
-      imagesCount: finalEventData.images?.length,
-      hasImages: finalEventData.images?.length > 0,
-      eventType: finalEventData.eventType,
-      status: finalEventData.status,
-    });
-
-    // ✅ STEP 13: Create event
-    console.log("📝 Creating event in database...");
+    console.log("📝 Creating event ONCE...");
     const event = await Event.create(finalEventData);
 
-    // ✅ STEP 14: Immediately update transaction to link event
+    // ✅ IMMEDIATELY link transaction to prevent duplicates
     transaction.eventId = event._id;
-    transaction.metadata.isDraft = false;
-    transaction.metadata.eventCreatedAt = new Date();
     await transaction.save();
 
-    console.log("✅ Event created successfully:", {
-      eventId: event._id,
-      title: event.title,
-      slug: event.slug,
-      status: event.status,
-      ticketTypes: event.ticketTypes?.length,
-      images: event.images?.length,
-      imagesData: event.images,
-    });
+    console.log("✅ Event created:", event._id);
 
-    // ✅ STEP 15: Populate event with organizer info for response
-    await event.populate(
-      "organizer",
-      "firstName lastName userName email profilePicture"
-    );
-
-    // ✅ STEP 16: Return success response
     res.status(201).json({
       success: true,
-      message: "Event created and published successfully",
-      data: {
-        transaction: {
-          _id: transaction._id,
-          reference: transaction.reference,
-          amount: transaction.totalAmount,
-          status: transaction.status,
-          type: transaction.type,
-        },
-        event: event.toObject(),
-        isDraft: false,
-      },
+      message: "Event created successfully",
+      data: { event },
     });
+
   } catch (error) {
-    console.error("💥 Error completing draft event:", error);
-    console.error("Error stack:", error.stack);
-
-    if (error.name === "ValidationError") {
-      const errorMessages = Object.values(error.errors)
-        .map((err) => err.message)
-        .join(", ");
-      console.error("Validation errors:", error.errors);
-      return next(
-        new ErrorResponse(`Event validation failed: ${errorMessages}`, 400)
-      );
-    }
-
-    if (error.code === 11000) {
-      console.error("Duplicate key error:", error.keyPattern);
-      return next(
-        new ErrorResponse("Event with similar details already exists", 400)
-      );
-    }
-
+    console.error("❌ Error:", error);
     next(error);
   }
 };
