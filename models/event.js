@@ -888,7 +888,8 @@ eventSchema.pre("save", function (next) {
   }
   next();
 });
-// Replace the problematic pre-save hook around line 880-920 with this fixed version:
+// ==================== FIXED PRE-SAVE MIDDLEWARE ====================
+// Replace the middleware around line 880-920 in your event.js model with this:
 
 eventSchema.pre("save", function (next) {
   if (this.communityEnabled) {
@@ -905,8 +906,10 @@ eventSchema.pre("save", function (next) {
     }
   }
 
-  // ✅ FIX: Only validate terms when publishing OR when status/agreement is being modified
-  if (this.status === "published" && (this.isNew || this.isModified('status') || this.isModified('agreement'))) {
+  // ✅ FIX: Only validate terms when FIRST creating and publishing
+  // Skip validation for subsequent saves
+  if (this.isNew && this.status === "published") {
+    console.log("✅ Terms accepted for event");
     console.log("🔍 Model Pre-save Check for publishing event:");
     console.log(" - Agreement:", this.agreement);
     console.log(" - Accepted terms:", this.agreement?.acceptedTerms);
@@ -914,12 +917,10 @@ eventSchema.pre("save", function (next) {
     console.log(" - Is Modified Status:", this.isModified('status'));
 
     if (!this.agreement?.acceptedTerms) {
-      console.log("❌ Model validation failing: Terms not accepted for event");
       return next(new Error("Terms must be accepted before publishing events"));
     }
 
     if (!this.agreement.acceptedAt) this.agreement.acceptedAt = new Date();
-    console.log("✅ Terms accepted for event");
   }
 
   if (this.ticketTypes && this.ticketTypes.length > 0) {

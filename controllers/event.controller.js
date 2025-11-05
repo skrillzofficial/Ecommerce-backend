@@ -96,7 +96,6 @@ const processTicketTypeApproval = (ticketType) => {
 const createEvent = async (req, res, next) => {
   try {
     console.log('=== EVENT CREATION STARTED ===');
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
 
     // Process form data
     const processedBody = processFormDataArrays(req.body);
@@ -143,7 +142,6 @@ const createEvent = async (req, res, next) => {
       requiredFields.push("venue", "address", "city", "state");
     }
 
-    // Check required fields
     for (const field of requiredFields) {
       if (!parsedBody[field]) {
         return next(new ErrorResponse(`${field} is required`, 400));
@@ -202,7 +200,7 @@ const createEvent = async (req, res, next) => {
         companyName: organizer.organizerInfo?.companyName || "",
       },
       images: uploadedImages,
-      status: "draft", // Always start as draft until payment is processed
+      status: "draft", // ✅ Always start as draft
       isActive: true,
       venue,
       address,
@@ -210,16 +208,16 @@ const createEvent = async (req, res, next) => {
       city,
     };
 
-    // Handle agreement with upfront payment for free events
+    // Handle agreement
     if (agreement && agreement.acceptedTerms) {
       eventData.agreement = {
         ...agreement,
-        paymentTerms: "upfront", // Force upfront payment for service fees
+        paymentTerms: "upfront",
         acceptedAt: new Date(agreement.acceptedAt || new Date()),
       };
     }
 
-    // Handle ticket types or legacy pricing
+    // Handle ticket types
     let parsedTicketTypes = ticketTypes;
     if (typeof ticketTypes === "string") {
       try {
@@ -243,27 +241,26 @@ const createEvent = async (req, res, next) => {
           ticket.requiresApproval : safeParseNumber(ticket.price, 0) === 0,
       }));
 
-      // Set legacy fields for compatibility
       eventData.price = Math.min(...parsedTicketTypes.map(t => safeParseNumber(t.price, 0)));
       eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + safeParseNumber(t.capacity, 1), 0);
       eventData.availableTickets = eventData.capacity;
     } else {
-      // Legacy pricing
       eventData.price = safeParseNumber(price, 0);
       eventData.capacity = safeParseNumber(capacity, 1);
       eventData.availableTickets = safeParseNumber(capacity, 1);
     }
 
-    // Create event as draft
+    // ✅ FIX: Create event ONCE using .create()
     const event = await Event.create(eventData);
     console.log('✅ Event created as draft:', event._id);
 
-    // Check if this is a free event requiring service fee payment
-    if (event.isFreeEvent && event.requiresServiceFeePayment) {
+    // ✅ FIX: Check if service fee payment is needed WITHOUT calling .save() again
+    const needsServiceFeePayment = event.isFreeEvent && event.requiresServiceFeePayment;
+
+    if (needsServiceFeePayment) {
       console.log('💰 Free event requires service fee payment');
       
       try {
-        // Initialize service fee payment
         const paymentData = await event.initializeServiceFeePayment(
           organizer.email,
           {
@@ -273,8 +270,7 @@ const createEvent = async (req, res, next) => {
           }
         );
 
-        // Return payment initialization data to frontend
-        res.status(201).json({
+        return res.status(201).json({
           success: true,
           message: "Event created successfully. Payment required to publish.",
           event,
@@ -286,29 +282,42 @@ const createEvent = async (req, res, next) => {
             metadata: paymentData.metadata
           }
         });
-        return;
 
       } catch (paymentError) {
         console.error('❌ Payment initialization failed:', paymentError);
         
-        res.status(201).json({
+        return res.status(201).json({
           success: true,
           message: "Event created as draft. Payment initialization failed.",
           event,
           requiresPayment: true,
           paymentError: paymentError.message
         });
-        return;
       }
-    } else if (!event.isFreeEvent) {
-      // Paid event - publish immediately (no service fee required)
+    } 
+    
+    // ✅ FIX: For paid events, update status using findByIdAndUpdate to avoid pre-save hooks
+    if (!event.isFreeEvent) {
       console.log('🎉 Paid event - publishing immediately');
-      event.status = "published";
-      event.publishedAt = new Date();
-      await event.save();
+      
+      const publishedEvent = await Event.findByIdAndUpdate(
+        event._id,
+        {
+          status: "published",
+          publishedAt: new Date()
+        },
+        { new: true }
+      );
+
+      return res.status(201).json({
+        success: true,
+        message: "Event created and published successfully",
+        event: publishedEvent,
+        requiresPayment: false
+      });
     }
 
-    // For events that don't require payment
+    // For events that don't need publishing
     res.status(201).json({
       success: true,
       message: "Event created successfully",
