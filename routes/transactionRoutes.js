@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const {
-  initializeTransaction, // ✅ ADD THIS MISSING IMPORT
+  initializeTransaction,
   verifyTransaction,
   getUserTransactions,
   getTransaction,
@@ -33,11 +33,63 @@ router.get("/verify/:reference", verifyTransaction);
 
 // @desc    Verify service fee payment
 // @route   POST /api/v1/transactions/verify-service-fee/:reference
-// @access  Public
+// @access  Public (needs to be public for payment callback)
 router.post("/verify-service-fee/:reference", verifyServiceFeePayment);
 
+// ============================================
+// PROTECTED ROUTES - SPECIFIC ROUTES FIRST
+// ============================================
+// ⚠️ CRITICAL: Define specific routes BEFORE generic :id routes
+// Order matters! More specific routes must come first
 
-// Complete draft event creation after service fee payment
+// @desc    Get user's transaction history
+// @route   GET /api/v1/transactions/my-transactions
+// @access  Private
+router.get("/my-transactions", protect, getUserTransactions);
+
+// @desc    Get revenue statistics
+// @route   GET /api/v1/transactions/stats/revenue
+// @access  Private (Organizer/Superadmin only)
+router.get(
+  "/stats/revenue", 
+  protect,
+  authorize("organizer", "superadmin"), 
+  getRevenueStats
+);
+
+// @desc    Initialize payment for booking
+// @route   POST /api/v1/transactions/initialize
+// @access  Private
+router.post("/initialize", protect, initializeTransaction);
+
+// @desc    Initialize service fee payment for free event publishing
+// @route   POST /api/v1/transactions/initialize-service-fee
+// @access  Private (Organizer only)
+router.post(
+  "/initialize-service-fee", 
+  protect,
+  authorize("organizer", "superadmin"), 
+  initializeServiceFeePayment
+);
+
+// @desc    Get transactions for a specific event
+// @route   GET /api/v1/transactions/event/:eventId
+// @access  Private (Organizer/Superadmin only)
+router.get(
+  "/event/:eventId", 
+  protect,
+  authorize("organizer", "superadmin"), 
+  getEventTransactions
+);
+
+// ============================================
+// ROUTES WITH :reference OR :id PARAMETER
+// ============================================
+// ⚠️ These must come AFTER all specific routes
+
+// @desc    Complete draft event creation after service fee payment
+// @route   POST /api/v1/transactions/:reference/complete-draft-event
+// @access  Private (Organizer only)
 router.post(
   "/:reference/complete-draft-event",
   protect,
@@ -45,71 +97,24 @@ router.post(
   completeDraftEventCreation
 );
 
-// ============================================
-// PROTECTED USER ROUTES
-// ============================================
-
-// All routes below require authentication
-router.use(protect);
-
-// @desc    Initialize payment for booking
-// @route   POST /api/v1/transactions/initialize
-// @access  Private
-router.post("/initialize", initializeTransaction); // ✅ FIXED: Use initializeTransaction, not initializeBookingPayment
-
-// @desc    Initialize service fee payment for free event publishing
-// @route   POST /api/v1/transactions/initialize-service-fee
-// @access  Private (Organizer only)
-router.post(
-  "/initialize-service-fee", 
-  authorize("organizer", "superadmin"), 
-  initializeServiceFeePayment
-);
-
-// @desc    Get user's transaction history
-// @route   GET /api/v1/transactions/my-transactions
-// @access  Private
-router.get("/my-transactions", getUserTransactions);
-
 // @desc    Get single transaction details
 // @route   GET /api/v1/transactions/:id
 // @access  Private (Transaction owner or organizer)
-router.get("/:id", getTransaction);
+router.get("/:id", protect, getTransaction);
 
 // @desc    Request refund for transaction
 // @route   POST /api/v1/transactions/:id/refund
 // @access  Private (Transaction owner only)
-router.post("/:id/refund", requestRefund);
-
-// ============================================
-// ORGANIZER & ADMIN ROUTES
-// ============================================
-
-// @desc    Get transactions for a specific event
-// @route   GET /api/v1/transactions/event/:eventId
-// @access  Private (Organizer/Superadmin only)
-router.get(
-  "/event/:eventId", 
-  authorize("organizer", "superadmin"), 
-  getEventTransactions
-);
+router.post("/:id/refund", protect, requestRefund);
 
 // @desc    Process refund request
 // @route   PUT /api/v1/transactions/:id/refund/process
 // @access  Private (Organizer/Superadmin only)
 router.put(
   "/:id/refund/process", 
+  protect,
   authorize("organizer", "superadmin"), 
   processRefund
-);
-
-// @desc    Get revenue statistics
-// @route   GET /api/v1/transactions/stats/revenue
-// @access  Private (Organizer/Superadmin only)
-router.get(
-  "/stats/revenue", 
-  authorize("organizer", "superadmin"), 
-  getRevenueStats
 );
 
 module.exports = router;
