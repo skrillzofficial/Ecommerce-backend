@@ -168,11 +168,43 @@ const eventSchema = new mongoose.Schema(
       type: String,
       enum: {
         values: [
-          "Abia", "Adamawa", "Akwa Ibom", "Anambra", "Bauchi", "Bayelsa", "Benue", "Borno",
-          "Cross River", "Delta", "Ebonyi", "Edo", "Ekiti", "Enugu", "FCT (Abuja)", "Gombe",
-          "Imo", "Jigawa", "Kaduna", "Kano", "Katsina", "Kebbi", "Kogi", "Kwara", "Lagos",
-          "Nasarawa", "Niger", "Ogun", "Ondo", "Osun", "Oyo", "Plateau", "Rivers", "Sokoto",
-          "Taraba", "Yobe", "Zamfara",
+          "Abia",
+          "Adamawa",
+          "Akwa Ibom",
+          "Anambra",
+          "Bauchi",
+          "Bayelsa",
+          "Benue",
+          "Borno",
+          "Cross River",
+          "Delta",
+          "Ebonyi",
+          "Edo",
+          "Ekiti",
+          "Enugu",
+          "FCT (Abuja)",
+          "Gombe",
+          "Imo",
+          "Jigawa",
+          "Kaduna",
+          "Kano",
+          "Katsina",
+          "Kebbi",
+          "Kogi",
+          "Kwara",
+          "Lagos",
+          "Nasarawa",
+          "Niger",
+          "Ogun",
+          "Ondo",
+          "Osun",
+          "Oyo",
+          "Plateau",
+          "Rivers",
+          "Sokoto",
+          "Taraba",
+          "Yobe",
+          "Zamfara",
         ],
         message: "{VALUE} is not a supported state",
       },
@@ -198,6 +230,31 @@ const eventSchema = new mongoose.Schema(
       latitude: { type: Number, min: -90, max: 90 },
       longitude: { type: Number, min: -180, max: 180 },
     },
+    image: {
+      url: {
+        type: String,
+        required: function () {
+          return this.status === "published";
+        },
+      },
+      publicId: String,
+      alt: String,
+      width: Number,
+      height: Number,
+      format: String,
+    },
+
+    // Additional gallery images
+    images: [
+      {
+        url: { type: String, required: true },
+        publicId: String,
+        alt: String,
+        width: Number,
+        height: Number,
+        format: String,
+      },
+    ],
 
     // Ticket Types with Pricing
     ticketTypes: [
@@ -281,7 +338,10 @@ const eventSchema = new mongoose.Schema(
     capacity: {
       type: Number,
       min: [1, "Capacity must be at least 1"],
-      validate: { validator: Number.isInteger, message: "Capacity must be a whole number" },
+      validate: {
+        validator: Number.isInteger,
+        message: "Capacity must be a whole number",
+      },
       required: function () {
         return (
           this.status === "published" &&
@@ -317,7 +377,7 @@ const eventSchema = new mongoose.Schema(
       publicId: String,
       alt: String,
     },
-    
+
     // Shareable Banner Feature
     shareableBanner: {
       enabled: { type: Boolean, default: false },
@@ -326,7 +386,13 @@ const eventSchema = new mongoose.Schema(
       design: {
         photoPosition: {
           type: String,
-          enum: ["top-right", "top-left", "bottom-right", "bottom-left", "center"],
+          enum: [
+            "top-right",
+            "top-left",
+            "bottom-right",
+            "bottom-left",
+            "center",
+          ],
           default: "top-right",
         },
         photoSize: {
@@ -372,7 +438,7 @@ const eventSchema = new mongoose.Schema(
         maxlength: [500, "Instructions cannot exceed 500 characters"],
       },
     },
-    
+
     // Community/Groups Feature
     community: {
       whatsapp: {
@@ -383,12 +449,17 @@ const eventSchema = new mongoose.Schema(
           validate: {
             validator: function (v) {
               if (!v) return true;
-              return /^https?:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//.test(v);
+              return /^https?:\/\/(chat\.whatsapp\.com|wa\.me|whatsapp\.com)\//.test(
+                v
+              );
             },
             message: "Invalid WhatsApp link format",
           },
         },
-        description: { type: String, maxlength: [200, "Description cannot exceed 200 characters"] },
+        description: {
+          type: String,
+          maxlength: [200, "Description cannot exceed 200 characters"],
+        },
       },
       telegram: {
         enabled: { type: Boolean, default: false },
@@ -403,7 +474,10 @@ const eventSchema = new mongoose.Schema(
             message: "Invalid Telegram link format",
           },
         },
-        description: { type: String, maxlength: [200, "Description cannot exceed 200 characters"] },
+        description: {
+          type: String,
+          maxlength: [200, "Description cannot exceed 200 characters"],
+        },
       },
       discord: {
         enabled: { type: Boolean, default: false },
@@ -413,12 +487,17 @@ const eventSchema = new mongoose.Schema(
           validate: {
             validator: function (v) {
               if (!v) return true;
-              return /^https?:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//.test(v);
+              return /^https?:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\//.test(
+                v
+              );
             },
             message: "Invalid Discord link format",
           },
         },
-        description: { type: String, maxlength: [200, "Description cannot exceed 200 characters"] },
+        description: {
+          type: String,
+          maxlength: [200, "Description cannot exceed 200 characters"],
+        },
       },
       slack: {
         enabled: { type: Boolean, default: false },
@@ -433,7 +512,10 @@ const eventSchema = new mongoose.Schema(
             message: "Invalid Slack link format",
           },
         },
-        description: { type: String, maxlength: [200, "Description cannot exceed 200 characters"] },
+        description: {
+          type: String,
+          maxlength: [200, "Description cannot exceed 200 characters"],
+        },
       },
     },
     communityEnabled: { type: Boolean, default: false },
@@ -443,7 +525,11 @@ const eventSchema = new mongoose.Schema(
       acceptedTerms: { type: Boolean, default: false },
       acceptedAt: Date,
       serviceFee: {
-        type: { type: String, enum: ["percentage", "fixed"], default: "percentage" },
+        type: {
+          type: String,
+          enum: ["percentage", "fixed"],
+          default: "percentage",
+        },
         amount: { type: Number, min: 0, default: 5 },
       },
       estimatedAttendance: {
@@ -467,7 +553,10 @@ const eventSchema = new mongoose.Schema(
     },
     serviceFeeAmount: { type: Number, default: 0 },
     serviceFeeReference: { type: String },
-    serviceFeeTransaction: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+    serviceFeeTransaction: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+    },
     paymentProcessed: { type: Boolean, default: false },
     paymentProcessedAt: Date,
 
@@ -476,7 +565,10 @@ const eventSchema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       autoApprove: { type: Boolean, default: false },
       approvalDeadline: Date,
-      instructions: { type: String, maxlength: [1000, "Instructions cannot exceed 1000 characters"] },
+      instructions: {
+        type: String,
+        maxlength: [1000, "Instructions cannot exceed 1000 characters"],
+      },
     },
 
     // Organizer Information
@@ -513,7 +605,7 @@ const eventSchema = new mongoose.Schema(
     totalBookings: { type: Number, default: 0, min: 0 },
     totalRevenue: { type: Number, default: 0, min: 0 },
     totalAttendees: { type: Number, default: 0, min: 0 },
-    
+
     // Approval statistics
     pendingApprovals: { type: Number, default: 0, min: 0 },
     approvedAttendees: { type: Number, default: 0, min: 0 },
@@ -521,15 +613,44 @@ const eventSchema = new mongoose.Schema(
 
     // Additional Features
     tags: [{ type: String, trim: true, lowercase: true }],
-    includes: [{ type: String, trim: true, maxlength: [200, "Each include cannot exceed 200 characters"] }],
-    requirements: [{ type: String, trim: true, maxlength: [200, "Each requirement cannot exceed 200 characters"] }],
+    includes: [
+      {
+        type: String,
+        trim: true,
+        maxlength: [200, "Each include cannot exceed 200 characters"],
+      },
+    ],
+    requirements: [
+      {
+        type: String,
+        trim: true,
+        maxlength: [200, "Each requirement cannot exceed 200 characters"],
+      },
+    ],
 
-    slug: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
+    slug: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
+    },
 
     // Cancellation & Refund
-    cancellationPolicy: { type: String, maxlength: [1000, "Cancellation policy cannot exceed 1000 characters"] },
-    refundPolicy: { type: String, enum: ["full", "partial", "no-refund"], default: "partial" },
-    currency: { type: String, default: "NGN", enum: ["NGN", "USD", "EUR", "GBP"] },
+    cancellationPolicy: {
+      type: String,
+      maxlength: [1000, "Cancellation policy cannot exceed 1000 characters"],
+    },
+    refundPolicy: {
+      type: String,
+      enum: ["full", "partial", "no-refund"],
+      default: "partial",
+    },
+    currency: {
+      type: String,
+      default: "NGN",
+      enum: ["NGN", "USD", "EUR", "GBP"],
+    },
 
     // Timestamps
     publishedAt: Date,
@@ -578,7 +699,9 @@ eventSchema.virtual("isAvailable").get(function () {
   const isPublished = this.status === "published";
 
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    const hasAvailableTickets = this.ticketTypes.some(tt => tt.availableTickets > 0);
+    const hasAvailableTickets = this.ticketTypes.some(
+      (tt) => tt.availableTickets > 0
+    );
     return hasAvailableTickets && isPublished && isFutureDate;
   }
   return this.availableTickets > 0 && isPublished && isFutureDate;
@@ -586,7 +709,7 @@ eventSchema.virtual("isAvailable").get(function () {
 
 eventSchema.virtual("isSoldOut").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    return this.ticketTypes.every(tt => tt.availableTickets === 0);
+    return this.ticketTypes.every((tt) => tt.availableTickets === 0);
   }
   return this.availableTickets === 0;
 });
@@ -596,6 +719,9 @@ eventSchema.virtual("totalCapacity").get(function () {
     return this.ticketTypes.reduce((sum, tt) => sum + tt.capacity, 0);
   }
   return this.capacity || 0;
+});
+eventSchema.virtual("featuredImage").get(function () {
+  return this.image || this.images?.[0] || this.socialBanner;
 });
 
 eventSchema.virtual("totalAvailableTickets").get(function () {
@@ -607,7 +733,7 @@ eventSchema.virtual("totalAvailableTickets").get(function () {
 
 eventSchema.virtual("hasFreeTickets").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    return this.ticketTypes.some(tt => tt.price === 0);
+    return this.ticketTypes.some((tt) => tt.price === 0);
   }
   return this.price === 0;
 });
@@ -628,7 +754,7 @@ eventSchema.virtual("daysUntilEvent").get(function () {
 
 eventSchema.virtual("priceRange").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    const prices = this.ticketTypes.map(tt => tt.price);
+    const prices = this.ticketTypes.map((tt) => tt.price);
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
     return minPrice === maxPrice ? minPrice : { min: minPrice, max: maxPrice };
@@ -637,29 +763,46 @@ eventSchema.virtual("priceRange").get(function () {
 });
 
 eventSchema.virtual("hasCommunity").get(function () {
-  return this.communityEnabled && (
-    this.community?.whatsapp?.enabled ||
-    this.community?.telegram?.enabled ||
-    this.community?.discord?.enabled ||
-    this.community?.slack?.enabled
+  return (
+    this.communityEnabled &&
+    (this.community?.whatsapp?.enabled ||
+      this.community?.telegram?.enabled ||
+      this.community?.discord?.enabled ||
+      this.community?.slack?.enabled)
   );
 });
 
 eventSchema.virtual("activeCommunityLinks").get(function () {
   if (!this.communityEnabled) return [];
   const links = [];
-  
+
   if (this.community?.whatsapp?.enabled && this.community.whatsapp.link) {
-    links.push({ platform: "whatsapp", link: this.community.whatsapp.link, description: this.community.whatsapp.description });
+    links.push({
+      platform: "whatsapp",
+      link: this.community.whatsapp.link,
+      description: this.community.whatsapp.description,
+    });
   }
   if (this.community?.telegram?.enabled && this.community.telegram.link) {
-    links.push({ platform: "telegram", link: this.community.telegram.link, description: this.community.telegram.description });
+    links.push({
+      platform: "telegram",
+      link: this.community.telegram.link,
+      description: this.community.telegram.description,
+    });
   }
   if (this.community?.discord?.enabled && this.community.discord.link) {
-    links.push({ platform: "discord", link: this.community.discord.link, description: this.community.discord.description });
+    links.push({
+      platform: "discord",
+      link: this.community.discord.link,
+      description: this.community.discord.description,
+    });
   }
   if (this.community?.slack?.enabled && this.community.slack.link) {
-    links.push({ platform: "slack", link: this.community.slack.link, description: this.community.slack.description });
+    links.push({
+      platform: "slack",
+      link: this.community.slack.link,
+      description: this.community.slack.description,
+    });
   }
 
   return links;
@@ -670,7 +813,11 @@ eventSchema.virtual("hasSocialBanner").get(function () {
 });
 
 eventSchema.virtual("isMultiDay").get(function () {
-  return this.startDate && this.endDate && this.startDate.getTime() !== this.endDate.getTime();
+  return (
+    this.startDate &&
+    this.endDate &&
+    this.startDate.getTime() !== this.endDate.getTime()
+  );
 });
 
 eventSchema.virtual("isVirtual").get(function () {
@@ -694,7 +841,7 @@ eventSchema.virtual("eventDuration").get(function () {
 // ==================== PAYMENT VIRTUALS ====================
 eventSchema.virtual("isFreeEvent").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    return this.ticketTypes.every(ticket => ticket.price === 0);
+    return this.ticketTypes.every((ticket) => ticket.price === 0);
   }
   return this.price === 0;
 });
@@ -704,7 +851,11 @@ eventSchema.virtual("isPaidEvent").get(function () {
 });
 
 eventSchema.virtual("requiresServiceFeePayment").get(function () {
-  return this.isFreeEvent && this.agreement.paymentTerms === "upfront" && !this.paymentProcessed;
+  return (
+    this.isFreeEvent &&
+    this.agreement.paymentTerms === "upfront" &&
+    !this.paymentProcessed
+  );
 });
 
 eventSchema.virtual("canPublish").get(function () {
@@ -716,7 +867,9 @@ eventSchema.virtual("canPublish").get(function () {
 });
 
 eventSchema.virtual("isPaymentPending").get(function () {
-  return this.requiresServiceFeePayment && this.serviceFeePaymentStatus === "pending";
+  return (
+    this.requiresServiceFeePayment && this.serviceFeePaymentStatus === "pending"
+  );
 });
 
 eventSchema.virtual("isPaymentPaid").get(function () {
@@ -725,7 +878,10 @@ eventSchema.virtual("isPaymentPaid").get(function () {
 
 eventSchema.virtual("totalPotentialRevenue").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    return this.ticketTypes.reduce((sum, ticket) => sum + (ticket.price * ticket.capacity), 0);
+    return this.ticketTypes.reduce(
+      (sum, ticket) => sum + ticket.price * ticket.capacity,
+      0
+    );
   }
   return this.price * this.capacity;
 });
@@ -742,14 +898,18 @@ eventSchema.virtual("platformCommission").get(function () {
 // Approval virtuals
 eventSchema.virtual("hasApprovalRequired").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    return this.ticketTypes.some(tt => tt.requiresApproval);
+    return this.ticketTypes.some((tt) => tt.requiresApproval);
   }
   return false;
 });
 
 eventSchema.virtual("approvalRate").get(function () {
   if (this.pendingApprovals + this.approvedAttendees === 0) return 0;
-  return Math.round((this.approvedAttendees / (this.pendingApprovals + this.approvedAttendees)) * 100);
+  return Math.round(
+    (this.approvedAttendees /
+      (this.pendingApprovals + this.approvedAttendees)) *
+      100
+  );
 });
 
 eventSchema.virtual("needsApprovalAttention").get(function () {
@@ -759,7 +919,9 @@ eventSchema.virtual("needsApprovalAttention").get(function () {
 // ==================== PRE-SAVE MIDDLEWARE ====================
 eventSchema.pre("save", function (next) {
   if (!this.slug || this.slug === null || this.slug === "") {
-    this.slug = `event-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    this.slug = `event-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 11)}`;
   }
   next();
 });
@@ -779,25 +941,50 @@ eventSchema.pre("save", function (next) {
 });
 
 eventSchema.pre("save", function (next) {
-  if ((this.eventType === "virtual" || this.eventType === "hybrid") && this.status === "published" && !this.virtualEventLink) {
-    return next(new Error("Virtual event link is required for virtual and hybrid events"));
+  if (
+    (this.eventType === "virtual" || this.eventType === "hybrid") &&
+    this.status === "published" &&
+    !this.virtualEventLink
+  ) {
+    return next(
+      new Error("Virtual event link is required for virtual and hybrid events")
+    );
   }
   next();
 });
 
 eventSchema.pre("save", function (next) {
+  // Auto-set main image from first gallery image if not set
+  if (!this.image && this.images && this.images.length > 0) {
+    this.image = {
+      url: this.images[0].url,
+      publicId: this.images[0].publicId,
+      alt: this.images[0].alt || this.title,
+      width: this.images[0].width,
+      height: this.images[0].height,
+      format: this.images[0].format,
+    };
+  }
+  next();
+});
+eventSchema.pre("save", function (next) {
   const safeNumber = (value, defaultValue = 0) => {
-    if (value === undefined || value === null || isNaN(value)) return defaultValue;
+    if (value === undefined || value === null || isNaN(value))
+      return defaultValue;
     return Number(value);
   };
 
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    this.ticketTypes.forEach(ticketType => {
+    this.ticketTypes.forEach((ticketType) => {
       ticketType.price = safeNumber(ticketType.price, 0);
       ticketType.capacity = safeNumber(ticketType.capacity, 1);
-      ticketType.availableTickets = safeNumber(ticketType.availableTickets, ticketType.capacity);
+      ticketType.availableTickets = safeNumber(
+        ticketType.availableTickets,
+        ticketType.capacity
+      );
       ticketType.isFree = ticketType.price === 0;
-      if (this.eventType === "hybrid" && !ticketType.accessType) ticketType.accessType = "both";
+      if (this.eventType === "hybrid" && !ticketType.accessType)
+        ticketType.accessType = "both";
     });
   } else {
     this.price = safeNumber(this.price, 0);
@@ -825,8 +1012,13 @@ eventSchema.pre("save", function (next) {
 eventSchema.pre("save", async function (next) {
   try {
     if (this.slug && this.slug.startsWith("event-")) {
-      const baseSlug = this.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-      const uniqueId = this._id ? this._id.toString().slice(-6) : Date.now().toString().slice(-6);
+      const baseSlug = this.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      const uniqueId = this._id
+        ? this._id.toString().slice(-6)
+        : Date.now().toString().slice(-6);
       let slug = `${baseSlug}-${uniqueId}`;
 
       const Event = this.constructor;
@@ -838,7 +1030,9 @@ eventSchema.pre("save", async function (next) {
         existingEvent = await Event.findOne({ slug, _id: { $ne: this._id } });
         counter++;
         if (counter > 50) {
-          slug = `event-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          slug = `event-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 9)}`;
           break;
         }
       }
@@ -852,7 +1046,11 @@ eventSchema.pre("save", async function (next) {
 });
 
 eventSchema.pre("save", function (next) {
-  if (this.isModified("status") && this.status === "published" && !this.publishedAt) {
+  if (
+    this.isModified("status") &&
+    this.status === "published" &&
+    !this.publishedAt
+  ) {
     this.publishedAt = new Date();
   }
   next();
@@ -860,28 +1058,31 @@ eventSchema.pre("save", function (next) {
 
 eventSchema.pre("save", function (next) {
   if (this.status === "draft") return next();
-  
+
   if (this.time && this.endTime) {
     try {
       const [startHour, startMin] = this.time.split(":").map(Number);
       const [endHour, endMin] = this.endTime.split(":").map(Number);
       const startMinutes = startHour * 60 + startMin;
       const endMinutes = endHour * 60 + endMin;
-      
+
       // Auto-adjust endDate if end time is earlier than start time (overnight event)
       if (endMinutes < startMinutes) {
         const startDateObj = new Date(this.startDate || this.date);
-        const endDateObj = new Date(this.endDate || this.startDate || this.date);
-        
+        const endDateObj = new Date(
+          this.endDate || this.startDate || this.date
+        );
+
         // If dates are the same, automatically set endDate to next day
         if (startDateObj.toDateString() === endDateObj.toDateString()) {
           const nextDay = new Date(startDateObj);
           nextDay.setDate(nextDay.getDate() + 1);
           this.endDate = nextDay;
-          console.log(`✅ Auto-adjusted endDate for overnight event "${this.title}": ${this.startDate} → ${this.endDate}`);
+          console.log(
+            `✅ Auto-adjusted endDate for overnight event "${this.title}": ${this.startDate} → ${this.endDate}`
+          );
         }
       }
-      
     } catch (error) {
       return next(new Error("Invalid time format"));
     }
@@ -896,13 +1097,20 @@ eventSchema.pre("save", function (next) {
     const communityPlatforms = ["whatsapp", "telegram", "discord", "slack"];
     let hasValidLink = false;
     for (const platform of communityPlatforms) {
-      if (this.community?.[platform]?.enabled && this.community[platform].link) {
+      if (
+        this.community?.[platform]?.enabled &&
+        this.community[platform].link
+      ) {
         hasValidLink = true;
         break;
       }
     }
     if (!hasValidLink) {
-      return next(new Error("At least one community platform must have a valid link when community is enabled"));
+      return next(
+        new Error(
+          "At least one community platform must have a valid link when community is enabled"
+        )
+      );
     }
   }
 
@@ -914,7 +1122,7 @@ eventSchema.pre("save", function (next) {
     console.log(" - Agreement:", this.agreement);
     console.log(" - Accepted terms:", this.agreement?.acceptedTerms);
     console.log(" - Is New:", this.isNew);
-    console.log(" - Is Modified Status:", this.isModified('status'));
+    console.log(" - Is Modified Status:", this.isModified("status"));
 
     if (!this.agreement?.acceptedTerms) {
       return next(new Error("Terms must be accepted before publishing events"));
@@ -924,7 +1132,7 @@ eventSchema.pre("save", function (next) {
   }
 
   if (this.ticketTypes && this.ticketTypes.length > 0) {
-    this.ticketTypes.forEach(ticketType => {
+    this.ticketTypes.forEach((ticketType) => {
       if (ticketType.price === 0 && ticketType.requiresApproval === undefined) {
         ticketType.requiresApproval = true;
       }
@@ -944,13 +1152,20 @@ eventSchema.methods.calculateServiceFee = function () {
     throw new Error("Service fee only applies to free events");
   }
 
-  const serviceFee = this.agreement?.serviceFee || { type: "percentage", amount: 5 };
-  const attendanceRanges = {
-    "1-100": 50, "101-500": 200, "501-1000": 500, "1001-5000": 1000, "5001+": 2000
+  const serviceFee = this.agreement?.serviceFee || {
+    type: "percentage",
+    amount: 5,
   };
-  
+  const attendanceRanges = {
+    "1-100": 50,
+    "101-500": 200,
+    "501-1000": 500,
+    "1001-5000": 1000,
+    "5001+": 2000,
+  };
+
   const baseFee = attendanceRanges[this.agreement.estimatedAttendance] || 100;
-  
+
   if (serviceFee.type === "percentage") {
     const fee = (baseFee * serviceFee.amount) / 100;
     return Math.max(100, fee);
@@ -959,41 +1174,64 @@ eventSchema.methods.calculateServiceFee = function () {
   }
 };
 
-eventSchema.methods.initializeServiceFeePayment = async function (userEmail, userInfo = {}) {
-  if (!this.isFreeEvent) throw new Error("Service fee payment only required for free events");
-  if (this.agreement.paymentTerms !== "upfront") throw new Error("This event does not require upfront payment");
-  if (this.status === "published") throw new Error("Event is already published");
-  if (this.serviceFeePaymentStatus === "paid") throw new Error("Service fee already paid");
+eventSchema.methods.initializeServiceFeePayment = async function (
+  userEmail,
+  userInfo = {}
+) {
+  if (!this.isFreeEvent)
+    throw new Error("Service fee payment only required for free events");
+  if (this.agreement.paymentTerms !== "upfront")
+    throw new Error("This event does not require upfront payment");
+  if (this.status === "published")
+    throw new Error("Event is already published");
+  if (this.serviceFeePaymentStatus === "paid")
+    throw new Error("Service fee already paid");
 
   const serviceFeeAmount = this.calculateServiceFee();
   this.serviceFeeAmount = serviceFeeAmount;
   this.serviceFeePaymentStatus = "pending";
   await this.save();
 
-  console.log('💰 Initializing service fee payment for FREE event:', {
-    eventId: this._id, eventTitle: this.title, serviceFeeAmount, isFreeEvent: this.isFreeEvent
+  console.log("💰 Initializing service fee payment for FREE event:", {
+    eventId: this._id,
+    eventTitle: this.title,
+    serviceFeeAmount,
+    isFreeEvent: this.isFreeEvent,
   });
 
   return {
-    eventId: this._id, amount: serviceFeeAmount, email: userEmail,
-    metadata: { eventTitle: this.title, eventType: "free", eventData: this.toObject() }
+    eventId: this._id,
+    amount: serviceFeeAmount,
+    email: userEmail,
+    metadata: {
+      eventTitle: this.title,
+      eventType: "free",
+      eventData: this.toObject(),
+    },
   };
 };
 
-eventSchema.methods.markServiceFeePaid = async function (transactionReference, transactionId) {
+eventSchema.methods.markServiceFeePaid = async function (
+  transactionReference,
+  transactionId
+) {
   this.serviceFeePaymentStatus = "paid";
   this.serviceFeeReference = transactionReference;
   this.serviceFeeTransaction = transactionId;
   this.paymentProcessed = true;
   this.paymentProcessedAt = new Date();
-  
+
   if (this.status === "draft") {
     this.status = "published";
     this.publishedAt = new Date();
   }
-  
+
   await this.save();
-  console.log('✅ Service fee paid and event published:', { eventId: this._id, title: this.title, transactionReference });
+  console.log("✅ Service fee paid and event published:", {
+    eventId: this._id,
+    title: this.title,
+    transactionReference,
+  });
   return this;
 };
 
@@ -1001,21 +1239,28 @@ eventSchema.methods.markServiceFeeFailed = async function (reason) {
   this.serviceFeePaymentStatus = "failed";
   this.status = "draft";
   await this.save();
-  console.log('❌ Service fee payment failed:', { eventId: this._id, title: this.title, reason });
+  console.log("❌ Service fee payment failed:", {
+    eventId: this._id,
+    title: this.title,
+    reason,
+  });
 };
 
 // ==================== INSTANCE METHODS ====================
 eventSchema.methods.regenerateSlug = async function () {
-  const baseSlug = this.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const baseSlug = this.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   const uniqueId = this._id.toString().slice(-6);
   let slug = `${baseSlug}-${uniqueId}`;
   let counter = 1;
-  
+
   while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
     slug = `${baseSlug}-${uniqueId}-${counter}`;
     counter++;
   }
-  
+
   this.slug = slug;
   await this.save({ validateBeforeSave: false });
   return this.slug;
@@ -1023,16 +1268,26 @@ eventSchema.methods.regenerateSlug = async function () {
 
 eventSchema.methods.acceptAgreement = async function (termsData = {}) {
   this.agreement = {
-    acceptedTerms: true, acceptedAt: new Date(),
-    serviceFee: termsData.serviceFee || this.agreement?.serviceFee || { type: "percentage", amount: 5 },
-    estimatedAttendance: termsData.estimatedAttendance || this.agreement?.estimatedAttendance,
-    paymentTerms: termsData.paymentTerms || this.agreement?.paymentTerms || "upfront",
-    agreementVersion: termsData.agreementVersion || "1.0", termsUrl: termsData.termsUrl,
+    acceptedTerms: true,
+    acceptedAt: new Date(),
+    serviceFee: termsData.serviceFee ||
+      this.agreement?.serviceFee || { type: "percentage", amount: 5 },
+    estimatedAttendance:
+      termsData.estimatedAttendance || this.agreement?.estimatedAttendance,
+    paymentTerms:
+      termsData.paymentTerms || this.agreement?.paymentTerms || "upfront",
+    agreementVersion: termsData.agreementVersion || "1.0",
+    termsUrl: termsData.termsUrl,
   };
-  await this.save(); return this.agreement;
+  await this.save();
+  return this.agreement;
 };
 
-eventSchema.methods.enableCommunity = async function (platform, link, description = "") {
+eventSchema.methods.enableCommunity = async function (
+  platform,
+  link,
+  description = ""
+) {
   if (!this.community) this.community = {};
   if (!this.community[platform]) this.community[platform] = {};
 
@@ -1049,7 +1304,7 @@ eventSchema.methods.disableCommunity = async function (platform) {
   if (this.community?.[platform]) {
     this.community[platform].enabled = false;
     const hasEnabledPlatforms = Object.values(this.community).some(
-      platformConfig => platformConfig && platformConfig.enabled
+      (platformConfig) => platformConfig && platformConfig.enabled
     );
     this.communityEnabled = hasEnabledPlatforms;
   }
@@ -1129,7 +1384,10 @@ eventSchema.methods.usesNewDateSystem = function () {
 
 // ==================== APPROVAL INSTANCE METHODS ====================
 
-eventSchema.methods.enableTicketApproval = async function (ticketTypeId, questions = []) {
+eventSchema.methods.enableTicketApproval = async function (
+  ticketTypeId,
+  questions = []
+) {
   const ticketType = this.ticketTypes.id(ticketTypeId);
   if (!ticketType) throw new Error("Ticket type not found");
 
@@ -1147,14 +1405,19 @@ eventSchema.methods.disableTicketApproval = async function (ticketTypeId) {
 
   ticketType.requiresApproval = false;
   ticketType.approvalQuestions = [];
-  const hasApprovalRequired = this.ticketTypes.some(tt => tt.requiresApproval);
+  const hasApprovalRequired = this.ticketTypes.some(
+    (tt) => tt.requiresApproval
+  );
   if (!hasApprovalRequired) this.attendanceApproval.enabled = false;
 
   await this.save();
   return ticketType;
 };
 
-eventSchema.methods.addApprovalQuestions = async function (ticketTypeId, questions) {
+eventSchema.methods.addApprovalQuestions = async function (
+  ticketTypeId,
+  questions
+) {
   const ticketType = this.ticketTypes.id(ticketTypeId);
   if (!ticketType) throw new Error("Ticket type not found");
 
@@ -1172,7 +1435,10 @@ eventSchema.methods.updateApprovalSettings = async function (settings) {
   return this.attendanceApproval;
 };
 
-eventSchema.methods.incrementApprovalCounters = async function (type, count = 1) {
+eventSchema.methods.incrementApprovalCounters = async function (
+  type,
+  count = 1
+) {
   const validTypes = ["pending", "approved", "rejected"];
   if (!validTypes.includes(type)) throw new Error("Invalid approval type");
 
@@ -1197,7 +1463,8 @@ eventSchema.methods.getApprovalStats = function () {
     pending: this.pendingApprovals || 0,
     approved: this.approvedAttendees || 0,
     rejected: this.rejectedAttendees || 0,
-    totalProcessed: (this.approvedAttendees || 0) + (this.rejectedAttendees || 0),
+    totalProcessed:
+      (this.approvedAttendees || 0) + (this.rejectedAttendees || 0),
     approvalRate: this.approvalRate,
   };
 };
@@ -1228,7 +1495,10 @@ eventSchema.statics.findUpcoming = function (limit = 10) {
   })
     .sort({ startDate: 1, date: 1 })
     .limit(limit)
-    .populate("organizer", "firstName lastName userName companyName profilePicture");
+    .populate(
+      "organizer",
+      "firstName lastName userName companyName profilePicture"
+    );
 };
 
 eventSchema.statics.findFeatured = function (limit = 6) {
@@ -1272,11 +1542,15 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
 
     if (filters.minPrice !== undefined) {
       legacyPriceQuery.price.$gte = parseFloat(filters.minPrice);
-      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(filters.minPrice);
+      ticketTypePriceQuery["ticketTypes.price"].$gte = parseFloat(
+        filters.minPrice
+      );
     }
     if (filters.maxPrice !== undefined) {
       legacyPriceQuery.price.$lte = parseFloat(filters.maxPrice);
-      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(filters.maxPrice);
+      ticketTypePriceQuery["ticketTypes.price"].$lte = parseFloat(
+        filters.maxPrice
+      );
     }
 
     priceConditions.push(legacyPriceQuery, ticketTypePriceQuery);
@@ -1306,7 +1580,10 @@ eventSchema.statics.searchEvents = function (query, filters = {}) {
 
   return this.find(searchQuery)
     .sort(filters.sort || { startDate: 1, date: 1 })
-    .populate("organizer", "firstName lastName userName companyName profilePicture");
+    .populate(
+      "organizer",
+      "firstName lastName userName companyName profilePicture"
+    );
 };
 
 eventSchema.statics.getStatistics = async function (organizerId) {
@@ -1321,8 +1598,12 @@ eventSchema.statics.getStatistics = async function (organizerId) {
       $group: {
         _id: null,
         totalEvents: { $sum: 1 },
-        publishedEvents: { $sum: { $cond: [{ $eq: ["$status", "published"] }, 1, 0] } },
-        completedEvents: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+        publishedEvents: {
+          $sum: { $cond: [{ $eq: ["$status", "published"] }, 1, 0] },
+        },
+        completedEvents: {
+          $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] },
+        },
         totalAttendees: { $sum: "$totalAttendees" },
         totalRevenue: { $sum: "$totalRevenue" },
         totalViews: { $sum: "$views" },
@@ -1332,11 +1613,18 @@ eventSchema.statics.getStatistics = async function (organizerId) {
     },
   ]);
 
-  return stats[0] || {
-    totalEvents: 0, publishedEvents: 0, completedEvents: 0,
-    totalAttendees: 0, totalRevenue: 0, totalViews: 0,
-    avgAttendance: 0, avgRevenue: 0,
-  };
+  return (
+    stats[0] || {
+      totalEvents: 0,
+      publishedEvents: 0,
+      completedEvents: 0,
+      totalAttendees: 0,
+      totalRevenue: 0,
+      totalViews: 0,
+      avgAttendance: 0,
+      avgRevenue: 0,
+    }
+  );
 };
 
 eventSchema.statics.getFlexibleDateMatch = function (dateFilter = {}) {
@@ -1409,7 +1697,12 @@ eventSchema.statics.getApprovalStatistics = async function (organizerId) {
         avgApprovalRate: {
           $avg: {
             $cond: [
-              { $eq: [{ $add: ["$approvedAttendees", "$rejectedAttendees"] }, 0] },
+              {
+                $eq: [
+                  { $add: ["$approvedAttendees", "$rejectedAttendees"] },
+                  0,
+                ],
+              },
               0,
               {
                 $multiply: [
@@ -1429,13 +1722,15 @@ eventSchema.statics.getApprovalStatistics = async function (organizerId) {
     },
   ]);
 
-  return stats[0] || {
-    totalEventsWithApproval: 0,
-    totalPendingApprovals: 0,
-    totalApprovedAttendees: 0,
-    totalRejectedAttendees: 0,
-    avgApprovalRate: 0,
-  };
+  return (
+    stats[0] || {
+      totalEventsWithApproval: 0,
+      totalPendingApprovals: 0,
+      totalApprovedAttendees: 0,
+      totalRejectedAttendees: 0,
+      avgApprovalRate: 0,
+    }
+  );
 };
 
 // ==================== QUERY HELPERS ====================
@@ -1544,23 +1839,23 @@ eventSchema.query.requiresPayment = function () {
         { $eq: [{ $ifNull: ["$price", 0] }, 0] },
         { $eq: [{ $ifNull: ["$ticketTypes.price", [0]] }, [0]] },
         { $eq: ["$paymentProcessed", false] },
-        { $eq: ["$agreement.paymentTerms", "upfront"] }
-      ]
-    }
+        { $eq: ["$agreement.paymentTerms", "upfront"] },
+      ],
+    },
   });
 };
 
 eventSchema.query.paymentPending = function () {
   return this.where({
     serviceFeePaymentStatus: "pending",
-    paymentProcessed: false
+    paymentProcessed: false,
   });
 };
 
 eventSchema.query.paymentPaid = function () {
   return this.where({
     serviceFeePaymentStatus: "paid",
-    paymentProcessed: true
+    paymentProcessed: true,
   });
 };
 
@@ -1569,15 +1864,23 @@ eventSchema.query.freeEvents = function () {
     $or: [
       { price: 0 },
       { "ticketTypes.price": 0 },
-      { 
-        $expr: { 
+      {
+        $expr: {
           $eq: [
-            { $size: { $filter: { input: "$ticketTypes", as: "ticket", cond: { $gt: ["$$ticket.price", 0] } } } },
-            0
-          ]
-        }
-      }
-    ]
+            {
+              $size: {
+                $filter: {
+                  input: "$ticketTypes",
+                  as: "ticket",
+                  cond: { $gt: ["$$ticket.price", 0] },
+                },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    ],
   });
 };
 
@@ -1589,12 +1892,20 @@ eventSchema.query.paidEvents = function () {
       {
         $expr: {
           $gt: [
-            { $size: { $filter: { input: "$ticketTypes", as: "ticket", cond: { $gt: ["$$ticket.price", 0] } } } },
-            0
-          ]
-        }
-      }
-    ]
+            {
+              $size: {
+                $filter: {
+                  input: "$ticketTypes",
+                  as: "ticket",
+                  cond: { $gt: ["$$ticket.price", 0] },
+                },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    ],
   });
 };
 
