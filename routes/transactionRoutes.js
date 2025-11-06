@@ -11,8 +11,7 @@ const {
   getRevenueStats,
   initializeServiceFeePayment, 
   verifyServiceFeePayment, 
-  paystackWebhook,
-  completeDraftEventCreation, 
+  paystackWebhook, 
 } = require("../controllers/transactionController");
 
 const { protect, authorize } = require("../middleware/auth");
@@ -85,17 +84,6 @@ router.get(
 // ============================================
 // ROUTES WITH :reference OR :id PARAMETER
 // ============================================
-// ⚠️ These must come AFTER all specific routes
-
-// @desc    Complete draft event creation after service fee payment
-// @route   POST /api/v1/transactions/:reference/complete-draft-event
-// @access  Private (Organizer only)
-router.post(
-  "/:reference/complete-draft-event",
-  protect,
-  authorize("organizer", "superadmin"),
-  completeDraftEventCreation
-);
 
 // @desc    Get single transaction details
 // @route   GET /api/v1/transactions/:id

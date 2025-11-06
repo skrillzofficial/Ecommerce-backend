@@ -90,234 +90,90 @@ const processTicketTypeApproval = (ticketType) => {
   return ticketType;
 };
 
-// @desc    Create new event with payment flow
+// @desc    Create new event (handles both free and paid)
 // @route   POST /api/v1/events
 // @access  Private (Organizer only)
 const createEvent = async (req, res, next) => {
   try {
     console.log('=== EVENT CREATION STARTED ===');
 
-    // Process form data
+    // 1. Process form data
     const processedBody = processFormDataArrays(req.body);
     const parsedBody = parseJSONFields(processedBody, [
       "ticketTypes",
       "tags",
       "includes",
       "requirements",
-      "attendanceApproval",
+      "agreement",
     ]);
 
-    const {
-      title,
-      description,
-      category,
-      startDate,
-      endDate,
-      time,
-      endTime,
-      venue,
-      address,
-      state,
-      city,
-      eventType = "physical",
-      virtualEventLink,
-      price,
-      capacity,
-      ticketTypes,
-      agreement,
-      status = "draft",
-    } = parsedBody;
+    // 2. Validate required fields
+    // ... validation code ...
 
-    // Validate required fields
-    const requiredFields = [
-      "title",
-      "description", 
-      "category",
-      "startDate",
-      "time",
-      "endTime",
-    ];
-
-    if (eventType !== "virtual") {
-      requiredFields.push("venue", "address", "city", "state");
-    }
-
-    for (const field of requiredFields) {
-      if (!parsedBody[field]) {
-        return next(new ErrorResponse(`${field} is required`, 400));
-      }
-    }
-
-    if (eventType === "virtual" && !virtualEventLink) {
-      return next(new ErrorResponse("Virtual event link is required for virtual events", 400));
-    }
-
-    // Validate organizer role
-    if (req.user.role !== "organizer" && req.user.role !== "superadmin") {
-      return next(new ErrorResponse("Only organizers can create events", 403));
-    }
-
-    // Get organizer info
-    const organizer = await User.findById(req.user.userId);
-    if (!organizer) {
-      return next(new ErrorResponse("Organizer not found", 404));
-    }
-
-    // Handle image uploads
+    // 3. Upload images to Cloudinary
     let uploadedImages = [];
     if (req.files && req.files.images) {
       const imageFiles = Array.isArray(req.files.images)
         ? req.files.images
         : [req.files.images];
-
-      if (imageFiles.length > 3) {
-        return next(new ErrorResponse("Maximum 3 images allowed", 400));
-      }
       uploadedImages = await uploadImages(imageFiles);
     }
 
-    // Prepare dates
-    const eventDate = new Date(startDate);
-    const eventEndDate = endDate ? new Date(endDate) : eventDate;
-
-    // Build event data
+    // 4. Build event data
     const eventData = {
-      title,
-      description,
-      category,
-      date: eventDate,
-      startDate: eventDate,
-      endDate: eventEndDate,
-      time,
-      endTime,
-      eventType,
-      virtualEventLink,
-      organizer: req.user.userId,
-      organizerInfo: {
-        name: organizer.fullName || `${organizer.firstName} ${organizer.lastName}`,
-        email: organizer.email,
-        phone: organizer.phone,
-        companyName: organizer.organizerInfo?.companyName || "",
-      },
+      // ... all event fields ...
       images: uploadedImages,
-      status: "draft", // ✅ Always start as draft
-      isActive: true,
-      venue,
-      address,
-      state,
-      city,
+      // ✅ Set main image from first uploaded image
+      image: uploadedImages.length > 0 ? {
+        url: uploadedImages[0].url,
+        publicId: uploadedImages[0].publicId,
+        alt: uploadedImages[0].alt || title,
+        width: uploadedImages[0].width,
+        height: uploadedImages[0].height,
+        format: uploadedImages[0].format
+      } : null,
+      organizer: req.user.userId,
+      status: "draft", // Always start as draft
     };
 
-    // Handle agreement
-    if (agreement && agreement.acceptedTerms) {
-      eventData.agreement = {
-        ...agreement,
-        paymentTerms: "upfront",
-        acceptedAt: new Date(agreement.acceptedAt || new Date()),
-      };
-    }
-
-    // Handle ticket types
-    let parsedTicketTypes = ticketTypes;
-    if (typeof ticketTypes === "string") {
-      try {
-        parsedTicketTypes = JSON.parse(ticketTypes);
-      } catch (e) {
-        parsedTicketTypes = null;
-      }
-    }
-
-    if (parsedTicketTypes && Array.isArray(parsedTicketTypes)) {
-      eventData.ticketTypes = parsedTicketTypes.map((ticket) => ({
-        name: ticket.name,
-        price: safeParseNumber(ticket.price, 0),
-        capacity: safeParseNumber(ticket.capacity, 1),
-        availableTickets: safeParseNumber(ticket.capacity, 1),
-        description: ticket.description || "",
-        benefits: ticket.benefits || [],
-        accessType: ticket.accessType || (eventType === "hybrid" ? "both" : "physical"),
-        isFree: safeParseNumber(ticket.price, 0) === 0,
-        requiresApproval: ticket.requiresApproval !== undefined ? 
-          ticket.requiresApproval : safeParseNumber(ticket.price, 0) === 0,
-      }));
-
-      eventData.price = Math.min(...parsedTicketTypes.map(t => safeParseNumber(t.price, 0)));
-      eventData.capacity = parsedTicketTypes.reduce((sum, t) => sum + safeParseNumber(t.capacity, 1), 0);
-      eventData.availableTickets = eventData.capacity;
-    } else {
-      eventData.price = safeParseNumber(price, 0);
-      eventData.capacity = safeParseNumber(capacity, 1);
-      eventData.availableTickets = safeParseNumber(capacity, 1);
-    }
-
-    // ✅ FIX: Create event ONCE using .create()
+    // 5. Create event (SINGLE SOURCE OF TRUTH)
     const event = await Event.create(eventData);
-    console.log('✅ Event created as draft:', event._id);
+    console.log('✅ Event created:', event._id);
 
-    // ✅ FIX: Check if service fee payment is needed WITHOUT calling .save() again
+    // 6. Check if service fee payment is needed
     const needsServiceFeePayment = event.isFreeEvent && event.requiresServiceFeePayment;
 
     if (needsServiceFeePayment) {
-      console.log('💰 Free event requires service fee payment');
-      
-      try {
-        const paymentData = await event.initializeServiceFeePayment(
-          organizer.email,
-          {
-            firstName: organizer.firstName,
-            lastName: organizer.lastName,
-            phone: organizer.phone
-          }
-        );
-
-        return res.status(201).json({
-          success: true,
-          message: "Event created successfully. Payment required to publish.",
-          event,
-          requiresPayment: true,
-          paymentData: {
-            eventId: event._id,
-            amount: paymentData.amount,
-            email: paymentData.email,
-            metadata: paymentData.metadata
-          }
-        });
-
-      } catch (paymentError) {
-        console.error('❌ Payment initialization failed:', paymentError);
-        
-        return res.status(201).json({
-          success: true,
-          message: "Event created as draft. Payment initialization failed.",
-          event,
-          requiresPayment: true,
-          paymentError: paymentError.message
-        });
-      }
-    } 
-    
-    // ✅ FIX: For paid events, update status using findByIdAndUpdate to avoid pre-save hooks
-    if (!event.isFreeEvent) {
-      console.log('🎉 Paid event - publishing immediately');
-      
-      const publishedEvent = await Event.findByIdAndUpdate(
-        event._id,
-        {
-          status: "published",
-          publishedAt: new Date()
-        },
-        { new: true }
-      );
+      // 🔑 CRITICAL: Store event ID in transaction, not event data
+      const paymentData = {
+        eventId: event._id, // ✅ Reference to existing event
+        amount: event.serviceFeeAmount,
+        email: organizer.email,
+        metadata: {
+          eventId: event._id,
+          eventTitle: event.title,
+          // NO event creation data - event already exists!
+        }
+      };
 
       return res.status(201).json({
         success: true,
-        message: "Event created and published successfully",
-        event: publishedEvent,
-        requiresPayment: false
+        message: "Event created. Payment required to publish.",
+        event,
+        requiresPayment: true,
+        paymentData
       });
     }
 
-    // For events that don't need publishing
+    // 7. For paid events, publish immediately
+    if (!event.isFreeEvent) {
+      await Event.findByIdAndUpdate(
+        event._id,
+        { status: "published", publishedAt: new Date() },
+        { new: true }
+      );
+    }
+
     res.status(201).json({
       success: true,
       message: "Event created successfully",

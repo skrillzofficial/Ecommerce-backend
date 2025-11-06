@@ -534,454 +534,150 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
-// ✅ FIXED: initializeServiceFeePayment function
+// @desc    Initialize service fee payment for EXISTING draft event
+// @route   POST /api/v1/transactions/initialize-service-fee
+// @access  Private
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
-    const { eventId, amount, email, metadata } = req.body;
+    const { eventId, amount, email } = req.body;
 
-    if (!eventId || !amount || !email) {
-      return next(
-        new ErrorResponse("Event ID, amount, and email are required", 400)
-      );
+    // ✅ Verify event exists and is a draft
+    const event = await Event.findById(eventId);
+    
+    if (!event) {
+      return next(new ErrorResponse('Event not found', 404));
     }
 
-    const amountNum = parseFloat(amount);
-    if (isNaN(amountNum) || amountNum <= 0 || amountNum > 10000000) {
-      return next(new ErrorResponse("Invalid service fee amount", 400));
+    if (event.status !== 'draft') {
+      return next(new ErrorResponse('Event already published', 400));
     }
 
-    const isDraftEvent =
-      typeof eventId === "string" && eventId.startsWith("draft-");
+    if (event.organizer.toString() !== req.user.userId) {
+      return next(new ErrorResponse('Not authorized', 403));
+    }
 
-    console.log("Service fee payment initialization:", {
-      eventId,
-      isDraft: isDraftEvent,
-      amount: amountNum,
-      email,
-      hasAgreementData: !!metadata?.agreementData,
-      agreementAcceptedTerms: metadata?.agreementData?.acceptedTerms,
-      hasImages: !!metadata?.eventData?.images,
-      imagesCount: metadata?.eventData?.images?.length || 0,
-    });
+    // ✅ Create transaction (NO event data, just reference)
+    const reference = `TXN-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
 
-    // Generate unique reference
-    const reference = `TXN-${Date.now()}-${Math.random()
-      .toString(36)
-      .substring(2, 9)
-      .toUpperCase()}`;
-
-    console.log("✅ Generated reference:", reference);
-
-    const eventData = metadata?.eventData || {};
-
-    console.log("📸 Images in request metadata:", {
-      hasImages: !!eventData.images,
-      imagesType: Array.isArray(eventData.images)
-        ? "array"
-        : typeof eventData.images,
-      imagesCount: eventData.images?.length || 0,
-      firstImage: eventData.images?.[0],
-    });
-
-    const transactionData = {
-      reference: reference,
+    const transaction = await Transaction.create({
+      reference,
       userId: req.user.userId,
-      type: "service_fee",
-      eventId: isDraftEvent ? undefined : eventId,
-      bookingId: undefined,
-      totalAmount: amountNum,
-      subtotalAmount: amountNum,
-      serviceFee: 0,
-      taxAmount: 0,
-      discountAmount: 0,
-      currency: "NGN",
-      eventTitle:
-        metadata?.eventTitle || eventData.title || "Event Service Fee",
-      eventStartDate: eventData.startDate || eventData.date || new Date(),
-      status: "pending",
-      paymentMethod: "card",
-      paymentGateway: "paystack",
+      eventId: event._id, // ✅ Reference to existing event
+      type: 'service_fee',
+      totalAmount: amount,
+      status: 'pending',
       metadata: {
-        isDraft: isDraftEvent,
-        draftEventId: isDraftEvent ? eventId : null,
-        eventData: {
-          ...eventData,
-          images: eventData.images || [],
-        },
-        agreementData: {
-          ...(metadata?.agreementData || {}),
-          acceptedTerms: true,
-          acceptedAt:
-            metadata?.agreementData?.acceptedAt || new Date().toISOString(),
-        },
-        attendanceRange: metadata?.attendanceRange || "unknown",
-        userInfo: metadata?.userInfo || {},
-        hasApprovalTickets: metadata?.hasApprovalTickets || false,
-      },
-    };
-
-    console.log("📦 Transaction data prepared:", {
-      reference: transactionData.reference,
-      type: transactionData.type,
-      isDraft: isDraftEvent,
-      hasAgreementData: !!transactionData.metadata.agreementData,
-      agreementAcceptedTerms:
-        transactionData.metadata.agreementData.acceptedTerms,
-      hasImages: !!transactionData.metadata.eventData.images,
-      imagesCount: transactionData.metadata.eventData.images?.length || 0,
+        eventId: event._id,
+        eventTitle: event.title,
+        // No event creation data!
+      }
     });
 
-    const transaction = await Transaction.create(transactionData);
-
-    console.log("✅ Transaction created successfully:", {
-      id: transaction._id,
-      reference: transaction.reference,
-      type: transaction.type,
-      hasMetadata: !!transaction.metadata,
-      agreementAcceptedTerms:
-        transaction.metadata?.agreementData?.acceptedTerms,
-      imagesInTransaction: transaction.metadata?.eventData?.images?.length || 0,
-    });
-
-    // ✅ CRITICAL FIX: Properly format callback URL with ? before query parameters
-    const callbackUrl = req.body.callback_url || 
-      `${process.env.FRONTEND_URL}/payment-verification?type=service_fee&reference=${transaction.reference}`;
-
-    console.log("🔗 Callback URL:", callbackUrl);
-
-    const paymentData = {
-      email: email,
-      amount: Math.round(amountNum * 100), // Convert to kobo
-      reference: transaction.reference,
+    // ✅ Initialize Paystack payment
+    const paymentResponse = await initializePayment({
+      email,
+      amount: Math.round(amount * 100),
+      reference,
+      callback_url: `${process.env.FRONTEND_URL}/payment-verification?type=service_fee&reference=${reference}`,
       metadata: {
         transactionId: transaction._id.toString(),
-        userId: req.user.userId,
-        type: "service_fee",
-        isDraft: isDraftEvent,
-        eventId: eventId,
-      },
-      callback_url: callbackUrl, // ✅ Use properly formatted URL
-    };
-
-    console.log("💳 Initializing Paystack payment:", {
-      reference: transaction.reference,
-      amount: paymentData.amount,
-      email: paymentData.email,
-      callback_url: paymentData.callback_url,
-    });
-
-    const paymentResponse = await initializePayment(paymentData);
-
-    transaction.authorizationUrl = paymentResponse.data.authorization_url;
-    transaction.accessCode = paymentResponse.data.access_code;
-    await transaction.save();
-
-    console.log("🎉 Payment initialized successfully:", {
-      reference: transaction.reference,
-      authorizationUrl: paymentResponse.data.authorization_url,
+        eventId: event._id.toString(),
+        type: 'service_fee'
+      }
     });
 
     res.status(200).json({
       success: true,
-      message: "Service fee payment initialized successfully",
+      message: 'Payment initialized',
       data: {
+        reference,
+        authorizationUrl: paymentResponse.data.authorization_url,
         transaction: {
           _id: transaction._id,
           reference: transaction.reference,
-          amount: transaction.totalAmount,
-          status: transaction.status,
-          type: transaction.type,
-        },
-        authorizationUrl: paymentResponse.data.authorization_url,
-        authorization_url: paymentResponse.data.authorization_url, // ✅ Add both formats
-        reference: transaction.reference,
-        isDraft: isDraftEvent,
-      },
+          amount: transaction.totalAmount
+        }
+      }
     });
+
   } catch (error) {
-    console.error("💥 Service fee payment initialization error:", error);
-
-    if (error.name === "ValidationError") {
-      console.error("Validation errors:", error.errors);
-      const messages = Object.values(error.errors).map((err) => err.message);
-      return next(new ErrorResponse(messages.join(", "), 400));
-    }
-
+    console.error('Payment initialization error:', error);
     next(error);
   }
 };
 
-// @desc    Verify service fee payment
+// @desc    Verify service fee payment and publish event
 // @route   POST /api/v1/transactions/verify-service-fee/:reference
 // @access  Public
 const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
 
-    console.log("🔍 Verifying service fee payment:", reference);
-
-    const existingTransaction = await Transaction.findOne({
-      reference,
-      type: "service_fee",
-      status: "completed",
-    }).populate("eventId");
-
-    if (existingTransaction && existingTransaction.eventId) {
-      console.log("✅ Event already created for this payment:", {
-        transactionId: existingTransaction._id,
-        eventId: existingTransaction.eventId._id,
-        eventTitle: existingTransaction.eventId.title,
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: "Service fee payment already verified and event created",
-        data: {
-          transaction: {
-            _id: existingTransaction._id,
-            reference: existingTransaction.reference,
-            amount: existingTransaction.totalAmount,
-            status: existingTransaction.status,
-            type: existingTransaction.type,
-            metadata: existingTransaction.metadata,
-          },
-          event: existingTransaction.eventId,
-          isDraft: false,
-          alreadyProcessed: true,
-        },
-      });
-    }
-
-    const transaction = await Transaction.findOne({
-      reference,
-      type: "service_fee",
-    });
-
+    // 1. Find transaction
+    const transaction = await Transaction.findOne({ reference, type: 'service_fee' });
+    
     if (!transaction) {
-      return next(new ErrorResponse("Service fee transaction not found", 404));
+      return next(new ErrorResponse('Transaction not found', 404));
     }
 
-    if (transaction.status === "completed" && !transaction.eventId) {
-      console.log("📋 Payment verified but waiting for event creation");
-
+    // 2. If already completed, return event
+    if (transaction.status === 'completed') {
+      const event = await Event.findById(transaction.eventId);
       return res.status(200).json({
         success: true,
-        message: "Payment verified, waiting for event creation",
-        data: {
-          transaction: {
-            _id: transaction._id,
-            reference: transaction.reference,
-            amount: transaction.totalAmount,
-            status: transaction.status,
-            type: transaction.type,
-            metadata: transaction.metadata,
-          },
-          isDraft: true,
-          eventData: transaction.metadata?.eventData || null,
-          completionEndpoint: `/api/v1/transactions/${reference}/complete-draft-event`,
-        },
+        message: 'Payment already verified',
+        data: { transaction, event }
       });
     }
 
-    if (transaction.status === "pending") {
-      console.log("💳 Verifying payment with Paystack...");
-      const verification = await verifyPayment(reference);
+    // 3. Verify with Paystack
+    const verification = await verifyPayment(reference);
 
-      console.log("Paystack verification response:", {
-        status: verification.data.status,
-        reference,
-        isDraft: transaction.metadata?.isDraft,
+    if (verification.data.status !== 'success') {
+      await transaction.markAsFailed('Payment verification failed');
+      return res.status(400).json({
+        success: false,
+        message: 'Payment verification failed'
       });
-
-      if (verification.data.status === "success") {
-        await markTransactionAsCompleted(transaction, verification.data);
-
-        const isDraft = transaction.metadata?.isDraft;
-
-        if (!isDraft && transaction.eventId) {
-          console.log(
-            "📝 Updating existing event status:",
-            transaction.eventId
-          );
-
-          const updatedEvent = await Event.findByIdAndUpdate(
-            transaction.eventId,
-            {
-              serviceFeePaymentStatus: "paid",
-              serviceFeeReference: reference,
-              serviceFeeTransaction: transaction._id,
-              isActive: true,
-              status: "published",
-            },
-            { new: true }
-          );
-
-          console.log("✅ Event updated successfully:", {
-            eventId: updatedEvent._id,
-            title: updatedEvent.title,
-            status: updatedEvent.status,
-          });
-
-          return res.status(200).json({
-            success: true,
-            message:
-              "Service fee payment verified and event published successfully",
-            data: {
-              transaction: {
-                _id: transaction._id,
-                reference: transaction.reference,
-                amount: transaction.totalAmount,
-                status: transaction.status,
-                type: transaction.type,
-                metadata: transaction.metadata,
-              },
-              event: updatedEvent,
-              isDraft: false,
-            },
-          });
-        } else if (isDraft) {
-          console.log(
-            "📋 Draft event - payment verified, waiting for event creation"
-          );
-
-          return res.status(200).json({
-            success: true,
-            message: "Service fee payment verified successfully",
-            data: {
-              transaction: {
-                _id: transaction._id,
-                reference: transaction.reference,
-                amount: transaction.totalAmount,
-                status: transaction.status,
-                type: transaction.type,
-                metadata: transaction.metadata,
-              },
-              isDraft: true,
-              eventData: transaction.metadata?.eventData || null,
-            },
-          });
-        }
-      } else {
-        console.log(
-          "❌ Payment verification failed:",
-          verification.data.status
-        );
-
-        await markTransactionAsFailed(
-          transaction,
-          "Service fee payment verification failed"
-        );
-
-        return res.status(400).json({
-          success: false,
-          message: "Service fee payment verification failed",
-          data: {
-            transaction: transaction,
-          },
-        });
-      }
     }
 
-    console.log("ℹ️ Transaction in unexpected state:", {
-      status: transaction.status,
-      hasEventId: !!transaction.eventId,
-    });
+    // 4. Mark transaction as completed
+    await transaction.markAsCompleted(verification.data);
 
-    return res.status(200).json({
-      success: true,
-      message: `Transaction is ${transaction.status}`,
-      data: {
-        transaction: {
-          _id: transaction._id,
-          reference: transaction.reference,
-          amount: transaction.totalAmount,
-          status: transaction.status,
-          type: transaction.type,
-          metadata: transaction.metadata,
-        },
-        isDraft: transaction.status === "completed" && !transaction.eventId,
-        event: transaction.eventId || null,
+    // 5. Publish the EXISTING event (NO creation!)
+    const event = await Event.findByIdAndUpdate(
+      transaction.eventId,
+      {
+        status: 'published',
+        publishedAt: new Date(),
+        serviceFeePaymentStatus: 'paid',
+        serviceFeeReference: reference,
+        serviceFeeTransaction: transaction._id,
+        paymentProcessed: true,
+        paymentProcessedAt: new Date()
       },
-    });
-  } catch (error) {
-    console.error("💥 Service fee verification error:", error);
-    next(error);
-  }
-};
+      { new: true }
+    );
 
-const completeDraftEventCreation = async (req, res, next) => {
-  try {
-    const { reference } = req.params;
-
-    // ✅ FIX: Check if transaction already has an event (idempotent check)
-    let transaction = await Transaction.findOne({
-      reference,
-      type: "service_fee",
-    }).populate("eventId");
-
-    if (!transaction) {
-      return next(new ErrorResponse("Transaction not found", 404));
+    if (!event) {
+      return next(new ErrorResponse('Event not found', 404));
     }
 
-    // ✅ CRITICAL: If event already exists, return immediately
-    if (transaction.eventId) {
-      console.log("✅ Event already created, returning existing:", transaction.eventId._id);
-      
-      return res.status(200).json({
-        success: true,
-        message: "Event already created",
-        data: {
-          event: transaction.eventId,
-          alreadyProcessed: true,
-        },
-      });
-    }
+    console.log('✅ Event published:', event._id);
 
-    // ✅ AUTH CHECK
-    if (transaction.userId?.toString() !== req.user.userId.toString() && req.user.role !== "superadmin") {
-      return next(new ErrorResponse("Not authorized", 403));
-    }
-
-    // ✅ VERIFY PAYMENT STATUS
-    if (transaction.status !== "completed") {
-      return next(new ErrorResponse(`Transaction is ${transaction.status}`, 400));
-    }
-
-    // ✅ CREATE EVENT (only once)
-    const eventData = transaction.metadata?.eventData || {};
-    const agreementData = transaction.metadata?.agreementData || {};
-
-    const finalEventData = {
-      ...eventData,
-      organizer: req.user.userId,
-      status: "published",
-      isActive: true,
-      agreement: agreementData,
-      serviceFeePaymentStatus: "paid",
-      serviceFeeReference: reference,
-      serviceFeeTransaction: transaction._id,
-    };
-
-    console.log("📝 Creating event ONCE...");
-    const event = await Event.create(finalEventData);
-
-    // ✅ IMMEDIATELY link transaction to prevent duplicates
-    transaction.eventId = event._id;
-    await transaction.save();
-
-    console.log("✅ Event created:", event._id);
-
-    res.status(201).json({
+    res.status(200).json({
       success: true,
-      message: "Event created successfully",
-      data: { event },
+      message: 'Payment verified and event published',
+      data: { transaction, event }
     });
 
   } catch (error) {
-    console.error("❌ Error:", error);
+    console.error('Verification error:', error);
     next(error);
   }
 };
+
+
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
@@ -1109,5 +805,4 @@ module.exports = {
   initializeServiceFeePayment,
   verifyServiceFeePayment,
   paystackWebhook,
-  completeDraftEventCreation,
 };
