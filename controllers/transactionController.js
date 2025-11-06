@@ -534,30 +534,12 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
-// @desc    Initialize service fee payment
-// @route   POST /api/v1/transactions/initialize-service-fee
-// @access  Private
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
-    const {
-      amount,
-      email,
-      paymentMethod = "card",
-      totalAmount,
-      subtotalAmount,
-      eventStartDate,
-      eventTitle,
-    } = req.body;
+    const { amount, email, eventTitle, eventStartDate, metadata } = req.body;
 
-    // Basic validation - NO eventId validation
-    if (
-      !amount ||
-      !email ||
-      !totalAmount ||
-      !subtotalAmount ||
-      !eventStartDate ||
-      !eventTitle
-    ) {
+    // Essential validation
+    if (!amount || !email || !eventTitle || !eventStartDate) {
       return next(new ErrorResponse("Missing required fields", 400));
     }
 
@@ -566,13 +548,13 @@ const initializeServiceFeePayment = async (req, res, next) => {
       .toString(36)
       .substr(2, 9)}`;
 
-    // Paystack data - send ALL event data as metadata
+    // Paystack data
     const paystackData = {
       email: email,
       amount: Math.round(amount * 100),
       reference: reference,
       metadata: {
-        ...req.body.metadata,
+        ...metadata,
         paymentType: "service_fee",
         userId: req.user.userId,
       },
@@ -581,17 +563,18 @@ const initializeServiceFeePayment = async (req, res, next) => {
 
     const paystackResponse = await initializePayment(paystackData);
 
-    // Create transaction WITHOUT eventId
+    // Create transaction with essential fields
     const transaction = await Transaction.create({
       reference: reference,
-      amount: amount,
-      totalAmount: totalAmount,
-      subtotalAmount: subtotalAmount,
       userId: req.user.userId,
       type: "service_fee",
-      status: "pending",
-      paymentMethod: paymentMethod,
+      amount: amount,
+      totalAmount: amount,
       currency: "NGN",
+      paymentMethod: "card",
+      status: "pending",
+      eventTitle: eventTitle,
+      eventStartDate: new Date(eventStartDate),
     });
 
     res.status(200).json({
@@ -606,6 +589,8 @@ const initializeServiceFeePayment = async (req, res, next) => {
     next(error);
   }
 };
+
+// @desc    Verify service fee payment and publish event
 const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
