@@ -33,7 +33,7 @@ router.get("/verify/:reference", verifyTransaction);
 // @desc    Verify service fee payment
 // @route   POST /api/v1/transactions/verify-service-fee/:reference
 // @access  Public (needs to be public for payment callback)
-router.post("/verify-service-fee/:reference", verifyServiceFeePayment);
+router.get("/verify-service-fee/:reference", verifyServiceFeePayment);
 
 // ============================================
 // PROTECTED ROUTES - SPECIFIC ROUTES FIRST
