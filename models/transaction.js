@@ -66,6 +66,12 @@ const transactionSchema = new mongoose.Schema(
       required: true,
     },
 
+    // ✅ ADDED: Metadata for service fee events
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
     // Payment Gateway Data
     paystackData: {
       type: mongoose.Schema.Types.Mixed,
