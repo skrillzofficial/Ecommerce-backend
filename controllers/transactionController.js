@@ -534,161 +534,92 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
-//  initializeServiceFeePayment FUNCTION
+// @desc    Initialize service fee payment
+// @route   POST /api/v1/transactions/initialize-service-fee
+
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
-    console.log("🔔 initializeServiceFeePayment CONTROLLER CALLED");
-    console.log("Request body:", req.body);
+    console.log("initializeServiceFeePayment called");
 
-    const { eventId, amount, email, metadata, callback_url } = req.body;
+    const {
+      eventId,
+      amount,
+      email,
+      metadata,
+      callback_url,
+      paymentMethod = "card",
+      totalAmount,
+      subtotalAmount,
+      eventStartDate,
+      eventTitle,
+    } = req.body;
 
-    // Validate required fields
-    if (!eventId || !amount || !email) {
-      return next(
-        new ErrorResponse(
-          "Missing required fields: eventId, amount, email",
-          400
-        )
-      );
+    // Basic validation
+    if (
+      !eventId ||
+      !amount ||
+      !email ||
+      !totalAmount ||
+      !subtotalAmount ||
+      !eventStartDate ||
+      !eventTitle
+    ) {
+      return next(new ErrorResponse("Missing required fields", 400));
     }
 
-    // Check if this is a draft event (starts with "draft-")
-    const isDraftEvent = eventId.startsWith("draft-");
-
-    console.log("📝 Event type:", isDraftEvent ? "DRAFT" : "EXISTING");
-    console.log("Event ID:", eventId);
-
-    // For draft events, skip database lookup
-    let eventData = null;
-
-    if (!isDraftEvent) {
-      // Only look up in database if it's a real event ID
-      try {
-        eventData = await Event.findById(eventId);
-        if (!eventData) {
-          return next(new ErrorResponse("Event not found", 404));
-        }
-      } catch (dbError) {
-        console.error("Database lookup error:", dbError);
-        return next(new ErrorResponse("Invalid event ID", 400));
-      }
-    } else {
-      // For draft events, use metadata or create minimal event data
-      eventData = {
-        _id: eventId,
-        title: metadata?.eventTitle || "New Event",
-        organizer: req.user.userId,
-        isDraft: true,
-      };
-      console.log("📋 Using draft event data");
-    }
-
-    // Generate unique reference
+    // Generate reference
     const reference = `SRV-${Date.now()}-${Math.random()
       .toString(36)
       .substr(2, 9)}`;
 
-    console.log("💰 Initializing Paystack payment for service fee:", {
-      email,
-      amount,
-      reference,
-      eventId,
-      isDraftEvent,
-    });
-
-    // ✅ FIX: Use your Paystack service instead of axios
+    // Paystack data
     const paystackData = {
       email: email,
-      amount: amount,
+      amount: Math.round(amount * 100),
       reference: reference,
       metadata: {
         ...metadata,
         eventId: eventId,
-        isDraftEvent: isDraftEvent,
+        eventTitle: eventTitle,
+        eventStartDate: eventStartDate,
         paymentType: "service_fee",
         userId: req.user.userId,
-        custom_fields: [
-          {
-            display_name: "Service Type",
-            variable_name: "service_type",
-            value: "event_publishing",
-          },
-          {
-            display_name: "Event Title",
-            variable_name: "event_title",
-            value: metadata?.eventTitle || "New Event",
-          },
-          {
-            display_name: "Event Type",
-            variable_name: "event_type",
-            value: isDraftEvent ? "draft" : "existing",
-          },
-        ],
       },
       callback_url:
         callback_url ||
         `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`,
     };
 
-    console.log(" Calling Paystack service...");
-
-    // ✅ FIX: Use your existing Paystack service
     const paystackResponse = await initializePayment(paystackData);
 
-    console.log("✅ Paystack response received:", {
-      status: paystackResponse.status,
-      reference: paystackResponse.data?.reference,
-      authorizationUrl: paystackResponse.data?.authorization_url ? "Yes" : "No",
-    });
-
-    // Save transaction record
+    // Create transaction
     const transaction = await Transaction.create({
       reference: reference,
       amount: amount,
+      totalAmount: totalAmount,
+      subtotalAmount: subtotalAmount,
       userId: req.user.userId,
+      eventId: eventId,
       type: "service_fee",
       status: "pending",
-      metadata: {
-        ...paystackData.metadata,
-        authorizationUrl: paystackResponse.data?.authorization_url,
-        eventData: metadata?.eventData || null,
-        paystackResponse: paystackResponse.data,
-      },
+      paymentMethod: paymentMethod,
+      currency: "NGN",
+      metadata: paystackData.metadata,
     });
 
-    console.log("Transaction created:", transaction._id);
-
-    // Return response to frontend
     res.status(200).json({
       success: true,
       message: "Service fee payment initialized successfully",
       data: {
         authorizationUrl: paystackResponse.data.authorization_url,
         reference: paystackResponse.data.reference,
-        accessCode: paystackResponse.data.access_code,
         transaction: {
           _id: transaction._id,
           reference: transaction.reference,
-          amount: transaction.amount,
         },
       },
     });
   } catch (error) {
-    console.error(" initializeServiceFeePayment error:", error);
-
-    // More specific error handling
-    if (error.name === "CastError") {
-      return next(new ErrorResponse("Invalid event ID format", 400));
-    }
-
-    // Handle Paystack-specific errors
-    if (
-      error.message.includes("Paystack") ||
-      error.message.includes("payment")
-    ) {
-      return next(new ErrorResponse(error.message, 400));
-    }
-
     next(error);
   }
 };
