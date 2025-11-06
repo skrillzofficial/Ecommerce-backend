@@ -534,6 +534,7 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
+
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
     const { amount, email, eventTitle, eventStartDate, metadata } = req.body;

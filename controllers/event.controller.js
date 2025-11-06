@@ -90,103 +90,70 @@ const processTicketTypeApproval = (ticketType) => {
   return ticketType;
 };
 
-// @desc    Create new event (handles both free and paid)
+// @desc    Create new event
 // @route   POST /api/v1/events
 // @access  Private (Organizer only)
 const createEvent = async (req, res, next) => {
   try {
-    console.log('=== EVENT CREATION STARTED ===');
-
-    // 1. Process form data
+    // Process form data
     const processedBody = processFormDataArrays(req.body);
     const parsedBody = parseJSONFields(processedBody, [
       "ticketTypes",
       "tags",
-      "includes",
       "requirements",
-      "agreement",
     ]);
 
-    // 2. Validate required fields
-    // ... validation code ...
+    const { title, description, startDate, category, eventType, ticketTypes } = parsedBody;
 
-    // 3. Upload images to Cloudinary
+    // Basic validation
+    if (!title || !description || !startDate || !category || !eventType) {
+      return next(new ErrorResponse("Please fill in all required fields", 400));
+    }
+
+    // Upload images
     let uploadedImages = [];
     if (req.files && req.files.images) {
-      const imageFiles = Array.isArray(req.files.images)
-        ? req.files.images
+      const imageFiles = Array.isArray(req.files.images) 
+        ? req.files.images 
         : [req.files.images];
       uploadedImages = await uploadImages(imageFiles);
     }
 
-    // 4. Build event data
+    // Determine if event is free
+    const isFreeEvent = ticketTypes?.every(ticket => 
+      ticket.price === 0 || ticket.price === "0" || !ticket.price
+    );
+
+    // Build event data
     const eventData = {
-      // ... all event fields ...
+      ...parsedBody,
       images: uploadedImages,
-      // ✅ Set main image from first uploaded image
       image: uploadedImages.length > 0 ? {
         url: uploadedImages[0].url,
         publicId: uploadedImages[0].publicId,
-        alt: uploadedImages[0].alt || title,
-        width: uploadedImages[0].width,
-        height: uploadedImages[0].height,
-        format: uploadedImages[0].format
       } : null,
       organizer: req.user.userId,
-      status: "draft", // Always start as draft
+      isFreeEvent: isFreeEvent,
+      status: isFreeEvent ? "draft" : "published", 
     };
 
-    // 5. Create event (SINGLE SOURCE OF TRUTH)
+    // Create event
     const event = await Event.create(eventData);
-    console.log('✅ Event created:', event._id);
-
-    // 6. Check if service fee payment is needed
-    const needsServiceFeePayment = event.isFreeEvent && event.requiresServiceFeePayment;
-
-    if (needsServiceFeePayment) {
-      // 🔑 CRITICAL: Store event ID in transaction, not event data
-      const paymentData = {
-        eventId: event._id, // ✅ Reference to existing event
-        amount: event.serviceFeeAmount,
-        email: organizer.email,
-        metadata: {
-          eventId: event._id,
-          eventTitle: event.title,
-          // NO event creation data - event already exists!
-        }
-      };
-
-      return res.status(201).json({
-        success: true,
-        message: "Event created. Payment required to publish.",
-        event,
-        requiresPayment: true,
-        paymentData
-      });
-    }
-
-    // 7. For paid events, publish immediately
-    if (!event.isFreeEvent) {
-      await Event.findByIdAndUpdate(
-        event._id,
-        { status: "published", publishedAt: new Date() },
-        { new: true }
-      );
-    }
 
     res.status(201).json({
       success: true,
-      message: "Event created successfully",
-      event,
-      requiresPayment: false
+      message: isFreeEvent 
+        ? "Event created. Service fee payment required to publish." 
+        : "Paid event published successfully",
+      data: event,
+      requiresServiceFee: isFreeEvent
     });
 
   } catch (error) {
-    console.error('❌ Event creation error:', error);
+    console.error('Event creation error:', error);
     next(error);
   }
 };
-
 // @desc    Get all events with filtering and pagination
 // @route   GET /api/v1/events/all
 // @access  Public
