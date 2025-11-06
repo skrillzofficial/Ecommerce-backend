@@ -534,19 +534,13 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
-// @desc    Initialize service fee payment
-// @route   POST /api/v1/transactions/initialize-service-fee
-
+// Quick fix: Skip event lookup entirely for service fee payments
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
-    console.log("initializeServiceFeePayment called");
-
     const {
       eventId,
       amount,
       email,
-      metadata,
-      callback_url,
       paymentMethod = "card",
       totalAmount,
       subtotalAmount,
@@ -578,33 +572,29 @@ const initializeServiceFeePayment = async (req, res, next) => {
       amount: Math.round(amount * 100),
       reference: reference,
       metadata: {
-        ...metadata,
         eventId: eventId,
         eventTitle: eventTitle,
         eventStartDate: eventStartDate,
         paymentType: "service_fee",
         userId: req.user.userId,
       },
-      callback_url:
-        callback_url ||
-        `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`,
+      callback_url: `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`,
     };
 
     const paystackResponse = await initializePayment(paystackData);
 
-    // Create transaction
+    // Create transaction - eventId stored as string
     const transaction = await Transaction.create({
       reference: reference,
       amount: amount,
       totalAmount: totalAmount,
       subtotalAmount: subtotalAmount,
       userId: req.user.userId,
-      eventId: eventId,
+      eventId: eventId, // Store as string
       type: "service_fee",
       status: "pending",
       paymentMethod: paymentMethod,
       currency: "NGN",
-      metadata: paystackData.metadata,
     });
 
     res.status(200).json({
@@ -613,10 +603,6 @@ const initializeServiceFeePayment = async (req, res, next) => {
       data: {
         authorizationUrl: paystackResponse.data.authorization_url,
         reference: paystackResponse.data.reference,
-        transaction: {
-          _id: transaction._id,
-          reference: transaction.reference,
-        },
       },
     });
   } catch (error) {
