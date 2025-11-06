@@ -534,11 +534,12 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
-// Quick fix: Skip event lookup entirely for service fee payments
+// @desc    Initialize service fee payment
+// @route   POST /api/v1/transactions/initialize-service-fee
+// @access  Private
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
     const {
-      eventId,
       amount,
       email,
       paymentMethod = "card",
@@ -548,9 +549,8 @@ const initializeServiceFeePayment = async (req, res, next) => {
       eventTitle,
     } = req.body;
 
-    // Basic validation
+    // Basic validation - NO eventId validation
     if (
-      !eventId ||
       !amount ||
       !email ||
       !totalAmount ||
@@ -566,15 +566,13 @@ const initializeServiceFeePayment = async (req, res, next) => {
       .toString(36)
       .substr(2, 9)}`;
 
-    // Paystack data
+    // Paystack data - send ALL event data as metadata
     const paystackData = {
       email: email,
       amount: Math.round(amount * 100),
       reference: reference,
       metadata: {
-        eventId: eventId,
-        eventTitle: eventTitle,
-        eventStartDate: eventStartDate,
+        ...req.body.metadata,
         paymentType: "service_fee",
         userId: req.user.userId,
       },
@@ -583,14 +581,13 @@ const initializeServiceFeePayment = async (req, res, next) => {
 
     const paystackResponse = await initializePayment(paystackData);
 
-    // Create transaction - eventId stored as string
+    // Create transaction WITHOUT eventId
     const transaction = await Transaction.create({
       reference: reference,
       amount: amount,
       totalAmount: totalAmount,
       subtotalAmount: subtotalAmount,
       userId: req.user.userId,
-      eventId: eventId, // Store as string
       type: "service_fee",
       status: "pending",
       paymentMethod: paymentMethod,
@@ -609,47 +606,46 @@ const initializeServiceFeePayment = async (req, res, next) => {
     next(error);
   }
 };
-//  verifyServiceFeePayment FUNCTION
 const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
 
-    console.log("🔍 Verifying service fee payment:", reference);
-
-    // ✅ Use your Paystack service
     const verification = await verifyPayment(reference);
 
     if (verification.data.status === "success") {
-      // Update transaction status
-      const transaction = await Transaction.findOneAndUpdate(
-        { reference: reference, type: "service_fee" },
+      // ✅ Get event data from Paystack metadata
+      const eventData = verification.data.metadata.eventData;
+      const userInfo = verification.data.metadata.userInfo;
+
+      // ✅ NOW create the actual event
+      const event = await Event.create({
+        ...eventData,
+        organizer: req.user.userId,
+        status: "published",
+        serviceFeePaid: true,
+        serviceFeePaymentDate: new Date(),
+      });
+
+      // ✅ Update transaction with the REAL eventId
+      await Transaction.findOneAndUpdate(
+        { reference: reference },
         {
           status: "completed",
-          "metadata.paystackVerification": verification.data,
+          eventId: event._id, // Now using real MongoDB ObjectId
           completedAt: new Date(),
-        },
-        { new: true }
+        }
       );
-
-      if (!transaction) {
-        return next(new ErrorResponse("Transaction not found", 404));
-      }
-
-      // Handle event publishing for draft events
-      if (transaction.metadata.isDraftEvent) {
-        console.log("🚀 Publishing draft event after successful payment");
-        // Your event creation/publishing logic here
-      }
 
       res.status(200).json({
         success: true,
-        message: "Payment verified successfully",
+        message: "Payment verified and event published successfully",
         data: {
+          event: event,
           transaction: transaction,
-          verification: verification.data,
         },
       });
     } else {
+      // Payment failed - keep event data for retry
       await Transaction.findOneAndUpdate(
         { reference: reference },
         {
@@ -661,15 +657,12 @@ const verifyServiceFeePayment = async (req, res, next) => {
       res.status(400).json({
         success: false,
         message: "Payment verification failed",
-        data: verification.data,
       });
     }
   } catch (error) {
-    console.error("❌ verifyServiceFeePayment error:", error);
     next(error);
   }
 };
-
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
