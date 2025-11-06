@@ -536,7 +536,15 @@ const getRevenueStats = async (req, res, next) => {
 
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
-    const { amount, email, eventTitle, eventStartDate, metadata } = req.body;
+    const { 
+      amount, 
+      email, 
+      eventTitle,
+      eventStartDate,
+      metadata
+    } = req.body;
+
+    console.log("📦 Received payment request:", { amount, email, eventTitle });
 
     // Essential validation
     if (!amount || !email || !eventTitle || !eventStartDate) {
@@ -544,14 +552,12 @@ const initializeServiceFeePayment = async (req, res, next) => {
     }
 
     // Generate reference
-    const reference = `SRV-${Date.now()}-${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
+    const reference = `SRV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     // Paystack data
     const paystackData = {
       email: email,
-      amount: Math.round(amount * 100),
+      amount: Math.round(amount * 100), // Convert to kobo
       reference: reference,
       metadata: {
         ...metadata,
@@ -561,9 +567,31 @@ const initializeServiceFeePayment = async (req, res, next) => {
       callback_url: `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`,
     };
 
+    console.log("💰 Sending to Paystack:", paystackData);
+
     const paystackResponse = await initializePayment(paystackData);
 
-    // Create transaction with essential fields
+    console.log("📨 Paystack response:", paystackResponse);
+
+    // Check if Paystack returned success
+    if (!paystackResponse.status) {
+      throw new Error("Paystack API call failed");
+    }
+
+    // Get authorization URL
+    const authorizationUrl = 
+      paystackResponse.data?.authorization_url ||
+      paystackResponse.data?.authorizationUrl ||
+      paystackResponse.authorization_url;
+
+    console.log("🔗 Authorization URL:", authorizationUrl);
+
+    if (!authorizationUrl) {
+      console.error("❌ No authorization URL in Paystack response:", paystackResponse);
+      throw new Error("Paystack did not return a payment URL");
+    }
+
+    // Create transaction
     const transaction = await Transaction.create({
       reference: reference,
       userId: req.user.userId,
@@ -577,15 +605,18 @@ const initializeServiceFeePayment = async (req, res, next) => {
       eventStartDate: new Date(eventStartDate),
     });
 
+    console.log("✅ Transaction created:", transaction._id);
+
     res.status(200).json({
       success: true,
       message: "Service fee payment initialized successfully",
       data: {
-        authorizationUrl: paystackResponse.data.authorization_url,
-        reference: paystackResponse.data.reference,
+        authorizationUrl: authorizationUrl,
+        reference: reference,
       },
     });
   } catch (error) {
+    console.error("❌ Payment initialization error:", error);
     next(error);
   }
 };
