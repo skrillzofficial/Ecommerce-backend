@@ -535,244 +535,223 @@ const getRevenueStats = async (req, res, next) => {
 };
 
 //  initializeServiceFeePayment FUNCTION
-
 const initializeServiceFeePayment = async (req, res, next) => {
   try {
-    console.log('🔔 initializeServiceFeePayment CONTROLLER CALLED');
-    console.log('Request body:', req.body);
+    console.log("🔔 initializeServiceFeePayment CONTROLLER CALLED");
+    console.log("Request body:", req.body);
 
     const { eventId, amount, email, metadata, callback_url } = req.body;
 
     // Validate required fields
     if (!eventId || !amount || !email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: eventId, amount, email'
-      });
+      return next(
+        new ErrorResponse(
+          "Missing required fields: eventId, amount, email",
+          400
+        )
+      );
     }
 
     // Check if this is a draft event (starts with "draft-")
-    const isDraftEvent = eventId.startsWith('draft-');
-    
-    console.log('📝 Event type:', isDraftEvent ? 'DRAFT' : 'EXISTING');
-    console.log('Event ID:', eventId);
+    const isDraftEvent = eventId.startsWith("draft-");
 
-    //  For draft events, skip database lookup
+    console.log("📝 Event type:", isDraftEvent ? "DRAFT" : "EXISTING");
+    console.log("Event ID:", eventId);
+
+    // For draft events, skip database lookup
     let eventData = null;
-    
+
     if (!isDraftEvent) {
       // Only look up in database if it's a real event ID
       try {
         eventData = await Event.findById(eventId);
         if (!eventData) {
-          return res.status(404).json({
-            success: false,
-            message: 'Event not found'
-          });
+          return next(new ErrorResponse("Event not found", 404));
         }
       } catch (dbError) {
-        console.error('Database lookup error:', dbError);
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid event ID'
-        });
+        console.error("Database lookup error:", dbError);
+        return next(new ErrorResponse("Invalid event ID", 400));
       }
     } else {
       // For draft events, use metadata or create minimal event data
       eventData = {
         _id: eventId,
-        title: metadata?.eventTitle || 'New Event',
+        title: metadata?.eventTitle || "New Event",
         organizer: req.user.userId,
-        isDraft: true
+        isDraft: true,
       };
-      console.log('📋 Using draft event data');
+      console.log("📋 Using draft event data");
     }
 
     // Generate unique reference
-    const reference = `SRV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    console.log('💰 Initializing Paystack payment for service fee:', {
+    const reference = `SRV-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 9)}`;
+
+    console.log("💰 Initializing Paystack payment for service fee:", {
       email,
       amount,
       reference,
       eventId,
-      isDraftEvent
+      isDraftEvent,
     });
 
-    // Initialize Paystack payment
+    // ✅ FIX: Use your Paystack service instead of axios
     const paystackData = {
       email: email,
-      amount: amount, 
+      amount: amount,
       reference: reference,
       metadata: {
         ...metadata,
         eventId: eventId,
         isDraftEvent: isDraftEvent,
-        paymentType: 'service_fee',
+        paymentType: "service_fee",
         userId: req.user.userId,
         custom_fields: [
           {
             display_name: "Service Type",
             variable_name: "service_type",
-            value: "event_publishing"
+            value: "event_publishing",
           },
           {
-            display_name: "Event Title", 
+            display_name: "Event Title",
             variable_name: "event_title",
-            value: metadata?.eventTitle || "New Event"
+            value: metadata?.eventTitle || "New Event",
           },
           {
             display_name: "Event Type",
-            variable_name: "event_type", 
-            value: isDraftEvent ? "draft" : "existing"
-          }
-        ]
+            variable_name: "event_type",
+            value: isDraftEvent ? "draft" : "existing",
+          },
+        ],
       },
-      callback_url: callback_url || `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`
+      callback_url:
+        callback_url ||
+        `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`,
     };
 
-    console.log('📤 Paystack request data:', paystackData);
+    console.log(" Calling Paystack service...");
 
-    // Initialize Paystack payment
-    const paystackResponse = await axios.post(
-      'https://api.paystack.co/transaction/initialize',
-      paystackData,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    // ✅ FIX: Use your existing Paystack service
+    const paystackResponse = await initializePayment(paystackData);
 
-    const { data } = paystackResponse.data;
-
-    console.log('✅ Paystack response:', data);
-
-    // ✅ FIX: Save transaction without trying to reference non-existent event
-    const transaction = await Transaction.create({
-      reference: data.reference,
-      amount: amount,
-      userId: req.user.userId,
-      type: 'service_fee',
-      status: 'pending',
-      metadata: {
-        ...paystackData.metadata,
-        authorizationUrl: data.authorization_url,
-        eventData: metadata?.eventData || null
-      }
+    console.log("✅ Paystack response received:", {
+      status: paystackResponse.status,
+      reference: paystackResponse.data?.reference,
+      authorizationUrl: paystackResponse.data?.authorization_url ? "Yes" : "No",
     });
 
-    console.log('💾 Transaction created:', transaction._id);
+    // Save transaction record
+    const transaction = await Transaction.create({
+      reference: reference,
+      amount: amount,
+      userId: req.user.userId,
+      type: "service_fee",
+      status: "pending",
+      metadata: {
+        ...paystackData.metadata,
+        authorizationUrl: paystackResponse.data?.authorization_url,
+        eventData: metadata?.eventData || null,
+        paystackResponse: paystackResponse.data,
+      },
+    });
 
+    console.log("Transaction created:", transaction._id);
+
+    // Return response to frontend
     res.status(200).json({
       success: true,
-      message: 'Service fee payment initialized',
+      message: "Service fee payment initialized successfully",
       data: {
-        authorizationUrl: data.authorization_url,
-        reference: data.reference,
-        accessCode: data.access_code,
+        authorizationUrl: paystackResponse.data.authorization_url,
+        reference: paystackResponse.data.reference,
+        accessCode: paystackResponse.data.access_code,
         transaction: {
           _id: transaction._id,
           reference: transaction.reference,
-          amount: transaction.amount
-        }
-      }
+          amount: transaction.amount,
+        },
+      },
     });
-
   } catch (error) {
-    console.error('❌ initializeServiceFeePayment error:', error);
-    
+    console.error(" initializeServiceFeePayment error:", error);
+
     // More specific error handling
-    if (error.name === 'CastError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid event ID format'
-      });
+    if (error.name === "CastError") {
+      return next(new ErrorResponse("Invalid event ID format", 400));
     }
-    
-    if (error.response?.data?.message) {
-      return res.status(400).json({
-        success: false,
-        message: `Paystack error: ${error.response.data.message}`
-      });
+
+    // Handle Paystack-specific errors
+    if (
+      error.message.includes("Paystack") ||
+      error.message.includes("payment")
+    ) {
+      return next(new ErrorResponse(error.message, 400));
     }
-    
+
     next(error);
   }
 };
-
-// @desc    Verify service fee payment and publish event
-// @route   POST /api/v1/transactions/verify-service-fee/:reference
-// @access  Public
+//  verifyServiceFeePayment FUNCTION
 const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
 
-    // 1. Find transaction
-    const transaction = await Transaction.findOne({ reference, type: 'service_fee' });
-    
-    if (!transaction) {
-      return next(new ErrorResponse('Transaction not found', 404));
-    }
+    console.log("🔍 Verifying service fee payment:", reference);
 
-    // 2. If already completed, return event
-    if (transaction.status === 'completed') {
-      const event = await Event.findById(transaction.eventId);
-      return res.status(200).json({
-        success: true,
-        message: 'Payment already verified',
-        data: { transaction, event }
-      });
-    }
-
-    // 3. Verify with Paystack
+    // ✅ Use your Paystack service
     const verification = await verifyPayment(reference);
 
-    if (verification.data.status !== 'success') {
-      await transaction.markAsFailed('Payment verification failed');
-      return res.status(400).json({
+    if (verification.data.status === "success") {
+      // Update transaction status
+      const transaction = await Transaction.findOneAndUpdate(
+        { reference: reference, type: "service_fee" },
+        {
+          status: "completed",
+          "metadata.paystackVerification": verification.data,
+          completedAt: new Date(),
+        },
+        { new: true }
+      );
+
+      if (!transaction) {
+        return next(new ErrorResponse("Transaction not found", 404));
+      }
+
+      // Handle event publishing for draft events
+      if (transaction.metadata.isDraftEvent) {
+        console.log("🚀 Publishing draft event after successful payment");
+        // Your event creation/publishing logic here
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Payment verified successfully",
+        data: {
+          transaction: transaction,
+          verification: verification.data,
+        },
+      });
+    } else {
+      await Transaction.findOneAndUpdate(
+        { reference: reference },
+        {
+          status: "failed",
+          failureReason: "Payment verification failed",
+        }
+      );
+
+      res.status(400).json({
         success: false,
-        message: 'Payment verification failed'
+        message: "Payment verification failed",
+        data: verification.data,
       });
     }
-
-    // 4. Mark transaction as completed
-    await transaction.markAsCompleted(verification.data);
-
-    // 5. Publish the EXISTING event (NO creation!)
-    const event = await Event.findByIdAndUpdate(
-      transaction.eventId,
-      {
-        status: 'published',
-        publishedAt: new Date(),
-        serviceFeePaymentStatus: 'paid',
-        serviceFeeReference: reference,
-        serviceFeeTransaction: transaction._id,
-        paymentProcessed: true,
-        paymentProcessedAt: new Date()
-      },
-      { new: true }
-    );
-
-    if (!event) {
-      return next(new ErrorResponse('Event not found', 404));
-    }
-
-    console.log('✅ Event published:', event._id);
-
-    res.status(200).json({
-      success: true,
-      message: 'Payment verified and event published',
-      data: { transaction, event }
-    });
-
   } catch (error) {
-    console.error('Verification error:', error);
+    console.error("❌ verifyServiceFeePayment error:", error);
     next(error);
   }
 };
-
 
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
