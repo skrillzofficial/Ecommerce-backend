@@ -1,8 +1,7 @@
-// services/paystackService.js
-const axios = require('axios');
-const crypto = require('crypto');
+const axios = require("axios");
+const crypto = require("crypto");
 
-const PAYSTACK_BASE_URL = 'https://api.paystack.co';
+const PAYSTACK_BASE_URL = "https://api.paystack.co";
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 
 // Configure axios instance
@@ -10,40 +9,44 @@ const paystackAPI = axios.create({
   baseURL: PAYSTACK_BASE_URL,
   headers: {
     Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-    'Content-Type': 'application/json',
+    "Content-Type": "application/json",
   },
 });
 
 /**
  * Initialize a payment transaction
- * @param {Object} paymentData - Payment initialization data
- * @returns {Promise<Object>} Paystack response
+ * @param {Object} paymentData 
+ * @returns {Promise<Object>} 
  */
 const initializePayment = async (paymentData) => {
   try {
-    const { email, amount, reference, metadata, callback_url, channels } = paymentData;
+    const { email, amount, reference, metadata, callback_url, channels } =
+      paymentData;
 
     const data = {
       email,
-      amount: amount , 
+      amount: amount,
       reference,
       metadata,
       callback_url,
-      channels: channels || ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer'],
+      channels: channels || ["card", "bank", "ussd", "bank_transfer"],
     };
 
-    const response = await paystackAPI.post('/transaction/initialize', data);
+    const response = await paystackAPI.post("/transaction/initialize", data);
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Payment initialization failed');
+      throw new Error(response.data.message || "Payment initialization failed");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Paystack initialization error:', error.response?.data || error.message);
+    console.error(
+      "Paystack initialization error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to initialize payment. Please try again.'
+      error.response?.data?.message ||
+        "Failed to initialize payment. Please try again."
     );
   }
 };
@@ -58,15 +61,18 @@ const verifyPayment = async (reference) => {
     const response = await paystackAPI.get(`/transaction/verify/${reference}`);
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Payment verification failed');
+      throw new Error(response.data.message || "Payment verification failed");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Paystack verification error:', error.response?.data || error.message);
+    console.error(
+      "Paystack verification error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to verify payment. Please try again.'
+      error.response?.data?.message ||
+        "Failed to verify payment. Please try again."
     );
   }
 };
@@ -81,15 +87,17 @@ const fetchTransaction = async (id) => {
     const response = await paystackAPI.get(`/transaction/${id}`);
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Failed to fetch transaction');
+      throw new Error(response.data.message || "Failed to fetch transaction");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Fetch transaction error:', error.response?.data || error.message);
+    console.error(
+      "Fetch transaction error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to fetch transaction details.'
+      error.response?.data?.message || "Failed to fetch transaction details."
     );
   }
 };
@@ -112,18 +120,20 @@ const listTransactions = async (options = {}) => {
       ...(to && { to }),
     };
 
-    const response = await paystackAPI.get('/transaction', { params });
+    const response = await paystackAPI.get("/transaction", { params });
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Failed to list transactions');
+      throw new Error(response.data.message || "Failed to list transactions");
     }
 
     return response.data;
   } catch (error) {
-    console.error('List transactions error:', error.response?.data || error.message);
+    console.error(
+      "List transactions error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to list transactions.'
+      error.response?.data?.message || "Failed to list transactions."
     );
   }
 };
@@ -135,28 +145,34 @@ const listTransactions = async (options = {}) => {
  */
 const chargeAuthorization = async (chargeData) => {
   try {
-    const { email, amount, authorization_code, reference, metadata } = chargeData;
+    const { email, amount, authorization_code, reference, metadata } =
+      chargeData;
 
     const data = {
       email,
-      amount: amount , 
+      amount: amount,
       authorization_code,
       reference,
       metadata,
     };
 
-    const response = await paystackAPI.post('/transaction/charge_authorization', data);
+    const response = await paystackAPI.post(
+      "/transaction/charge_authorization",
+      data
+    );
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Charge authorization failed');
+      throw new Error(response.data.message || "Charge authorization failed");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Charge authorization error:', error.response?.data || error.message);
+    console.error(
+      "Charge authorization error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to charge authorization.'
+      error.response?.data?.message || "Failed to charge authorization."
     );
   }
 };
@@ -178,18 +194,20 @@ const createRefund = async (reference, refundData = {}) => {
       ...(customer_note && { customer_note }),
     };
 
-    const response = await paystackAPI.post('/refund', data);
+    const response = await paystackAPI.post("/refund", data);
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Refund creation failed');
+      throw new Error(response.data.message || "Refund creation failed");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Create refund error:', error.response?.data || error.message);
+    console.error(
+      "Create refund error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to create refund.'
+      error.response?.data?.message || "Failed to create refund."
     );
   }
 };
@@ -204,15 +222,14 @@ const fetchRefund = async (reference) => {
     const response = await paystackAPI.get(`/refund/${reference}`);
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Failed to fetch refund');
+      throw new Error(response.data.message || "Failed to fetch refund");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Fetch refund error:', error.response?.data || error.message);
+    console.error("Fetch refund error:", error.response?.data || error.message);
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to fetch refund details.'
+      error.response?.data?.message || "Failed to fetch refund details."
     );
   }
 };
@@ -224,18 +241,22 @@ const fetchRefund = async (reference) => {
  */
 const getTransactionTimeline = async (id_or_reference) => {
   try {
-    const response = await paystackAPI.get(`/transaction/timeline/${id_or_reference}`);
+    const response = await paystackAPI.get(
+      `/transaction/timeline/${id_or_reference}`
+    );
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Failed to fetch timeline');
+      throw new Error(response.data.message || "Failed to fetch timeline");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Transaction timeline error:', error.response?.data || error.message);
+    console.error(
+      "Transaction timeline error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to fetch transaction timeline.'
+      error.response?.data?.message || "Failed to fetch transaction timeline."
     );
   }
 };
@@ -256,18 +277,20 @@ const exportTransactions = async (options = {}) => {
       ...(payment_page && { payment_page }),
     };
 
-    const response = await paystackAPI.get('/transaction/export', { params });
+    const response = await paystackAPI.get("/transaction/export", { params });
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Export failed');
+      throw new Error(response.data.message || "Export failed");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Export transactions error:', error.response?.data || error.message);
+    console.error(
+      "Export transactions error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to export transactions.'
+      error.response?.data?.message || "Failed to export transactions."
     );
   }
 };
@@ -278,18 +301,20 @@ const exportTransactions = async (options = {}) => {
  */
 const getPaymentTotals = async () => {
   try {
-    const response = await paystackAPI.get('/transaction/totals');
+    const response = await paystackAPI.get("/transaction/totals");
 
     if (!response.data.status) {
-      throw new Error(response.data.message || 'Failed to fetch totals');
+      throw new Error(response.data.message || "Failed to fetch totals");
     }
 
     return response.data;
   } catch (error) {
-    console.error('Payment totals error:', error.response?.data || error.message);
+    console.error(
+      "Payment totals error:",
+      error.response?.data || error.message
+    );
     throw new Error(
-      error.response?.data?.message || 
-      'Failed to fetch payment totals.'
+      error.response?.data?.message || "Failed to fetch payment totals."
     );
   }
 };
@@ -302,10 +327,10 @@ const getPaymentTotals = async () => {
  */
 const validateWebhookSignature = (signature, body) => {
   const hash = crypto
-    .createHmac('sha512', PAYSTACK_SECRET_KEY)
+    .createHmac("sha512", PAYSTACK_SECRET_KEY)
     .update(JSON.stringify(body))
-    .digest('hex');
-  
+    .digest("hex");
+
   return hash === signature;
 };
 
@@ -320,5 +345,5 @@ module.exports = {
   getTransactionTimeline,
   exportTransactions,
   getPaymentTotals,
-  validateWebhookSignature
+  validateWebhookSignature,
 };

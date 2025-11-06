@@ -590,19 +590,20 @@ const initializeServiceFeePayment = async (req, res, next) => {
       throw new Error("Paystack did not return a payment URL");
     }
 
-    // Create transaction
-    const transaction = await Transaction.create({
-      reference: reference,
-      userId: req.user.userId,
-      type: "service_fee",
-      amount: amount,
-      totalAmount: amount,
-      currency: "NGN",
-      paymentMethod: "card",
-      status: "pending",
-      eventTitle: eventTitle,
-      eventStartDate: new Date(eventStartDate),
-    });
+    // In initializeServiceFeePayment - update transaction creation:
+const transaction = await Transaction.create({
+  reference: reference,
+  userId: req.user.userId,
+  type: "service_fee",
+  amount: amount,
+  totalAmount: amount,
+  currency: "NGN",
+  paymentMethod: "card",
+  status: "pending",
+  eventTitle: eventTitle,
+  eventStartDate: new Date(eventStartDate),
+  metadata: metadata,
+});
 
     console.log("✅ Transaction created:", transaction._id);
 
@@ -621,39 +622,42 @@ const initializeServiceFeePayment = async (req, res, next) => {
 };
 
 // @desc    Verify service fee payment and publish event
-// @desc    Verify service fee payment and publish event
 // @route   GET /api/v1/transactions/verify-service-fee/:reference
 // @access  Public
 const verifyServiceFeePayment = async (req, res, next) => {
   try {
     const { reference } = req.params;
-
-    console.log("🔍 Verifying service fee payment:", reference);
+    
+    console.log('🔍 Verifying service fee payment:', reference);
 
     // Verify with Paystack
     const verification = await verifyPayment(reference);
+    console.log('📊 Paystack verification result:', verification.data.status);
 
-    if (verification.data.status === "success") {
+    if (verification.data.status === 'success') {
       // Find the transaction
-      const transaction = await Transaction.findOne({
-        reference: reference,
-        type: "service_fee",
+      const transaction = await Transaction.findOne({ 
+        reference: reference, 
+        type: 'service_fee' 
       });
 
       if (!transaction) {
-        return next(new ErrorResponse("Transaction not found", 404));
+        return next(new ErrorResponse('Transaction not found', 404));
       }
 
+      console.log('✅ Transaction found:', transaction._id);
+      console.log('📦 Transaction metadata:', transaction.metadata);
+
       // Update transaction status
-      transaction.status = "completed";
+      transaction.status = 'completed';
       transaction.paidAt = new Date();
       transaction.paystackData = verification.data;
       await transaction.save();
 
       // ✅ CREATE THE ACTUAL EVENT after successful payment
       if (transaction.metadata?.eventData) {
-        console.log("🚀 Creating event from payment metadata...");
-
+        console.log('🚀 Creating event from payment metadata...');
+        
         const eventData = transaction.metadata.eventData;
         const userInfo = transaction.metadata.userInfo;
         const agreementData = transaction.metadata.agreementData;
@@ -662,7 +666,7 @@ const verifyServiceFeePayment = async (req, res, next) => {
         const event = await Event.create({
           ...eventData,
           organizer: transaction.userId, // Use userId from transaction
-          status: "published",
+          status: 'published',
           isActive: true,
           serviceFeePaid: true,
           serviceFeePaymentDate: new Date(),
@@ -671,10 +675,10 @@ const verifyServiceFeePayment = async (req, res, next) => {
           // Add agreement info
           agreement: agreementData || {},
           // Add user info
-          contactInfo: userInfo || {},
+          contactInfo: userInfo || {}
         });
 
-        console.log("✅ Event created successfully:", event._id);
+        console.log('✅ Event created successfully:', event._id);
 
         // Update transaction with the real event ID
         transaction.eventId = event._id;
@@ -682,45 +686,50 @@ const verifyServiceFeePayment = async (req, res, next) => {
         transaction.eventStartDate = event.startDate;
         await transaction.save();
 
-        res.status(200).json({
+        console.log('🎉 Payment verified and event published successfully');
+
+        return res.status(200).json({
           success: true,
-          message: "Payment verified and event published successfully",
+          message: 'Payment verified and event published successfully',
           data: {
             transaction: transaction,
             event: event,
-            verification: verification.data,
+            verification: verification.data
           },
         });
       } else {
+        console.log('⚠️ No event data in metadata, just confirming payment');
         // If no event data in metadata, just confirm payment
-        res.status(200).json({
+        return res.status(200).json({
           success: true,
-          message: "Service fee payment verified successfully",
+          message: 'Service fee payment verified successfully',
           data: {
             transaction: transaction,
-            verification: verification.data,
+            verification: verification.data
           },
         });
       }
+
     } else {
+      console.log('❌ Payment verification failed');
       // Payment failed
       await Transaction.findOneAndUpdate(
         { reference: reference },
         {
-          status: "failed",
-          failureReason: "Payment verification failed",
-          failedAt: new Date(),
+          status: 'failed',
+          failureReason: 'Payment verification failed',
+          failedAt: new Date()
         }
       );
 
-      res.status(400).json({
+      return res.status(400).json({
         success: false,
-        message: "Payment verification failed",
+        message: 'Payment verification failed',
         data: verification.data,
       });
     }
   } catch (error) {
-    console.error("❌ verifyServiceFeePayment error:", error);
+    console.error('❌ verifyServiceFeePayment error:', error);
     next(error);
   }
 };
