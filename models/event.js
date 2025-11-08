@@ -362,15 +362,6 @@ const eventSchema = new mongoose.Schema(
     },
     ticketBenefits: [{ type: String, trim: true }],
 
-    // Images
-    images: [
-      {
-        url: { type: String, required: true },
-        publicId: String,
-        alt: String,
-      },
-    ],
-
     // Social Banner Feature
     socialBanner: {
       url: String,
@@ -520,45 +511,13 @@ const eventSchema = new mongoose.Schema(
     },
     communityEnabled: { type: Boolean, default: false },
 
-    // Payment Agreement - REQUIRED FOR ALL EVENTS
+    // Simple Agreement
     agreement: {
       acceptedTerms: { type: Boolean, default: false },
       acceptedAt: Date,
-      serviceFee: {
-        type: {
-          type: String,
-          enum: ["percentage", "fixed"],
-          default: "percentage",
-        },
-        amount: { type: Number, min: 0, default: 5 },
-      },
-      estimatedAttendance: {
-        type: String,
-        enum: ["1-100", "101-500", "501-1000", "1001-5000", "5001+"],
-      },
-      paymentTerms: {
-        type: String,
-        enum: ["upfront", "post-event", "milestone", "free"],
-        default: "upfront",
-      },
       agreementVersion: { type: String, default: "1.0" },
       termsUrl: String,
     },
-
-    // ==================== PAYMENT FIELDS ====================
-    serviceFeePaymentStatus: {
-      type: String,
-      enum: ["pending", "paid", "failed", "refunded"],
-      default: "pending",
-    },
-    serviceFeeAmount: { type: Number, default: 0 },
-    serviceFeeReference: { type: String },
-    serviceFeeTransaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-    },
-    paymentProcessed: { type: Boolean, default: false },
-    paymentProcessedAt: Date,
 
     // Global approval settings
     attendanceApproval: {
@@ -679,9 +638,6 @@ eventSchema.index({ createdAt: -1 });
 eventSchema.index({ isFeatured: 1, status: 1 });
 eventSchema.index({ communityEnabled: 1, status: 1 });
 eventSchema.index({ "agreement.acceptedTerms": 1 });
-eventSchema.index({ serviceFeePaymentStatus: 1 });
-eventSchema.index({ paymentProcessed: 1 });
-eventSchema.index({ "agreement.paymentTerms": 1 });
 eventSchema.index({ "attendanceApproval.enabled": 1 });
 eventSchema.index({ pendingApprovals: -1 });
 eventSchema.index({ organizer: 1, "attendanceApproval.enabled": 1 });
@@ -720,6 +676,7 @@ eventSchema.virtual("totalCapacity").get(function () {
   }
   return this.capacity || 0;
 });
+
 eventSchema.virtual("featuredImage").get(function () {
   return this.image || this.images?.[0] || this.socialBanner;
 });
@@ -838,7 +795,7 @@ eventSchema.virtual("eventDuration").get(function () {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
 });
 
-// ==================== PAYMENT VIRTUALS ====================
+// ==================== SIMPLIFIED VIRTUALS ====================
 eventSchema.virtual("isFreeEvent").get(function () {
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     return this.ticketTypes.every((ticket) => ticket.price === 0);
@@ -850,30 +807,9 @@ eventSchema.virtual("isPaidEvent").get(function () {
   return !this.isFreeEvent;
 });
 
-eventSchema.virtual("requiresServiceFeePayment").get(function () {
-  return (
-    this.isFreeEvent &&
-    this.agreement.paymentTerms === "upfront" &&
-    !this.paymentProcessed
-  );
-});
-
 eventSchema.virtual("canPublish").get(function () {
-  if (this.isFreeEvent) {
-    return this.paymentProcessed === true;
-  } else {
-    return true;
-  }
-});
-
-eventSchema.virtual("isPaymentPending").get(function () {
-  return (
-    this.requiresServiceFeePayment && this.serviceFeePaymentStatus === "pending"
-  );
-});
-
-eventSchema.virtual("isPaymentPaid").get(function () {
-  return this.serviceFeePaymentStatus === "paid";
+  // Events can always be published now (no payment required)
+  return true;
 });
 
 eventSchema.virtual("totalPotentialRevenue").get(function () {
@@ -884,15 +820,6 @@ eventSchema.virtual("totalPotentialRevenue").get(function () {
     );
   }
   return this.price * this.capacity;
-});
-
-eventSchema.virtual("platformCommission").get(function () {
-  if (this.isFreeEvent) {
-    return 0;
-  } else {
-    const commissionRate = 0.05;
-    return this.totalPotentialRevenue * commissionRate;
-  }
 });
 
 // Approval virtuals
@@ -967,6 +894,7 @@ eventSchema.pre("save", function (next) {
   }
   next();
 });
+
 eventSchema.pre("save", function (next) {
   const safeNumber = (value, defaultValue = 0) => {
     if (value === undefined || value === null || isNaN(value))
@@ -1089,8 +1017,6 @@ eventSchema.pre("save", function (next) {
   }
   next();
 });
-// ==================== FIXED PRE-SAVE MIDDLEWARE ====================
-// Replace the middleware around line 880-920 in your event.js model with this:
 
 eventSchema.pre("save", function (next) {
   if (this.communityEnabled) {
@@ -1114,23 +1040,7 @@ eventSchema.pre("save", function (next) {
     }
   }
 
-  // ✅ FIX: Only validate terms when FIRST creating and publishing
-  // Skip validation for subsequent saves
-  if (this.isNew && this.status === "published") {
-    console.log("✅ Terms accepted for event");
-    console.log("🔍 Model Pre-save Check for publishing event:");
-    console.log(" - Agreement:", this.agreement);
-    console.log(" - Accepted terms:", this.agreement?.acceptedTerms);
-    console.log(" - Is New:", this.isNew);
-    console.log(" - Is Modified Status:", this.isModified("status"));
-
-    if (!this.agreement?.acceptedTerms) {
-      return next(new Error("Terms must be accepted before publishing events"));
-    }
-
-    if (!this.agreement.acceptedAt) this.agreement.acceptedAt = new Date();
-  }
-
+  // Set approval requirements for free tickets
   if (this.ticketTypes && this.ticketTypes.length > 0) {
     this.ticketTypes.forEach((ticketType) => {
       if (ticketType.price === 0 && ticketType.requiresApproval === undefined) {
@@ -1145,106 +1055,6 @@ eventSchema.pre("save", function (next) {
 
   next();
 });
-
-// ==================== PAYMENT METHODS ====================
-eventSchema.methods.calculateServiceFee = function () {
-  if (!this.isFreeEvent) {
-    throw new Error("Service fee only applies to free events");
-  }
-
-  const serviceFee = this.agreement?.serviceFee || {
-    type: "percentage",
-    amount: 5,
-  };
-  const attendanceRanges = {
-    "1-100": 50,
-    "101-500": 200,
-    "501-1000": 500,
-    "1001-5000": 1000,
-    "5001+": 2000,
-  };
-
-  const baseFee = attendanceRanges[this.agreement.estimatedAttendance] || 100;
-
-  if (serviceFee.type === "percentage") {
-    const fee = (baseFee * serviceFee.amount) / 100;
-    return Math.max(100, fee);
-  } else {
-    return serviceFee.amount;
-  }
-};
-
-eventSchema.methods.initializeServiceFeePayment = async function (
-  userEmail,
-  userInfo = {}
-) {
-  if (!this.isFreeEvent)
-    throw new Error("Service fee payment only required for free events");
-  if (this.agreement.paymentTerms !== "upfront")
-    throw new Error("This event does not require upfront payment");
-  if (this.status === "published")
-    throw new Error("Event is already published");
-  if (this.serviceFeePaymentStatus === "paid")
-    throw new Error("Service fee already paid");
-
-  const serviceFeeAmount = this.calculateServiceFee();
-  this.serviceFeeAmount = serviceFeeAmount;
-  this.serviceFeePaymentStatus = "pending";
-  await this.save();
-
-  console.log("💰 Initializing service fee payment for FREE event:", {
-    eventId: this._id,
-    eventTitle: this.title,
-    serviceFeeAmount,
-    isFreeEvent: this.isFreeEvent,
-  });
-
-  return {
-    eventId: this._id,
-    amount: serviceFeeAmount,
-    email: userEmail,
-    metadata: {
-      eventTitle: this.title,
-      eventType: "free",
-      eventData: this.toObject(),
-    },
-  };
-};
-
-eventSchema.methods.markServiceFeePaid = async function (
-  transactionReference,
-  transactionId
-) {
-  this.serviceFeePaymentStatus = "paid";
-  this.serviceFeeReference = transactionReference;
-  this.serviceFeeTransaction = transactionId;
-  this.paymentProcessed = true;
-  this.paymentProcessedAt = new Date();
-
-  if (this.status === "draft") {
-    this.status = "published";
-    this.publishedAt = new Date();
-  }
-
-  await this.save();
-  console.log("✅ Service fee paid and event published:", {
-    eventId: this._id,
-    title: this.title,
-    transactionReference,
-  });
-  return this;
-};
-
-eventSchema.methods.markServiceFeeFailed = async function (reason) {
-  this.serviceFeePaymentStatus = "failed";
-  this.status = "draft";
-  await this.save();
-  console.log("❌ Service fee payment failed:", {
-    eventId: this._id,
-    title: this.title,
-    reason,
-  });
-};
 
 // ==================== INSTANCE METHODS ====================
 eventSchema.methods.regenerateSlug = async function () {
@@ -1270,12 +1080,6 @@ eventSchema.methods.acceptAgreement = async function (termsData = {}) {
   this.agreement = {
     acceptedTerms: true,
     acceptedAt: new Date(),
-    serviceFee: termsData.serviceFee ||
-      this.agreement?.serviceFee || { type: "percentage", amount: 5 },
-    estimatedAttendance:
-      termsData.estimatedAttendance || this.agreement?.estimatedAttendance,
-    paymentTerms:
-      termsData.paymentTerms || this.agreement?.paymentTerms || "upfront",
     agreementVersion: termsData.agreementVersion || "1.0",
     termsUrl: termsData.termsUrl,
   };
@@ -1383,7 +1187,6 @@ eventSchema.methods.usesNewDateSystem = function () {
 };
 
 // ==================== APPROVAL INSTANCE METHODS ====================
-
 eventSchema.methods.enableTicketApproval = async function (
   ticketTypeId,
   questions = []
@@ -1482,7 +1285,6 @@ eventSchema.methods.getApprovalQuestions = function (ticketTypeId) {
 };
 
 // ==================== STATIC METHODS ====================
-
 eventSchema.statics.findUpcoming = function (limit = 10) {
   const now = new Date();
   return this.find({
@@ -1668,7 +1470,6 @@ eventSchema.statics.getDateFieldName = function (event) {
 };
 
 // ==================== APPROVAL STATIC METHODS ====================
-
 eventSchema.statics.findNeedingApproval = function (organizerId) {
   return this.find({
     organizer: organizerId,
@@ -1734,7 +1535,6 @@ eventSchema.statics.getApprovalStatistics = async function (organizerId) {
 };
 
 // ==================== QUERY HELPERS ====================
-
 eventSchema.query.active = function () {
   return this.where({ isActive: true, status: "published" });
 };
@@ -1826,85 +1626,6 @@ eventSchema.query.byApprovalStatus = function (hasApproval) {
     $or: [
       { "attendanceApproval.enabled": false },
       { "attendanceApproval.enabled": { $exists: false } },
-    ],
-  });
-};
-
-// ==================== PAYMENT QUERY HELPERS ====================
-
-eventSchema.query.requiresPayment = function () {
-  return this.where({
-    $expr: {
-      $and: [
-        { $eq: [{ $ifNull: ["$price", 0] }, 0] },
-        { $eq: [{ $ifNull: ["$ticketTypes.price", [0]] }, [0]] },
-        { $eq: ["$paymentProcessed", false] },
-        { $eq: ["$agreement.paymentTerms", "upfront"] },
-      ],
-    },
-  });
-};
-
-eventSchema.query.paymentPending = function () {
-  return this.where({
-    serviceFeePaymentStatus: "pending",
-    paymentProcessed: false,
-  });
-};
-
-eventSchema.query.paymentPaid = function () {
-  return this.where({
-    serviceFeePaymentStatus: "paid",
-    paymentProcessed: true,
-  });
-};
-
-eventSchema.query.freeEvents = function () {
-  return this.where({
-    $or: [
-      { price: 0 },
-      { "ticketTypes.price": 0 },
-      {
-        $expr: {
-          $eq: [
-            {
-              $size: {
-                $filter: {
-                  input: "$ticketTypes",
-                  as: "ticket",
-                  cond: { $gt: ["$$ticket.price", 0] },
-                },
-              },
-            },
-            0,
-          ],
-        },
-      },
-    ],
-  });
-};
-
-eventSchema.query.paidEvents = function () {
-  return this.where({
-    $or: [
-      { price: { $gt: 0 } },
-      { "ticketTypes.price": { $gt: 0 } },
-      {
-        $expr: {
-          $gt: [
-            {
-              $size: {
-                $filter: {
-                  input: "$ticketTypes",
-                  as: "ticket",
-                  cond: { $gt: ["$$ticket.price", 0] },
-                },
-              },
-            },
-            0,
-          ],
-        },
-      },
     ],
   });
 };

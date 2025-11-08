@@ -23,6 +23,9 @@ const {
   updateShareableBanner,
   removeShareableBannerTemplate,
   deleteEventImage,
+  // ✅ ADD NEW CATEGORY CONTROLLERS
+  getEventsByCategories,
+  getEventsThisWeek,
 } = require("../controllers/event.controller");
 
 const { parseVoiceSearch, getVoiceSuggestions } = require("../controllers/voiceSearchController");
@@ -53,6 +56,12 @@ router.get("/upcoming", getUpcomingEvents);
 
 // Get past events
 router.get("/past", optionalAuth, validateQueryParams, getPastEvents);
+
+// Get events by categories
+router.get("/categories", validateQueryParams, getEventsByCategories);
+
+// Get events happening this week
+router.get("/this-week", validateQueryParams, getEventsThisWeek);
 
 // Advanced search
 router.get("/search/advanced", validateQueryParams, searchEventsAdvanced);
@@ -85,7 +94,7 @@ router.get(
   getOrganizerStatistics
 );
 
-// ✅ NEW: Get events needing approval attention
+//  Get events needing approval attention
 router.get(
   "/organizer/needing-approval",
   protect,
@@ -96,7 +105,7 @@ router.get(
 
 // Create new event
 router.post(
-  "/create",
+  "/",
   protect,
   authorize("organizer", "superadmin"),
   validateImages,
@@ -114,7 +123,7 @@ router.get("/:id", getEventById);
 // Get ticket availability (public)
 router.get("/:id/ticket-availability", getTicketAvailability);
 
-// ✅ BOOK EVENT TICKETS (PROTECTED)
+// BOOK EVENT TICKETS (PROTECTED)
 router.post(
   "/:id/book",
   protect,
@@ -133,7 +142,7 @@ router.post(
   checkInAttendee
 );
 
-// ✅ NEW: Get event approval statistics (Organizer only)
+//  Get event approval statistics (Organizer only)
 router.get(
   "/:id/approval-stats",
   protect,
@@ -141,7 +150,7 @@ router.get(
   getEventApprovalStats
 );
 
-// ✅ NEW: Update approval settings (Organizer only)
+//  Update approval settings (Organizer only)
 router.patch(
   "/:id/approval-settings",
   protect,
@@ -149,7 +158,7 @@ router.patch(
   updateApprovalSettings
 );
 
-// ✅ NEW: Update shareable banner settings (Organizer only)
+//  Update shareable banner settings (Organizer only)
 router.patch(
   "/:id/shareable-banner",
   protect,
@@ -158,7 +167,7 @@ router.patch(
   updateShareableBanner
 );
 
-// ✅ NEW: Remove shareable banner template (Organizer only)
+//  Remove shareable banner template (Organizer only)
 router.delete(
   "/:id/shareable-banner/template",
   protect,
@@ -166,7 +175,7 @@ router.delete(
   removeShareableBannerTemplate
 );
 
-// ✅ ADD: Delete event image (Organizer only)
+//  Delete event image (Organizer only)
 router.delete(
   "/:id/images/:imageIndex",
   protect,
@@ -191,7 +200,7 @@ router.put(
 );
 
 // Update event (Organizer only)
-router.patch(
+router.patch( 
   "/:id",
   protect,
   authorize("organizer", "superadmin"),

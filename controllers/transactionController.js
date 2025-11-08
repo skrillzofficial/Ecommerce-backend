@@ -62,7 +62,7 @@ const updateEventTicketAvailability = async (
   }
 };
 
-// @desc    Initialize transaction for booking
+// @desc    Initialize transaction for booking (for attendees)
 // @route   POST /api/v1/transactions/initialize
 // @access  Private
 const initializeTransaction = async (req, res, next) => {
@@ -534,206 +534,6 @@ const getRevenueStats = async (req, res, next) => {
   }
 };
 
-
-const initializeServiceFeePayment = async (req, res, next) => {
-  try {
-    const { amount, email, eventTitle, eventStartDate, metadata } = req.body;
-
-    console.log("📦 Received payment request:", { amount, email, eventTitle });
-
-    // Essential validation
-    if (!amount || !email || !eventTitle || !eventStartDate) {
-      return next(new ErrorResponse("Missing required fields", 400));
-    }
-
-    // Generate reference
-    const reference = `SRV-${Date.now()}-${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
-
-    // Paystack data
-    const paystackData = {
-      email: email,
-      amount: Math.round(amount * 100), // Convert to kobo
-      reference: reference,
-      metadata: {
-        ...metadata,
-        paymentType: "service_fee",
-        userId: req.user.userId,
-      },
-      callback_url: `${process.env.FRONTEND_URL}/payment-verification?type=service_fee`,
-    };
-
-    console.log("💰 Sending to Paystack:", paystackData);
-
-    const paystackResponse = await initializePayment(paystackData);
-
-    console.log("📨 Paystack response:", paystackResponse);
-
-    // Check if Paystack returned success
-    if (!paystackResponse.status) {
-      throw new Error("Paystack API call failed");
-    }
-
-    // Get authorization URL
-    const authorizationUrl =
-      paystackResponse.data?.authorization_url ||
-      paystackResponse.data?.authorizationUrl ||
-      paystackResponse.authorization_url;
-
-    console.log("🔗 Authorization URL:", authorizationUrl);
-
-    if (!authorizationUrl) {
-      console.error(
-        "❌ No authorization URL in Paystack response:",
-        paystackResponse
-      );
-      throw new Error("Paystack did not return a payment URL");
-    }
-
-    // In initializeServiceFeePayment - update transaction creation:
-const transaction = await Transaction.create({
-  reference: reference,
-  userId: req.user.userId,
-  type: "service_fee",
-  amount: amount,
-  totalAmount: amount,
-  currency: "NGN",
-  paymentMethod: "card",
-  status: "pending",
-  eventTitle: eventTitle,
-  eventStartDate: new Date(eventStartDate),
-  metadata: metadata,
-});
-
-    console.log("✅ Transaction created:", transaction._id);
-
-    res.status(200).json({
-      success: true,
-      message: "Service fee payment initialized successfully",
-      data: {
-        authorizationUrl: authorizationUrl,
-        reference: reference,
-      },
-    });
-  } catch (error) {
-    console.error("❌ Payment initialization error:", error);
-    next(error);
-  }
-};
-
-// @desc    Verify service fee payment and publish event
-// @route   GET /api/v1/transactions/verify-service-fee/:reference
-// @access  Public
-const verifyServiceFeePayment = async (req, res, next) => {
-  try {
-    const { reference } = req.params;
-    
-    console.log('🔍 Verifying service fee payment:', reference);
-
-    // Verify with Paystack
-    const verification = await verifyPayment(reference);
-    console.log('📊 Paystack verification result:', verification.data.status);
-
-    if (verification.data.status === 'success') {
-      // Find the transaction
-      const transaction = await Transaction.findOne({ 
-        reference: reference, 
-        type: 'service_fee' 
-      });
-
-      if (!transaction) {
-        return next(new ErrorResponse('Transaction not found', 404));
-      }
-
-      console.log('✅ Transaction found:', transaction._id);
-      console.log('📦 Transaction metadata:', transaction.metadata);
-
-      // Update transaction status
-      transaction.status = 'completed';
-      transaction.paidAt = new Date();
-      transaction.paystackData = verification.data;
-      await transaction.save();
-
-      // ✅ CREATE THE ACTUAL EVENT after successful payment
-      if (transaction.metadata?.eventData) {
-        console.log('🚀 Creating event from payment metadata...');
-        
-        const eventData = transaction.metadata.eventData;
-        const userInfo = transaction.metadata.userInfo;
-        const agreementData = transaction.metadata.agreementData;
-
-        // Create the actual event in database
-        const event = await Event.create({
-          ...eventData,
-          organizer: transaction.userId, // Use userId from transaction
-          status: 'published',
-          isActive: true,
-          serviceFeePaid: true,
-          serviceFeePaymentDate: new Date(),
-          serviceFeeAmount: transaction.amount,
-          publishedAt: new Date(),
-          // Add agreement info
-          agreement: agreementData || {},
-          // Add user info
-          contactInfo: userInfo || {}
-        });
-
-        console.log('✅ Event created successfully:', event._id);
-
-        // Update transaction with the real event ID
-        transaction.eventId = event._id;
-        transaction.eventTitle = event.title;
-        transaction.eventStartDate = event.startDate;
-        await transaction.save();
-
-        console.log('🎉 Payment verified and event published successfully');
-
-        return res.status(200).json({
-          success: true,
-          message: 'Payment verified and event published successfully',
-          data: {
-            transaction: transaction,
-            event: event,
-            verification: verification.data
-          },
-        });
-      } else {
-        console.log('⚠️ No event data in metadata, just confirming payment');
-        // If no event data in metadata, just confirm payment
-        return res.status(200).json({
-          success: true,
-          message: 'Service fee payment verified successfully',
-          data: {
-            transaction: transaction,
-            verification: verification.data
-          },
-        });
-      }
-
-    } else {
-      console.log('❌ Payment verification failed');
-      // Payment failed
-      await Transaction.findOneAndUpdate(
-        { reference: reference },
-        {
-          status: 'failed',
-          failureReason: 'Payment verification failed',
-          failedAt: new Date()
-        }
-      );
-
-      return res.status(400).json({
-        success: false,
-        message: 'Payment verification failed',
-        data: verification.data,
-      });
-    }
-  } catch (error) {
-    console.error('❌ verifyServiceFeePayment error:', error);
-    next(error);
-  }
-};
 // @desc    Paystack webhook handler
 // @route   POST /api/v1/transactions/webhook
 // @access  Public (Paystack only)
@@ -782,6 +582,7 @@ async function handleSuccessfulCharge(data) {
     if (transaction && transaction.status === "pending") {
       await markTransactionAsCompleted(transaction, data);
 
+      // Only handle event_booking transactions (no more service_fee)
       if (transaction.type === "event_booking") {
         await Booking.findOneAndUpdate(
           { _id: transaction.bookingId },
@@ -799,12 +600,8 @@ async function handleSuccessfulCharge(data) {
             "decrement"
           );
         }
-      } else if (transaction.type === "service_fee") {
-        await Event.findByIdAndUpdate(transaction.eventId, {
-          status: "published",
-          isActive: true,
-        });
       }
+      // Service fee handling removed
     }
   } catch (error) {
     console.error("Handle successful charge error:", error);
@@ -858,7 +655,5 @@ module.exports = {
   requestRefund,
   processRefund,
   getRevenueStats,
-  initializeServiceFeePayment,
-  verifyServiceFeePayment,
   paystackWebhook,
 };

@@ -10,8 +10,7 @@ const PORT = process.env.PORT || 4000;
 const helmet = require("helmet");
 const morgan = require("morgan");
 const http = require("http");
-const { Server } = require("socket.io"); // ✅ ADD SOCKET.IO
-
+const { Server } = require("socket.io");
 // Routes
 const authRouter = require("./routes/userRoute");
 const superAdminRoutes = require("./routes/superAdminRoute");

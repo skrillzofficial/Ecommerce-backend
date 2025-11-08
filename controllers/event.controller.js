@@ -103,7 +103,8 @@ const createEvent = async (req, res, next) => {
       "requirements",
     ]);
 
-    const { title, description, startDate, category, eventType, ticketTypes } = parsedBody;
+    const { title, description, startDate, category, eventType, ticketTypes } =
+      parsedBody;
 
     // Basic validation
     if (!title || !description || !startDate || !category || !eventType) {
@@ -113,28 +114,26 @@ const createEvent = async (req, res, next) => {
     // Upload images
     let uploadedImages = [];
     if (req.files && req.files.images) {
-      const imageFiles = Array.isArray(req.files.images) 
-        ? req.files.images 
+      const imageFiles = Array.isArray(req.files.images)
+        ? req.files.images
         : [req.files.images];
       uploadedImages = await uploadImages(imageFiles);
     }
-
-    // Determine if event is free
-    const isFreeEvent = ticketTypes?.every(ticket => 
-      ticket.price === 0 || ticket.price === "0" || !ticket.price
-    );
 
     // Build event data
     const eventData = {
       ...parsedBody,
       images: uploadedImages,
-      image: uploadedImages.length > 0 ? {
-        url: uploadedImages[0].url,
-        publicId: uploadedImages[0].publicId,
-      } : null,
+      image:
+        uploadedImages.length > 0
+          ? {
+              url: uploadedImages[0].url,
+              publicId: uploadedImages[0].publicId,
+            }
+          : null,
       organizer: req.user.userId,
-      isFreeEvent: isFreeEvent,
-      status: isFreeEvent ? "draft" : "published", 
+      status: "published", // Events are now published immediately
+      isActive: true,
     };
 
     // Create event
@@ -142,18 +141,15 @@ const createEvent = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: isFreeEvent 
-        ? "Event created. Service fee payment required to publish." 
-        : "Paid event published successfully",
+      message: "Event created successfully",
       data: event,
-      requiresServiceFee: isFreeEvent
     });
-
   } catch (error) {
-    console.error('Event creation error:', error);
+    console.error("Event creation error:", error);
     next(error);
   }
 };
+
 // @desc    Get all events with filtering and pagination
 // @route   GET /api/v1/events/all
 // @access  Public
@@ -986,8 +982,10 @@ const updateApprovalSettings = async (req, res, next) => {
     const { id } = req.params;
     const { autoApprove, approvalDeadline, instructions } = req.body;
 
-     if (approvalDeadline && new Date(approvalDeadline) < new Date()) {
-      return next(new ErrorResponse("Approval deadline must be in the future", 400));
+    if (approvalDeadline && new Date(approvalDeadline) < new Date()) {
+      return next(
+        new ErrorResponse("Approval deadline must be in the future", 400)
+      );
     }
 
     const event = await Event.findById(id);
@@ -1156,6 +1154,237 @@ const removeShareableBannerTemplate = async (req, res, next) => {
     next(error);
   }
 };
+// @desc    Get events by categories
+// @route   GET /api/v1/events/categories
+// @access  Public
+const getEventsByCategories = async (req, res, next) => {
+  try {
+    const {
+      categories,
+      page = 1,
+      limit = 12,
+      timeFilter = "upcoming",
+      sort = "date",
+    } = req.query;
+
+    // Parse categories from query string (can be comma-separated or array)
+    let categoryList = [];
+    if (categories) {
+      if (Array.isArray(categories)) {
+        categoryList = categories;
+      } else if (typeof categories === "string") {
+        categoryList = categories.split(",").map((cat) => cat.trim());
+      }
+    }
+
+    // Build base query
+    const query = {
+      status: "published",
+      isActive: true,
+    };
+
+    // Add category filter if categories are provided
+    if (categoryList.length > 0) {
+      query.category = { $in: categoryList };
+    }
+
+    // Add time filter
+    const now = new Date();
+    if (timeFilter === "upcoming") {
+      Object.assign(query, buildFlexibleDateQuery("$gte", now));
+    } else if (timeFilter === "past") {
+      Object.assign(query, buildFlexibleDateQuery("$lt", now));
+    }
+    // "all" will include both upcoming and past events
+
+    console.log("📊 Categories Query:", JSON.stringify(query, null, 2));
+
+    const sortOption = getSortOptions(sort);
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [events, total, categoryStats] = await Promise.all([
+      Event.find(query)
+        .sort(sortOption)
+        .skip(skip)
+        .limit(limitNum)
+        .populate(
+          "organizer",
+          "firstName lastName userName profilePicture organizerInfo"
+        ),
+      Event.countDocuments(query),
+      // Get category statistics for the response
+      Event.aggregate([
+        { $match: { status: "published", isActive: true } },
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+    ]);
+
+    // Get unique categories from the results
+    const uniqueCategories = [
+      ...new Set(events.map((event) => event.category)),
+    ];
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+      categories: categoryList.length > 0 ? categoryList : uniqueCategories,
+      categoryStatistics: categoryStats,
+      filters: {
+        categories: categoryList,
+        timeFilter,
+        sort,
+      },
+      events,
+    });
+  } catch (error) {
+    console.error("❌ getEventsByCategories Error:", error);
+    next(new ErrorResponse("Failed to fetch events by categories", 500));
+  }
+};
+
+// @desc    Get events happening this week
+// @route   GET /api/v1/events/this-week
+// @access  Public
+const getEventsThisWeek = async (req, res, next) => {
+  try {
+    const {
+      page = 1,
+      limit = 12,
+      category,
+      city,
+      state,
+      eventType,
+      sort = "date",
+    } = req.query;
+
+    // Calculate date range for this week
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    // If today is not Monday, go back to Monday
+    const dayOfWeek = now.getDay();
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Sunday is 0, Monday is 1
+    startOfWeek.setDate(now.getDate() + diffToMonday);
+
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+    endOfWeek.setHours(23, 59, 59, 999);
+
+    console.log("📅 This Week Range:", {
+      startOfWeek: startOfWeek.toISOString(),
+      endOfWeek: endOfWeek.toISOString(),
+      today: now.toISOString(),
+    });
+
+    // Build query for events happening this week
+    const query = {
+      status: "published",
+      isActive: true,
+      $or: [
+        // Events that start this week
+        {
+          startDate: {
+            $gte: startOfWeek,
+            $lte: endOfWeek,
+          },
+          startDate: { $exists: true },
+        },
+        {
+          date: {
+            $gte: startOfWeek,
+            $lte: endOfWeek,
+          },
+          startDate: { $exists: false },
+        },
+        // Multi-day events that span this week
+        {
+          $and: [
+            { startDate: { $lte: endOfWeek } },
+            { endDate: { $gte: startOfWeek } },
+            { startDate: { $exists: true } },
+            { endDate: { $exists: true } },
+          ],
+        },
+      ],
+    };
+
+    // Add additional filters
+    if (category) query.category = category;
+    if (city) query.city = new RegExp(city, "i");
+    if (state) query.state = state;
+    if (eventType) query.eventType = eventType;
+
+    console.log("🎯 This Week Query:", JSON.stringify(query, null, 2));
+
+    const sortOption = getSortOptions(sort);
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [events, total] = await Promise.all([
+      Event.find(query)
+        .sort(sortOption)
+        .skip(skip)
+        .limit(limitNum)
+        .populate(
+          "organizer",
+          "firstName lastName userName profilePicture organizerInfo"
+        ),
+      Event.countDocuments(query),
+    ]);
+
+    // Group events by day for better frontend display
+    const eventsByDay = {};
+    events.forEach((event) => {
+      const eventDate = event.startDate || event.date;
+      const dayKey = eventDate.toISOString().split("T")[0]; // YYYY-MM-DD
+
+      if (!eventsByDay[dayKey]) {
+        eventsByDay[dayKey] = [];
+      }
+      eventsByDay[dayKey].push(event);
+    });
+
+    res.status(200).json({
+      success: true,
+      count: events.length,
+      total,
+      totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
+      dateRange: {
+        startOfWeek: startOfWeek.toISOString(),
+        endOfWeek: endOfWeek.toISOString(),
+        weekNumber: getWeekNumber(startOfWeek),
+      },
+      filters: {
+        category,
+        city,
+        state,
+        eventType,
+        sort,
+      },
+      eventsByDay,
+      events,
+    });
+  } catch (error) {
+    console.error("❌ getEventsThisWeek Error:", error);
+    next(new ErrorResponse("Failed to fetch events for this week", 500));
+  }
+};
+
+// Helper function to get week number
+const getWeekNumber = (date) => {
+  const firstDayOfYear = new Date(date.getFullYear(), 0, 1);
+  const pastDaysOfYear = (date - firstDayOfYear) / 86400000;
+  return Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+};
 
 module.exports = {
   createEvent,
@@ -1173,7 +1402,9 @@ module.exports = {
   cancelEvent,
   deleteEventImage,
   searchEventsAdvanced,
-  // STREAMLINED: Only essential approval controllers
+  getEventsThisWeek,
+  getEventsByCategories,
+  //approval controllers
   updateApprovalSettings,
   getEventsNeedingApproval,
   getEventApprovalStats,
