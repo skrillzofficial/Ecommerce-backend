@@ -21,20 +21,21 @@ const {
   validateOrganizerRole,
 } = require("../utils/validationHelpers");
 
-// ==================== FLEXIBLE DATE HELPER ====================
+// ==================== FIXED FLEXIBLE DATE HELPER ====================
 // This helper builds queries that work with BOTH date and startDate fields
 const buildFlexibleDateQuery = (operator, dateValue) => {
   const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
 
   return {
     $or: [
+      // Check startDate if it exists (prioritize startDate for new events)
       {
-        startDate: { [operator]: date },
-        startDate: { $exists: true },
+        startDate: { [operator]: date, $exists: true }
       },
+      // Fallback to date field if startDate doesn't exist (old events)
       {
         date: { [operator]: date },
-        startDate: { $exists: false },
+        startDate: { $exists: false }
       },
     ],
   };
@@ -120,9 +121,14 @@ const createEvent = async (req, res, next) => {
       uploadedImages = await uploadImages(imageFiles);
     }
 
+    // ✅ FIX: Ensure both date and startDate are set
+    const eventStartDate = new Date(startDate);
+
     // Build event data
     const eventData = {
       ...parsedBody,
+      startDate: eventStartDate,
+      date: eventStartDate, // ✅ CRITICAL: Always set date to match startDate
       images: uploadedImages,
       image:
         uploadedImages.length > 0
@@ -139,13 +145,20 @@ const createEvent = async (req, res, next) => {
     // Create event
     const event = await Event.create(eventData);
 
+    console.log("✅ Event created successfully:", {
+      id: event._id,
+      title: event.title,
+      startDate: event.startDate,
+      date: event.date,
+    });
+
     res.status(201).json({
       success: true,
       message: "Event created successfully",
       data: event,
     });
   } catch (error) {
-    console.error("Event creation error:", error);
+    console.error("❌ Event creation error:", error);
     next(error);
   }
 };
@@ -162,6 +175,7 @@ const getAllEvents = async (req, res, next) => {
       limit = 12,
       sort = "date",
       timeFilter,
+      debug = false,
       ...filters
     } = req.query;
 
@@ -174,7 +188,7 @@ const getAllEvents = async (req, res, next) => {
     // ✅ Build flexible query (supports both date and startDate)
     const query = buildEventSearchQuery({ ...filters, search }, req.user?.role);
 
-    // ✅ CRITICAL FIX: Apply time filter SEPARATELY (not in buildEventSearchQuery)
+    // ✅ CRITICAL FIX: Apply time filter SEPARATELY
     const now = new Date();
     if (timeFilter === "upcoming") {
       const upcomingQuery = buildFlexibleDateQuery("$gte", now);
@@ -198,8 +212,11 @@ const getAllEvents = async (req, res, next) => {
       }
     }
 
-    console.log("📍 Final Query:", JSON.stringify(query, null, 2));
-    console.log("🔐 User authenticated:", !!req.user);
+    if (debug === "true") {
+      console.log("📍 Final Query:", JSON.stringify(query, null, 2));
+      console.log("🔐 User authenticated:", !!req.user);
+      console.log("📅 Current Date:", now.toISOString());
+    }
 
     const sortOption = getSortOptions(sort);
 
@@ -207,7 +224,16 @@ const getAllEvents = async (req, res, next) => {
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
 
-    const [events, total] = await Promise.all([
+    // ✅ Add debug queries if debug mode is enabled
+    const debugPromises = debug === "true" ? [
+      Event.countDocuments({ status: "published", isActive: true }),
+      Event.countDocuments({ status: "published", isActive: false }),
+      Event.countDocuments({ status: "cancelled" }),
+      Event.countDocuments({ status: "draft" }),
+      Event.countDocuments({}), // Total
+    ] : [];
+
+    const [events, total, ...debugCounts] = await Promise.all([
       Event.find(query)
         .sort(sortOption)
         .skip(skip)
@@ -217,6 +243,7 @@ const getAllEvents = async (req, res, next) => {
           "firstName lastName userName profilePicture organizerInfo"
         ),
       Event.countDocuments(query),
+      ...debugPromises,
     ]);
 
     console.log(`✅ Found ${events.length} events out of ${total} total`);
@@ -237,6 +264,23 @@ const getAllEvents = async (req, res, next) => {
       };
     }
 
+    // ✅ Add debug info
+    if (debug === "true" && debugCounts.length > 0) {
+      response.debug = {
+        statusBreakdown: {
+          publishedActive: debugCounts[0],
+          publishedInactive: debugCounts[1],
+          cancelled: debugCounts[2],
+          draft: debugCounts[3],
+          total: debugCounts[4],
+        },
+        queryUsed: query,
+        currentDate: now.toISOString(),
+        timeFilter: timeFilter || "none",
+      };
+      console.log("📊 Debug Status Breakdown:", response.debug.statusBreakdown);
+    }
+
     res.status(200).json(response);
   } catch (error) {
     console.error("❌ getAllEvents Error:", error);
@@ -251,7 +295,7 @@ const getPastEvents = async (req, res, next) => {
   try {
     const { page = 1, limit = 12, sort = "-date", ...filters } = req.query;
 
-    // ✅ CRITICAL FIX: Build base query WITHOUT date filter
+    // ✅ Build base query WITHOUT date filter
     const baseQuery = buildEventSearchQuery(filters, req.user?.role);
 
     // ✅ Build flexible past date condition
@@ -273,7 +317,7 @@ const getPastEvents = async (req, res, next) => {
       Object.assign(finalQuery, pastDateQuery);
     }
 
-    console.log("📅 Past Events Query:", JSON.stringify(finalQuery, null, 2));
+    console.log("📜 Past Events Query:", JSON.stringify(finalQuery, null, 2));
 
     const sortOption = getSortOptions(sort);
     const pageNum = parseInt(page);
@@ -317,16 +361,20 @@ const getUpcomingEvents = async (req, res, next) => {
 
     // ✅ Use flexible date query
     const now = new Date();
+    const upcomingQuery = buildFlexibleDateQuery("$gte", now);
+    
     const query = {
       status: "published",
       isActive: true,
-      ...buildFlexibleDateQuery("$gte", now),
+      ...upcomingQuery,
     };
 
     if (category) query.category = category;
     if (city) query.city = new RegExp(city, "i");
     if (state) query.state = state;
     if (eventType) query.eventType = eventType;
+
+    console.log("📅 Upcoming Events Query:", JSON.stringify(query, null, 2));
 
     const events = await Event.find(query)
       .sort({ startDate: 1, date: 1 })
@@ -335,6 +383,8 @@ const getUpcomingEvents = async (req, res, next) => {
         "organizer",
         "firstName lastName userName profilePicture organizerInfo"
       );
+
+    console.log(`✅ Found ${events.length} upcoming events`);
 
     res.status(200).json({
       success: true,
@@ -361,12 +411,14 @@ const getFeaturedEvents = async (req, res, next) => {
       isActive: true,
     };
 
-    // ✅ Add time filter
+    // ✅ Add time filter using flexible date query
     if (timeFilter === "upcoming") {
       Object.assign(query, buildFlexibleDateQuery("$gte", now));
     } else if (timeFilter === "past") {
       Object.assign(query, buildFlexibleDateQuery("$lt", now));
     }
+
+    console.log("⭐ Featured Events Query:", JSON.stringify(query, null, 2));
 
     const events = await Event.find(query)
       .sort({ startDate: 1, date: 1 })
@@ -501,7 +553,7 @@ const updateEvent = async (req, res, next) => {
       "ticketTypes",
       "ticketDescription",
       "ticketBenefits",
-      "attendanceApproval", // NEW: Allow attendance approval updates
+      "attendanceApproval",
     ];
 
     allowedUpdates.forEach((field) => {
@@ -509,7 +561,7 @@ const updateEvent = async (req, res, next) => {
         if (field === "startDate" || field === "endDate") {
           const dateValue = new Date(parsedBody[field]);
           event[field] = dateValue;
-          // ✅ Sync both date and startDate
+          // ✅ CRITICAL: Sync both date and startDate
           if (field === "startDate") {
             event.date = dateValue;
           }
@@ -534,7 +586,6 @@ const updateEvent = async (req, res, next) => {
               isFree: safeParseNumber(ticket.price, 0) === 0,
             };
 
-            // NEW: Handle approval settings for ticket types
             if (ticket.requiresApproval !== undefined) {
               processedTicket.requiresApproval = ticket.requiresApproval;
             }
@@ -554,7 +605,6 @@ const updateEvent = async (req, res, next) => {
             return processTicketTypeApproval(processedTicket);
           });
 
-          // NEW: Update global approval settings based on ticket types
           const hasApprovalRequired = event.ticketTypes.some(
             (ticket) => ticket.requiresApproval
           );
@@ -574,7 +624,6 @@ const updateEvent = async (req, res, next) => {
             event.attendanceApproval.enabled = false;
           }
         } else if (field === "attendanceApproval" && parsedBody[field]) {
-          // NEW: Handle direct attendance approval updates
           event.attendanceApproval = {
             ...event.attendanceApproval,
             ...parsedBody[field],
@@ -668,8 +717,8 @@ const getTicketAvailability = async (req, res, next) => {
               ),
               isFree: ticket.price === 0,
               accessType: ticket.accessType,
-              requiresApproval: ticket.requiresApproval, // NEW: Include approval requirement
-              approvalQuestions: ticket.approvalQuestions, // NEW: Include approval questions
+              requiresApproval: ticket.requiresApproval,
+              approvalQuestions: ticket.approvalQuestions,
             }))
           : [
               {
@@ -683,15 +732,15 @@ const getTicketAvailability = async (req, res, next) => {
                     100
                 ),
                 isFree: event.price === 0,
-                requiresApproval: event.price === 0, // NEW: Free tickets require approval by default
+                requiresApproval: event.price === 0,
               },
             ],
       totalCapacity: event.totalCapacity,
       totalAvailable: event.totalAvailableTickets,
       isSoldOut: event.isSoldOut,
       hasFreeTickets: event.hasFreeTickets,
-      hasApprovalRequired: event.hasApprovalRequired, // NEW: Include global approval status
-      attendanceApproval: event.attendanceApproval, // NEW: Include approval settings
+      hasApprovalRequired: event.hasApprovalRequired,
+      attendanceApproval: event.attendanceApproval,
     });
   } catch (error) {
     next(error);
@@ -704,15 +753,13 @@ const getTicketAvailability = async (req, res, next) => {
 const getOrganizerStatistics = async (req, res, next) => {
   try {
     const stats = await Event.getStatistics(req.user.userId);
-
-    // NEW: Get approval statistics
     const approvalStats = await Event.getApprovalStatistics(req.user.userId);
 
     res.status(200).json({
       success: true,
       statistics: {
         ...stats,
-        approval: approvalStats, // NEW: Include approval statistics
+        approval: approvalStats,
       },
     });
   } catch (error) {
@@ -768,7 +815,6 @@ const getOrganizerEvents = async (req, res, next) => {
       query.status = status;
     }
 
-    // NEW: Filter events needing approval attention
     if (needsApproval === "true") {
       query["attendanceApproval.enabled"] = true;
       query.pendingApprovals = { $gt: 0 };
@@ -1072,6 +1118,7 @@ const getEventApprovalStats = async (req, res, next) => {
     next(new ErrorResponse("Failed to fetch approval statistics", 500));
   }
 };
+
 // @desc    Update shareable banner settings
 // @route   PATCH /api/v1/events/:id/shareable-banner
 // @access  Private (Organizer only - own events)
@@ -1154,6 +1201,7 @@ const removeShareableBannerTemplate = async (req, res, next) => {
     next(error);
   }
 };
+
 // @desc    Get events by categories
 // @route   GET /api/v1/events/categories
 // @access  Public
@@ -1188,7 +1236,7 @@ const getEventsByCategories = async (req, res, next) => {
       query.category = { $in: categoryList };
     }
 
-    // Add time filter
+    // ✅ Add time filter using flexible date query
     const now = new Date();
     if (timeFilter === "upcoming") {
       Object.assign(query, buildFlexibleDateQuery("$gte", now));
@@ -1270,7 +1318,7 @@ const getEventsThisWeek = async (req, res, next) => {
 
     // If today is not Monday, go back to Monday
     const dayOfWeek = now.getDay();
-    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Sunday is 0, Monday is 1
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
     startOfWeek.setDate(now.getDate() + diffToMonday);
 
     const endOfWeek = new Date(startOfWeek);
@@ -1283,19 +1331,20 @@ const getEventsThisWeek = async (req, res, next) => {
       today: now.toISOString(),
     });
 
-    // Build query for events happening this week
+    // ✅ Build query for events happening this week using flexible date query
     const query = {
       status: "published",
       isActive: true,
       $or: [
-        // Events that start this week
+        // Events with startDate this week
         {
           startDate: {
             $gte: startOfWeek,
             $lte: endOfWeek,
+            $exists: true,
           },
-          startDate: { $exists: true },
         },
+        // Events with date this week (legacy)
         {
           date: {
             $gte: startOfWeek,
@@ -1306,10 +1355,8 @@ const getEventsThisWeek = async (req, res, next) => {
         // Multi-day events that span this week
         {
           $and: [
-            { startDate: { $lte: endOfWeek } },
-            { endDate: { $gte: startOfWeek } },
-            { startDate: { $exists: true } },
-            { endDate: { $exists: true } },
+            { startDate: { $lte: endOfWeek, $exists: true } },
+            { endDate: { $gte: startOfWeek, $exists: true } },
           ],
         },
       ],
@@ -1404,7 +1451,7 @@ module.exports = {
   searchEventsAdvanced,
   getEventsThisWeek,
   getEventsByCategories,
-  //approval controllers
+  // Approval controllers
   updateApprovalSettings,
   getEventsNeedingApproval,
   getEventApprovalStats,
