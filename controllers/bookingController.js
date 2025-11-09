@@ -126,7 +126,7 @@ const sendBookingNotifications = async (
     console.error("Notification/email error:", error);
   }
 };
-// In your booking controller - update the completeFreeBooking function
+// Free booking controller
 const completeFreeBooking = async (
   event,
   user,
@@ -143,27 +143,50 @@ const completeFreeBooking = async (
   try {
     session.startTransaction();
 
-    // Create booking FIRST to get bookingId
+    // Generate order number FIRST
+    const orderNumber = `ORD-${Date.now().toString().slice(-8)}-${Math.random()
+      .toString(36)
+      .substring(2, 6)
+      .toUpperCase()}`;
+
+    // Create booking FIRST with all required fields
     const bookingData = {
+      // Order identification
+      orderNumber: orderNumber,
+      shortId: Math.random().toString(36).substring(2, 8).toUpperCase(),
+
+      // Core references
       event: event._id,
       user: user._id,
       organizer: event.organizer,
       tickets: [], 
+
+      // Ticket information
       ticketDetails,
       totalTickets: totalQuantity,
+
+      // Pricing
       subtotalAmount: totalPrice,
       serviceFee: 0,
+      taxAmount: 0,
+      discountAmount: 0,
       totalAmount: totalPrice,
       currency: event.currency || "NGN",
+
+      // Status - CORRECT VALUES
       status: "confirmed",
-      paymentStatus: "free",
-      paymentMethod: "free",
+      paymentStatus: "free", 
+      paymentMethod: "free", 
+
+      // Customer info
       customerInfo: {
         name: user.fullName,
         email: user.email,
         phone: user.phone || "",
         billingAddress: user.organizerInfo?.address || {},
       },
+
+      // Event snapshot
       eventSnapshot: {
         title: event.title,
         startDate: event.startDate,
@@ -181,23 +204,27 @@ const completeFreeBooking = async (
         refundPolicy: event.refundPolicy || "partial",
         category: event.category,
       },
+
+      // Security
+      securityToken:
+        Math.random().toString(36).substring(2, 15) +
+        Math.random().toString(36).substring(2, 15),
     };
 
     const booking = await Booking.create([bookingData], { session });
 
-    // NOW create tickets with the bookingId
+    // Create tickets with the booking ID
     const tickets = await createTickets(event, user, bookings, {
       session,
-      bookingId: booking[0]._id, // Pass the booking ID
+      bookingId: booking[0]._id,
     });
 
     // Update booking with ticket references
     booking[0].tickets = tickets.map((t) => t._id);
     await booking[0].save({ session });
 
-    // Update event availability and statistics
+    // Update event statistics
     await updateEventAvailability(event, bookings, { session });
-
     event.totalAttendees = (event.totalAttendees || 0) + totalQuantity;
     event.totalBookings = (event.totalBookings || 0) + 1;
     event.totalRevenue = (event.totalRevenue || 0) + totalPrice;
@@ -205,7 +232,7 @@ const completeFreeBooking = async (
 
     await session.commitTransaction();
 
-    // Send notifications and emails (outside transaction)
+    // Send notifications
     await sendBookingNotifications(
       event,
       user,
@@ -235,7 +262,6 @@ const completeFreeBooking = async (
           accessType: ticket.accessType,
           price: ticket.ticketPrice,
           status: ticket.status,
-          approvalStatus: ticket.approvalStatus,
         })),
         event: {
           id: event._id,
@@ -248,6 +274,7 @@ const completeFreeBooking = async (
     });
   } catch (error) {
     await session.abortTransaction();
+    console.error("Free booking error:", error);
     next(error);
   } finally {
     session.endSession();
