@@ -1,5 +1,5 @@
+const mongoose = require("mongoose");
 const ErrorResponse = require("./errorResponse");
-const Ticket = require("../models/ticket"); // Added missing import
 
 // Validate booking request data
 const validateBookingRequest = (bookingData) => {
@@ -164,7 +164,7 @@ const checkTicketAvailability = (event, bookings) => {
 };
 
 // Update event availability after booking
-const updateEventAvailability = async (event, bookings) => {
+const updateEventAvailability = async (event, bookings, options = {}) => {
   for (const booking of bookings) {
     const { ticketType, quantity } = booking;
     const parsedQuantity = parseInt(quantity);
@@ -188,10 +188,14 @@ const updateEventAvailability = async (event, bookings) => {
     }
   }
 
-  await event.save();
+  if (options.session) {
+    await event.save({ session: options.session });
+  } else {
+    await event.save();
+  }
 };
 
-// In bookingHelpers.js - Fix the createTickets function
+// Create tickets for booking - FIXED VERSION
 const createTickets = async (event, user, bookings, options = {}) => {
   const Ticket = mongoose.model("Ticket");
   const tickets = [];
@@ -269,12 +273,12 @@ const createTickets = async (event, user, bookings, options = {}) => {
           // Status
           status: "confirmed",
 
-          // NEW: Approval system handling
+          // Approval system handling
           approvalStatus: ticketType.price === 0 ? "pending" : "not-required",
           approvalQuestions: booking.approvalQuestions
             ? booking.approvalQuestions.map((q) => ({
                 question: q.question,
-                answer: q.answer || "Not provided", // Ensure answer is never empty
+                answer: q.answer || "Not provided",
                 required: q.required || false,
               }))
             : [],
@@ -284,8 +288,8 @@ const createTickets = async (event, user, bookings, options = {}) => {
           paymentMethod: ticketType.price === 0 ? "free" : "card",
           paymentStatus: "completed",
 
-          // Booking reference (CRITICAL - this was missing)
-          bookingId: options.bookingId, // Make sure this is passed from the booking creation
+          // Booking reference
+          bookingId: options.bookingId,
 
           // Organizer information
           organizerId: event.organizer,
