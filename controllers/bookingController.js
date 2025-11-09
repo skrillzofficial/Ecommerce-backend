@@ -64,7 +64,7 @@ const sendBookingNotifications = async (
     // Organizer notification (if different from user)
     if (event.organizer.toString() !== user._id.toString()) {
       await NotificationService.createSystemNotification(event.organizer, {
-        title: "🎟️ New Ticket Sale",
+        title: " New Ticket Sale",
         message: `${user.fullName} purchased ${totalQuantity} ticket(s) for "${event.title}"`,
         priority: "medium",
         data: {
@@ -126,8 +126,7 @@ const sendBookingNotifications = async (
     console.error("Notification/email error:", error);
   }
 };
-
-// Helper function for free bookings (attendee perspective)
+// In your booking controller - update the completeFreeBooking function
 const completeFreeBooking = async (
   event,
   user,
@@ -144,23 +143,12 @@ const completeFreeBooking = async (
   try {
     session.startTransaction();
 
-    // Create individual tickets
-    const tickets = await createTickets(event, user, bookings, { session });
-
-    // Update event availability and statistics
-    await updateEventAvailability(event, bookings);
-
-    event.totalAttendees = (event.totalAttendees || 0) + totalQuantity;
-    event.totalBookings = (event.totalBookings || 0) + 1;
-    event.totalRevenue = (event.totalRevenue || 0) + totalPrice;
-    await event.save({ session });
-
-    // Create booking
+    // Create booking FIRST to get bookingId
     const bookingData = {
       event: event._id,
       user: user._id,
       organizer: event.organizer,
-      tickets: tickets.map((ticket) => ticket._id),
+      tickets: [], 
       ticketDetails,
       totalTickets: totalQuantity,
       subtotalAmount: totalPrice,
@@ -197,6 +185,24 @@ const completeFreeBooking = async (
 
     const booking = await Booking.create([bookingData], { session });
 
+    // NOW create tickets with the bookingId
+    const tickets = await createTickets(event, user, bookings, {
+      session,
+      bookingId: booking[0]._id, // Pass the booking ID
+    });
+
+    // Update booking with ticket references
+    booking[0].tickets = tickets.map((t) => t._id);
+    await booking[0].save({ session });
+
+    // Update event availability and statistics
+    await updateEventAvailability(event, bookings, { session });
+
+    event.totalAttendees = (event.totalAttendees || 0) + totalQuantity;
+    event.totalBookings = (event.totalBookings || 0) + 1;
+    event.totalRevenue = (event.totalRevenue || 0) + totalPrice;
+    await event.save({ session });
+
     await session.commitTransaction();
 
     // Send notifications and emails (outside transaction)
@@ -229,6 +235,7 @@ const completeFreeBooking = async (
           accessType: ticket.accessType,
           price: ticket.ticketPrice,
           status: ticket.status,
+          approvalStatus: ticket.approvalStatus,
         })),
         event: {
           id: event._id,

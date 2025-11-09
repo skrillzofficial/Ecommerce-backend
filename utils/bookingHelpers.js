@@ -3,16 +3,22 @@ const Ticket = require("../models/ticket"); // Added missing import
 
 // Validate booking request data
 const validateBookingRequest = (bookingData) => {
-  if (!bookingData || (!bookingData.ticketBookings && (!bookingData.ticketType || !bookingData.quantity))) {
+  if (
+    !bookingData ||
+    (!bookingData.ticketBookings &&
+      (!bookingData.ticketType || !bookingData.quantity))
+  ) {
     throw new ErrorResponse("Please provide at least one ticket booking", 400);
   }
 
   let bookings = [];
-  
+
   if (bookingData.ticketBookings && Array.isArray(bookingData.ticketBookings)) {
     bookings = bookingData.ticketBookings;
   } else if (bookingData.ticketType && bookingData.quantity) {
-    bookings = [{ ticketType: bookingData.ticketType, quantity: bookingData.quantity }];
+    bookings = [
+      { ticketType: bookingData.ticketType, quantity: bookingData.quantity },
+    ];
   }
 
   if (bookings.length === 0) {
@@ -21,32 +27,48 @@ const validateBookingRequest = (bookingData) => {
 
   // Validate each booking
   let totalQuantity = 0;
-  
+
   for (const booking of bookings) {
     const { ticketType, quantity } = booking;
-    
-    if (!ticketType || typeof ticketType !== 'string' || ticketType.trim().length === 0) {
+
+    if (
+      !ticketType ||
+      typeof ticketType !== "string" ||
+      ticketType.trim().length === 0
+    ) {
       throw new ErrorResponse("Each booking must have a valid ticketType", 400);
     }
 
     if (!quantity) {
-      throw new ErrorResponse(`Quantity is required for ${ticketType} tickets`, 400);
+      throw new ErrorResponse(
+        `Quantity is required for ${ticketType} tickets`,
+        400
+      );
     }
 
     const parsedQuantity = parseInt(quantity);
     if (isNaN(parsedQuantity) || parsedQuantity < 1) {
-      throw new ErrorResponse(`Invalid quantity for ${ticketType} tickets`, 400);
+      throw new ErrorResponse(
+        `Invalid quantity for ${ticketType} tickets`,
+        400
+      );
     }
 
     if (parsedQuantity > 10) {
-      throw new ErrorResponse(`Cannot book more than 10 ${ticketType} tickets at once`, 400);
+      throw new ErrorResponse(
+        `Cannot book more than 10 ${ticketType} tickets at once`,
+        400
+      );
     }
 
     totalQuantity += parsedQuantity;
   }
 
   if (totalQuantity > 20) {
-    throw new ErrorResponse("Cannot book more than 20 tickets total per order", 400);
+    throw new ErrorResponse(
+      "Cannot book more than 20 tickets total per order",
+      400
+    );
   }
 
   return bookings;
@@ -62,7 +84,7 @@ const calculateBookingTotals = (bookings, ticketTypes) => {
     const { ticketType, quantity } = booking;
     const parsedQuantity = parseInt(quantity);
 
-    const ticketTypeObj = ticketTypes.find(tt => tt.name === ticketType);
+    const ticketTypeObj = ticketTypes.find((tt) => tt.name === ticketType);
     if (!ticketTypeObj) {
       throw new ErrorResponse(`Ticket type "${ticketType}" not found`, 400);
     }
@@ -72,8 +94,12 @@ const calculateBookingTotals = (bookings, ticketTypes) => {
       throw new ErrorResponse(`Invalid price for ${ticketType} tickets`, 400);
     }
 
-    if (ticketPrice > 1000000) { // 1 million Naira max
-      throw new ErrorResponse(`Price for ${ticketType} tickets is too high`, 400);
+    if (ticketPrice > 1000000) {
+      // 1 million Naira max
+      throw new ErrorResponse(
+        `Price for ${ticketType} tickets is too high`,
+        400
+      );
     }
 
     const subtotal = ticketPrice * parsedQuantity;
@@ -89,7 +115,7 @@ const calculateBookingTotals = (bookings, ticketTypes) => {
       benefits: ticketTypeObj.benefits || [],
       accessType: ticketTypeObj.accessType || "both",
       requiresApproval: ticketTypeObj.requiresApproval || false,
-      approvalQuestions: ticketTypeObj.approvalQuestions || []
+      approvalQuestions: ticketTypeObj.approvalQuestions || [],
     });
   }
 
@@ -105,21 +131,29 @@ const checkTicketAvailability = (event, bookings) => {
     const parsedQuantity = parseInt(quantity);
 
     if (event.ticketTypes && event.ticketTypes.length > 0) {
-      const ticketTypeObj = event.ticketTypes.find(tt => tt.name === ticketType);
+      const ticketTypeObj = event.ticketTypes.find(
+        (tt) => tt.name === ticketType
+      );
       if (!ticketTypeObj) {
-        availabilityIssues.push(`Ticket type "${ticketType}" not found in ${event.title}`);
+        availabilityIssues.push(
+          `Ticket type "${ticketType}" not found in ${event.title}`
+        );
         continue;
       }
 
       const availableCount = Number(ticketTypeObj.availableTickets);
       if (availableCount < parsedQuantity) {
-        availabilityIssues.push(`Only ${availableCount} ${ticketType} ticket(s) available for ${event.title}`);
+        availabilityIssues.push(
+          `Only ${availableCount} ${ticketType} ticket(s) available for ${event.title}`
+        );
       }
     } else {
       // Legacy system
       const availableCount = Number(event.availableTickets);
       if (availableCount < parsedQuantity) {
-        availabilityIssues.push(`Only ${availableCount} ticket(s) available for ${event.title}`);
+        availabilityIssues.push(
+          `Only ${availableCount} ticket(s) available for ${event.title}`
+        );
       }
     }
   }
@@ -136,75 +170,157 @@ const updateEventAvailability = async (event, bookings) => {
     const parsedQuantity = parseInt(quantity);
 
     if (event.ticketTypes && event.ticketTypes.length > 0) {
-      const ticketTypeObj = event.ticketTypes.find(tt => tt.name === ticketType);
+      const ticketTypeObj = event.ticketTypes.find(
+        (tt) => tt.name === ticketType
+      );
       if (ticketTypeObj) {
-        ticketTypeObj.availableTickets = Math.max(0, ticketTypeObj.availableTickets - parsedQuantity);
+        ticketTypeObj.availableTickets = Math.max(
+          0,
+          ticketTypeObj.availableTickets - parsedQuantity
+        );
       }
     } else {
       // Legacy system
-      event.availableTickets = Math.max(0, event.availableTickets - parsedQuantity);
+      event.availableTickets = Math.max(
+        0,
+        event.availableTickets - parsedQuantity
+      );
     }
   }
 
   await event.save();
 };
 
-// Create individual tickets
-const createTickets = async (event, user, bookings) => {
+// In bookingHelpers.js - Fix the createTickets function
+const createTickets = async (event, user, bookings, options = {}) => {
+  const Ticket = mongoose.model("Ticket");
   const tickets = [];
+  const session = options.session || null;
 
   for (const booking of bookings) {
-    const { ticketType, quantity } = booking;
-    const parsedQuantity = parseInt(quantity);
+    const ticketType = event.ticketTypes?.find(
+      (tt) => tt._id.toString() === booking.ticketTypeId
+    ) || {
+      name: "General",
+      price: event.price || 0,
+      benefits: [],
+      accessType: "both",
+    };
 
-    const ticketTypeObj = event.ticketTypes?.find(tt => tt.name === ticketType);
+    for (let i = 0; i < booking.quantity; i++) {
+      try {
+        // Generate unique identifiers FIRST
+        const ticketNumber = `TKT-${Date.now()
+          .toString()
+          .slice(-8)}-${Math.random()
+          .toString(36)
+          .substring(2, 6)
+          .toUpperCase()}`;
 
-    for (let i = 0; i < parsedQuantity; i++) {
-      const ticketData = {
-        eventId: event._id,
-        eventName: event.title,
-        eventDate: event.startDate, // For compatibility
-        eventStartDate: event.startDate,
-        eventEndDate: event.endDate,
-        eventTime: event.time,
-        eventEndTime: event.endTime,
-        eventVenue: event.venue,
-        eventAddress: event.address,
-        eventState: event.state,
-        eventCity: event.city,
-        eventCountry: event.country,
-        eventCategory: event.category,
-        eventType: event.eventType,
-        virtualEventLink: event.virtualEventLink,
-        eventCoordinates: event.coordinates,
-        userId: user._id,
-        userName: user.fullName,
-        userEmail: user.email,
-        userPhone: user.phone || "",
-        ticketType: ticketType,
-        ticketPrice: ticketTypeObj ? ticketTypeObj.price : event.price,
-        quantity: 1,
-        totalAmount: ticketTypeObj ? ticketTypeObj.price : event.price,
-        accessType: ticketTypeObj?.accessType || (event.eventType === "virtual" ? "virtual" : "physical"),
-        organizerId: event.organizer,
-        organizerName: event.organizerInfo?.name || "",
-        organizerEmail: event.organizerInfo?.email || "",
-        organizerCompany: event.organizerInfo?.companyName || "",
-        refundPolicy: event.refundPolicy || "partial",
-        status: "confirmed",
-        paymentStatus: "completed",
-        currency: "NGN"
-      };
+        const qrCode = `QR-${ticketNumber}-${Date.now()}`;
+        const barcode = `BC-${ticketNumber}`;
+        const securityCode = Math.random()
+          .toString(36)
+          .substring(2, 8)
+          .toUpperCase();
 
-      // Handle approval requirements
-      if (ticketTypeObj?.requiresApproval) {
-        ticketData.status = "pending-approval";
-        ticketData.requiresApproval = true;
-        ticketData.approvalQuestions = ticketTypeObj.approvalQuestions || [];
+        // Create ticket data with ALL required fields
+        const ticketData = {
+          // Required identification fields
+          ticketNumber,
+          qrCode,
+          barcode,
+          securityCode,
+
+          // Event reference
+          eventId: event._id,
+
+          // Event snapshot data
+          eventName: event.title,
+          eventStartDate: event.startDate,
+          eventEndDate: event.endDate,
+          eventTime: event.time,
+          eventEndTime: event.endTime,
+          eventVenue: event.venue,
+          eventAddress: event.address,
+          eventState: event.state,
+          eventCity: event.city,
+          eventCategory: event.category,
+          eventType: event.eventType,
+          virtualEventLink: event.virtualEventLink,
+
+          // Ticket type information
+          ticketType: ticketType.name,
+          ticketTypeId: ticketType._id,
+          accessType: ticketType.accessType || "both",
+
+          // User information
+          userId: user._id,
+          userName: user.fullName,
+          userEmail: user.email,
+          userPhone: user.phone || "",
+
+          // Pricing
+          ticketPrice: ticketType.price,
+          quantity: 1,
+          totalAmount: ticketType.price,
+          currency: event.currency || "NGN",
+
+          // Status
+          status: "confirmed",
+
+          // NEW: Approval system handling
+          approvalStatus: ticketType.price === 0 ? "pending" : "not-required",
+          approvalQuestions: booking.approvalQuestions
+            ? booking.approvalQuestions.map((q) => ({
+                question: q.question,
+                answer: q.answer || "Not provided", // Ensure answer is never empty
+                required: q.required || false,
+              }))
+            : [],
+
+          // Purchase information
+          purchaseDate: new Date(),
+          paymentMethod: ticketType.price === 0 ? "free" : "card",
+          paymentStatus: "completed",
+
+          // Booking reference (CRITICAL - this was missing)
+          bookingId: options.bookingId, // Make sure this is passed from the booking creation
+
+          // Organizer information
+          organizerId: event.organizer,
+          organizerName: event.organizerInfo?.name || user.fullName,
+          organizerEmail: event.organizerInfo?.email || user.email,
+          organizerCompany: event.organizerInfo?.companyName || "",
+
+          // Expiration
+          expiresAt: new Date(
+            event.startDate.getTime() + 7 * 24 * 60 * 60 * 1000
+          ),
+        };
+
+        // Set approval submitted timestamp if there are questions
+        if (ticketData.approvalQuestions.length > 0) {
+          ticketData.approvalSubmittedAt = new Date();
+        }
+
+        // Create and save ticket
+        let ticket;
+        if (session) {
+          ticket = new Ticket(ticketData);
+          await ticket.save({ session });
+        } else {
+          ticket = await Ticket.create(ticketData);
+        }
+
+        tickets.push(ticket);
+      } catch (error) {
+        console.error(
+          `Error creating ticket ${i + 1} for ${ticketType.name}:`,
+          error
+        );
+        throw error;
       }
-
-      const ticket = await Ticket.create(ticketData);
-      tickets.push(ticket);
     }
   }
 
@@ -223,12 +339,14 @@ const formatEventDate = (date) => {
 
 // Generate email template for booking confirmation
 const generateBookingEmailTemplate = (ticketDetails, totalPrice) => {
-  let ticketDetailsHtml = '';
+  let ticketDetailsHtml = "";
 
-  ticketDetails.forEach(detail => {
+  ticketDetails.forEach((detail) => {
     ticketDetailsHtml += `
       <tr>
-        <td style="padding: 8px 0; border-bottom: 1px solid #e0e0e0;">${detail.ticketType} x ${detail.quantity}</td>
+        <td style="padding: 8px 0; border-bottom: 1px solid #e0e0e0;">${
+          detail.ticketType
+        } x ${detail.quantity}</td>
         <td style="padding: 8px 0; text-align: right; border-bottom: 1px solid #e0e0e0;">₦${detail.unitPrice.toLocaleString()}</td>
         <td style="padding: 8px 0; text-align: right; border-bottom: 1px solid #e0e0e0;">₦${detail.subtotal.toLocaleString()}</td>
       </tr>
@@ -272,5 +390,5 @@ module.exports = {
   createTickets,
   formatEventDate,
   generateBookingEmailTemplate,
-  validateEventDate
+  validateEventDate,
 };
