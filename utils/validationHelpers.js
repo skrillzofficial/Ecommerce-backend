@@ -14,16 +14,36 @@ const validateRequiredFields = (data, requiredFields) => {
 
 // Validate user authorization
 const validateEventOwnership = (event, userId, userRole) => {
+  // ✅ Convert both to strings for comparison
   const eventOrganizerId = event.organizer?._id?.toString() || event.organizer?.toString();
+  const userIdString = userId?.toString(); // ✅ CRITICAL FIX: Convert userId to string
   
-  if (eventOrganizerId !== userId && userRole !== "superadmin") {
+  // 🔍 Debug logging (remove after testing)
+  console.log("🔐 Ownership Validation:", {
+    eventId: event._id?.toString(),
+    eventTitle: event.title,
+    eventOrganizerId,
+    userId: userIdString,
+    userRole,
+    match: eventOrganizerId === userIdString
+  });
+  
+  // ✅ Compare string versions
+  if (eventOrganizerId !== userIdString && userRole !== "superadmin") {
+    console.error("❌ Authorization failed:", {
+      expected: eventOrganizerId,
+      received: userIdString,
+      role: userRole
+    });
     throw new ErrorResponse("Not authorized to perform this action", 403);
   }
+  
+  console.log("✅ Authorization successful");
 };
 
 // Validate organizer role
 const validateOrganizerRole = (userRole) => {
-  if (userRole !== "organizer") {
+  if (userRole !== "organizer" && userRole !== "superadmin") { // ✅ Also allow superadmin
     throw new ErrorResponse("Only organizers can perform this action", 403);
   }
 };
