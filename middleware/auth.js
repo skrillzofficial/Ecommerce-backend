@@ -42,21 +42,18 @@ const protect = async (req, res, next) => {
         return next(new ErrorResponse("Account has been deactivated", 403));
       }
 
-      // Check if user email is verified (if you have email verification)
-      if (user.requireEmailVerification && !user.isEmailVerified) {
-        return next(new ErrorResponse("Please verify your email address", 403));
-      }
-
-      // Attach user to request
+      // Attach user to request with role support
       req.user = {
         _id: user._id,
         id: user._id,
         userId: user._id,
         email: user.email,
-        role: user.role,
+        role: user.getCurrentRole(), // Use helper method for backward compatibility
+        roles: user.getAllRoles(), // Get all available roles
+        activeRole: user.getCurrentRole(), // Current active role
         userName: user.userName,
         isActive: user.isActive,
-        isEmailVerified: user.isEmailVerified
+        isVerified: user.isVerified
       };
 
       next();
@@ -83,17 +80,19 @@ const protect = async (req, res, next) => {
   }
 };
 
-// Authorize specific roles
+// Authorize specific roles (checks active role)
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
       return next(new ErrorResponse("Not authenticated", 401));
     }
 
-    if (!roles.includes(req.user.role)) {
+    // Check if user's active role is in allowed roles
+    const currentRole = req.user.activeRole || req.user.role;
+    if (!roles.includes(currentRole)) {
       return next(
         new ErrorResponse(
-          `User role '${req.user.role}' is not authorized to access this route`,
+          `User role '${currentRole}' is not authorized to access this route`,
           403
         )
       );
@@ -103,20 +102,26 @@ const authorize = (...roles) => {
   };
 };
 
-// Grant access if user has any of the specified roles
+// Grant access if user has any of the specified roles (checks roles array)
 const authorizeAny = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
       return next(new ErrorResponse("Not authenticated", 401));
     }
 
-    if (roles.length > 0 && !roles.includes(req.user.role)) {
-      return next(
-        new ErrorResponse(
-          `Insufficient permissions to access this route`,
-          403
-        )
-      );
+    if (roles.length > 0) {
+      // Check in roles array first, fallback to role field
+      const userRoles = req.user.roles || [req.user.role];
+      const hasRequiredRole = roles.some(role => userRoles.includes(role));
+      
+      if (!hasRequiredRole) {
+        return next(
+          new ErrorResponse(
+            `Insufficient permissions to access this route`,
+            403
+          )
+        );
+      }
     }
 
     next();
@@ -148,15 +153,16 @@ const optionalAuth = async (req, res, next) => {
             id: user._id,
             userId: user._id,
             email: user.email,
-            role: user.role,
+            role: user.getCurrentRole(),
+            roles: user.getAllRoles(),
+            activeRole: user.getCurrentRole(),
             userName: user.userName,
             isActive: user.isActive,
-            isEmailVerified: user.isEmailVerified
+            isVerified: user.isVerified
           };
         }
       } catch (error) {
         // Token invalid or expired, continue without user
-        // No logging needed for optional auth failures
       }
     }
 
@@ -178,9 +184,10 @@ const checkOwnership = (model, options = {}) => {
       }
 
       const userId = req.user._id.toString();
+      const currentRole = req.user.activeRole || req.user.role;
 
       // Allow superadmin to access any resource
-      if (req.user.role === "superadmin") {
+      if (currentRole === "superadmin") {
         req.resource = resource;
         return next();
       }
@@ -221,9 +228,10 @@ const checkResourceAccess = (model, options = {}) => {
       }
 
       const userId = req.user._id.toString();
+      const currentRole = req.user.activeRole || req.user.role;
 
       // Allow superadmin to access any resource
-      if (req.user.role === "superadmin") {
+      if (currentRole === "superadmin") {
         req.resource = resource;
         return next();
       }
@@ -268,12 +276,8 @@ const checkResourceAccess = (model, options = {}) => {
   };
 };
 
-// Rate limiting middleware (use a proper rate limiter instead)
+// Rate limiting middleware
 const requireRateLimit = (req, res, next) => {
-  // Note: For production, use a proper rate limiting library like
-  // express-rate-limit or a Redis-based solution
-  // This is a basic in-memory implementation for development
-  
   if (process.env.NODE_ENV === 'production') {
     console.warn('Using basic rate limiting - consider implementing proper rate limiting');
   }
@@ -289,7 +293,8 @@ const checkSelfOrAdmin = (req, res, next) => {
     return next(new ErrorResponse("User ID required", 400));
   }
 
-  if (req.user._id.toString() !== requestedUserId && req.user.role !== "superadmin") {
+  const currentRole = req.user.activeRole || req.user.role;
+  if (req.user._id.toString() !== requestedUserId && currentRole !== "superadmin") {
     return next(
       new ErrorResponse("Not authorized to access this user's data", 403)
     );
@@ -298,13 +303,16 @@ const checkSelfOrAdmin = (req, res, next) => {
   next();
 };
 
-// Check if user can manage events (organizer or admin)
+// Check if user can manage events (organizer or admin) - checks roles array
 const canManageEvents = (req, res, next) => {
   if (!req.user) {
     return next(new ErrorResponse("Not authenticated", 401));
   }
 
-  if (req.user.role !== "organizer" && req.user.role !== "superadmin") {
+  const userRoles = req.user.roles || [req.user.role];
+  const canManage = userRoles.includes("organizer") || userRoles.includes("superadmin");
+
+  if (!canManage) {
     return next(
       new ErrorResponse("Only organizers can manage events", 403)
     );
@@ -313,13 +321,16 @@ const canManageEvents = (req, res, next) => {
   next();
 };
 
-// Check if user can purchase tickets (attendee or admin)
+// Check if user can purchase tickets (attendee or admin) - checks roles array
 const canPurchaseTickets = (req, res, next) => {
   if (!req.user) {
     return next(new ErrorResponse("Not authenticated", 401));
   }
 
-  if (req.user.role !== "attendee" && req.user.role !== "superadmin") {
+  const userRoles = req.user.roles || [req.user.role];
+  const canPurchase = userRoles.includes("attendee") || userRoles.includes("superadmin");
+
+  if (!canPurchase) {
     return next(
       new ErrorResponse("Only attendees can purchase tickets", 403)
     );

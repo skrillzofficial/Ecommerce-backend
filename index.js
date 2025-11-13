@@ -40,9 +40,12 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: [
+      "https://www.joineventry.com",
+      "https://joineventry.com",
       "https://eventry-swart.vercel.app",
       "http://localhost:5174",
       "http://localhost:5173",
+      "http://localhost:3000"
     ],
     methods: ["GET", "POST"],
     credentials: true
@@ -80,9 +83,12 @@ app.use(helmet());
 app.use(
   cors({
     origin: [
+      "https://www.joineventry.com",
+      "https://joineventry.com",
       "https://eventry-swart.vercel.app",
       "http://localhost:5174",
       "http://localhost:5173",
+      "http://localhost:3000"
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -186,7 +192,7 @@ app.get("/", (req, res) => {
 });
 
 // Main API routes
-app.use("/api/v1", authRouter); // ✅ FIXED: Remove incorrect comment
+app.use("/api/v1", authRouter);
 app.use("/api/v1/events", eventRoutes);
 app.use("/api/v1/transactions", transactionRoutes); 
 app.use("/api/v1/notifications", notificationRoutes);

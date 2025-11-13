@@ -1216,6 +1216,99 @@ const getUserProfile = async (req, res, next) => {
     next(new ErrorResponse("Failed to fetch user profile", 500));
   }
 };
+// NEW: Switch Role Function
+const switchRole = async (req, res, next) => {
+  try {
+    const { role } = req.body;
+    const userId = req.user.userId;
+
+    console.log("🔄 Role switch requested:", { userId, requestedRole: role });
+
+    if (!role) {
+      return next(new ErrorResponse("Role is required", 400));
+    }
+
+    if (!["attendee", "organizer"].includes(role)) {
+      return next(
+        new ErrorResponse(
+          "Invalid role. Must be either 'attendee' or 'organizer'",
+          400
+        )
+      );
+    }
+
+    const user = await USER.findById(userId);
+
+    if (!user) {
+      return next(new ErrorResponse("User not found", 404));
+    }
+
+    if (!user.isActive || user.status !== "active") {
+      return next(
+        new ErrorResponse(
+          "Your account has been suspended or deactivated. Please contact support.",
+          403
+        )
+      );
+    }
+
+    const oldRole = user.getCurrentRole();
+
+    // Switch role using the model method
+    await user.switchRole(role);
+
+    console.log(`✅ Role switched from ${oldRole} to ${role} for user: ${user.email}`);
+
+    // Create notification about role switch
+    try {
+      const roleNames = {
+        attendee: "Attendee",
+        organizer: "Event Organizer"
+      };
+
+      await NotificationService.createSystemNotification(user._id, {
+        title: "🔄 Role Switched Successfully",
+        message: `You are now in ${roleNames[role]} mode. You can switch back anytime from your dashboard.`,
+        priority: "medium",
+      });
+    } catch (notificationError) {
+      console.error("Failed to create role switch notification:", notificationError);
+    }
+
+    // Generate new token with updated role
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.getCurrentRole(),
+        roles: user.getAllRoles(),
+        userName: user.userName,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "2d" }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully switched to ${role} mode`,
+      data: {
+        user: user.getProfile(),
+        token,
+        previousRole: oldRole,
+        newRole: role,
+      },
+    });
+
+  } catch (error) {
+    console.error("❌ Error switching role:", error);
+    
+    if (error.message.includes("Invalid role")) {
+      return next(new ErrorResponse(error.message, 400));
+    }
+
+    next(new ErrorResponse("Failed to switch role. Please try again.", 500));
+  }
+};
 
 module.exports = {
   handleRegister,
@@ -1235,4 +1328,5 @@ module.exports = {
   deleteAccount,
   getUserProfile,
   deleteExpiredUnverifiedUsers,
+  switchRole
 };

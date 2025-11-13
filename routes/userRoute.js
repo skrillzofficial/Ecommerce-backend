@@ -16,8 +16,12 @@ const {
   checkEmailAvailability,
   deleteAccount,
   getUserProfile,
+  switchRole, // Already imported ✅
 } = require("../controllers/user.controller");
-const { validateProfilePicture, cleanupTempFiles } = require("../middleware/fileUpload");
+const {
+  validateProfilePicture,
+  cleanupTempFiles,
+} = require("../middleware/fileUpload");
 const { protect } = require("../middleware/auth");
 
 const router = express.Router();
@@ -36,12 +40,13 @@ router.get("/profile/:userId", getUserProfile);
 
 // Protected routes
 router.get("/me", protect, getCurrentUser);
+router.post("/switch-role", protect, switchRole);
 router.patch(
   "/profile",
   protect,
-  validateProfilePicture, 
+  validateProfilePicture,
   updateProfile,
-  cleanupTempFiles 
+  cleanupTempFiles
 );
 router.patch("/preferences", protect, updatePreferences);
 router.patch("/change-password", protect, changePassword);

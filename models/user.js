@@ -28,7 +28,7 @@ const userSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
-    unique: true, // ✅ KEEP this - remove the separate index below
+    unique: true,
     lowercase: true,
     trim: true,
     match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Please provide a valid email address"],
@@ -61,14 +61,36 @@ const userSchema = new mongoose.Schema({
     minlength: [6, "Password must be at least 6 characters"],
     select: false,
   },
+  
+  // KEEP existing role field for backward compatibility
   role: {
     type: String,
     enum: ["superadmin", "organizer", "attendee"],
     default: "attendee",
   },
+  
+  // NEW: Multiple roles support (optional, for users who want multiple roles)
+  roles: {
+    type: [String],
+    enum: ["superadmin", "organizer", "attendee"],
+    default: function() {
+      // Initialize with the primary role if not set
+      return this.role ? [this.role] : ["attendee"];
+    }
+  },
+  
+  // NEW: Active role for role switching (falls back to primary role)
+  activeRole: {
+    type: String,
+    enum: ["superadmin", "organizer", "attendee"],
+    default: function() {
+      return this.role || "attendee";
+    }
+  },
+  
   googleId: {
     type: String,
-    sparse: true, // ✅ KEEP this - remove the separate index below
+    sparse: true,
   },
   isVerified: {
     type: Boolean,
@@ -101,7 +123,6 @@ const userSchema = new mongoose.Schema({
     default: 0,
   },
   
-  // Enhanced login tracking for notifications
   loginHistory: [{
     ipAddress: String,
     userAgent: String,
@@ -157,7 +178,6 @@ const userSchema = new mongoose.Schema({
     }
   },
   
-  // Enhanced notification preferences
   preferences: {
     emailNotifications: { type: Boolean, default: true },
     pushNotifications: { type: Boolean, default: true },
@@ -165,7 +185,6 @@ const userSchema = new mongoose.Schema({
     eventReminders: { type: Boolean, default: true },
     marketingEmails: { type: Boolean, default: false },
     
-    // Granular notification preferences
     notifications: {
       email: {
         ticketPurchases: { type: Boolean, default: true },
@@ -192,14 +211,12 @@ const userSchema = new mongoose.Schema({
     }
   },
 
-  // Wallet/balance for organizers
   wallet: {
     balance: { type: Number, default: 0, min: 0 },
     currency: { type: String, default: "NGN", enum: ["NGN", "USD", "EUR", "GBP"] },
     lastPayoutAt: Date
   },
 
-  // Social links for organizers
   socialLinks: {
     website: String,
     facebook: String,
@@ -222,7 +239,8 @@ userSchema.virtual("fullName").get(function() {
 
 // Virtual for organizer display name
 userSchema.virtual("organizerDisplayName").get(function() {
-  if (this.role === "organizer" && this.organizerInfo?.companyName) {
+  const currentRole = this.activeRole || this.role;
+  if (currentRole === "organizer" && this.organizerInfo?.companyName) {
     return this.organizerInfo.companyName;
   }
   return this.fullName;
@@ -230,16 +248,29 @@ userSchema.virtual("organizerDisplayName").get(function() {
 
 // Virtual to check if user can create events
 userSchema.virtual("canCreateEvents").get(function() {
-  return this.role === "organizer" && 
+  const userRoles = this.roles || [this.role];
+  return userRoles.includes("organizer") && 
          this.isVerified && 
          this.status === "active" &&
-         this.organizerInfo?.verified === true;
+         (this.organizerInfo?.verified === true || this.activeRole === "organizer");
 });
 
-// Indexes - REMOVED DUPLICATES
-// ❌ REMOVED: userSchema.index({ email: 1 }, { unique: true }); // Duplicate of field definition
+// Virtual to get role display name
+userSchema.virtual("roleDisplay").get(function() {
+  const roleNames = {
+    attendee: "Attendee",
+    organizer: "Event Organizer",
+    superadmin: "Super Admin"
+  };
+  const currentRole = this.activeRole || this.role;
+  return roleNames[currentRole] || currentRole;
+});
+
+// Indexes
 userSchema.index({ userName: 1 }, { unique: true, sparse: true });
 userSchema.index({ role: 1 });
+userSchema.index({ roles: 1 });
+userSchema.index({ activeRole: 1 });
 userSchema.index({ "organizerInfo.verificationStatus": 1 });
 userSchema.index({ status: 1 });
 userSchema.index({ emailVerificationToken: 1 });
@@ -247,11 +278,11 @@ userSchema.index({ passwordResetToken: 1 });
 userSchema.index({ createdAt: 1 });
 userSchema.index({ isVerified: 1, status: 1 });
 userSchema.index({ "loginHistory.loginTime": -1 });
-// ❌ REMOVED: userSchema.index({ googleId: 1 }, { sparse: true }); // Duplicate of field definition
 
 // Compound indexes
 userSchema.index({ email: 1, status: 1 });
 userSchema.index({ role: 1, status: 1 });
+userSchema.index({ activeRole: 1, status: 1 });
 userSchema.index({ "organizerInfo.verified": 1, status: 1 });
 
 // Pre-save middleware for password hashing
@@ -271,6 +302,25 @@ userSchema.pre("save", async function(next) {
   } catch (error) {
     next(error);
   }
+});
+
+// Pre-save middleware to sync role fields for backward compatibility
+userSchema.pre("save", function(next) {
+  // If this is a new document or roles/activeRole are not set, initialize them
+  if (this.isNew || !this.roles || this.roles.length === 0) {
+    this.roles = [this.role];
+    this.activeRole = this.role;
+  }
+  
+  // Ensure activeRole is in roles array
+  if (this.activeRole && !this.roles.includes(this.activeRole)) {
+    this.roles.push(this.activeRole);
+  }
+  
+  // Keep the primary role field in sync with activeRole for backward compatibility
+  this.role = this.activeRole || this.role;
+  
+  next();
 });
 
 // Pre-save middleware for username generation for Google users
@@ -336,7 +386,7 @@ userSchema.methods.createEmailVerificationToken = function() {
     .update(verificationToken)
     .digest('hex');
   
-  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
   
   return verificationToken;
 };
@@ -350,7 +400,7 @@ userSchema.methods.createPasswordResetToken = function() {
     .update(resetToken)
     .digest('hex');
   
-  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000;
   
   return resetToken;
 };
@@ -364,15 +414,65 @@ userSchema.methods.verifyEmail = function() {
   return this.save();
 };
 
+// NEW: Method to switch active role
+userSchema.methods.switchRole = async function(newRole) {
+  if (!["attendee", "organizer", "superadmin"].includes(newRole)) {
+    throw new Error("Invalid role. Must be 'attendee', 'organizer', or 'superadmin'");
+  }
+
+  // Initialize roles array if it doesn't exist (backward compatibility)
+  if (!this.roles || this.roles.length === 0) {
+    this.roles = [this.role];
+  }
+
+  // Add role to roles array if not already present
+  if (!this.roles.includes(newRole)) {
+    this.roles.push(newRole);
+  }
+
+  // Update active role
+  this.activeRole = newRole;
+  
+  // Sync primary role field for backward compatibility
+  this.role = newRole;
+  
+  return await this.save();
+};
+
+// NEW: Method to check if user has a specific role
+userSchema.methods.hasRole = function(role) {
+  // Check in roles array first, fallback to primary role field
+  if (this.roles && this.roles.length > 0) {
+    return this.roles.includes(role);
+  }
+  return this.role === role;
+};
+
+// NEW: Method to check if user can switch to a role
+userSchema.methods.canSwitchToRole = function(role) {
+  return this.hasRole(role);
+};
+
+// NEW: Method to get current active role (with fallback)
+userSchema.methods.getCurrentRole = function() {
+  return this.activeRole || this.role || "attendee";
+};
+
+// NEW: Method to get all user roles (with fallback)
+userSchema.methods.getAllRoles = function() {
+  if (this.roles && this.roles.length > 0) {
+    return this.roles;
+  }
+  return [this.role];
+};
+
 // Method to record login and create notification
 userSchema.methods.recordLogin = async function(loginData) {
   const { ipAddress, userAgent, device, location } = loginData;
   
-  // Update login count and last login
   this.loginCount += 1;
   this.lastLogin = new Date();
   
-  // Add to login history
   this.loginHistory.unshift({
     ipAddress,
     userAgent,
@@ -381,17 +481,14 @@ userSchema.methods.recordLogin = async function(loginData) {
     loginTime: new Date()
   });
   
-  // Keep only last 10 logins
   if (this.loginHistory.length > 10) {
     this.loginHistory = this.loginHistory.slice(0, 10);
   }
   
   await this.save();
   
-  // Check if this is a suspicious login
   const isSuspicious = await this._checkSuspiciousLogin(loginData);
   
-  // Create login notification if user has enabled login alerts
   if (this.preferences.notifications?.push?.loginAlerts || 
       this.preferences.notifications?.email?.loginAlerts) {
     
@@ -428,17 +525,16 @@ userSchema.methods._detectDevice = function(userAgent) {
 // Method to check for suspicious login
 userSchema.methods._checkSuspiciousLogin = async function(currentLogin) {
   if (this.loginHistory.length < 2) {
-    return false; // Not enough history to determine
+    return false;
   }
   
-  const recentLogins = this.loginHistory.slice(1, 4); // Last 3 logins (excluding current)
+  const recentLogins = this.loginHistory.slice(1, 4);
   const commonLocations = new Set(recentLogins.map(login => login.location));
   const commonDevices = new Set(recentLogins.map(login => login.device));
   
   const currentDevice = currentLogin.device || this._detectDevice(currentLogin.userAgent);
   const currentLocation = currentLogin.location || 'Unknown';
   
-  // If current login is from new location AND new device, mark as suspicious
   if (!commonLocations.has(currentLocation) && !commonDevices.has(currentDevice)) {
     return true;
   }
@@ -478,7 +574,7 @@ userSchema.methods.ban = function() {
 
 // Method to verify organizer
 userSchema.methods.verifyOrganizer = function(notes = "") {
-  if (this.role !== "organizer") {
+  if (!this.hasRole("organizer")) {
     throw new Error("Only organizers can be verified");
   }
   
@@ -492,7 +588,7 @@ userSchema.methods.verifyOrganizer = function(notes = "") {
 
 // Method to update wallet balance
 userSchema.methods.updateWallet = async function(amount, type = "add") {
-  if (this.role !== "organizer") {
+  if (!this.hasRole("organizer")) {
     throw new Error("Only organizers have wallets");
   }
   
@@ -515,9 +611,10 @@ userSchema.methods.getPublicProfile = function() {
     userName: this.userName,
     firstName: this.firstName,
     lastName: this.lastName,
+    fullName: this.fullName,
     profilePicture: this.profilePicture,
     bio: this.bio,
-    role: this.role,
+    role: this.getCurrentRole(),
     organizerInfo: this.organizerInfo ? {
       companyName: this.organizerInfo.companyName,
       website: this.organizerInfo.website,
@@ -534,11 +631,14 @@ userSchema.methods.getProfile = function() {
     _id: this._id,
     firstName: this.firstName,
     lastName: this.lastName,
+    fullName: this.fullName,
     userName: this.userName,
     email: this.email,
     phone: this.phone,
     location: this.location,
-    role: this.role,
+    role: this.getCurrentRole(), // Primary role for compatibility
+    roles: this.getAllRoles(), // All available roles
+    activeRole: this.getCurrentRole(), // Currently active role
     profilePicture: this.profilePicture,
     bio: this.bio,
     isVerified: this.isVerified,
@@ -585,10 +685,13 @@ userSchema.statics.findByUsername = function(userName) {
   return this.findOne({ userName: userName.trim() });
 };
 
-// Static method to find verified organizers
+// Static method to find verified organizers (works with both old and new formats)
 userSchema.statics.findVerifiedOrganizers = function() {
   return this.find({ 
-    role: "organizer", 
+    $or: [
+      { roles: "organizer" },
+      { role: "organizer" }
+    ],
     status: "active",
     "organizerInfo.verified": true 
   });
@@ -600,6 +703,16 @@ userSchema.statics.getUserStats = async function() {
     {
       $match: {
         status: { $ne: "deleted" }
+      }
+    },
+    {
+      $project: {
+        role: { $ifNull: ["$activeRole", "$role"] },
+        status: 1,
+        isVerified: 1,
+        googleId: 1,
+        loginCount: 1,
+        organizerVerified: "$organizerInfo.verified"
       }
     },
     {
@@ -633,6 +746,22 @@ userSchema.statics.getUserStats = async function() {
       }
     },
     {
+      $project: {
+        role: { $ifNull: ["$activeRole", "$role"] },
+        status: 1,
+        isVerified: 1,
+        googleId: 1,
+        loginCount: 1,
+        organizerVerified: "$organizerInfo.verified",
+        hasOrganizerRole: {
+          $or: [
+            { $eq: ["$role", "organizer"] },
+            { $in: ["organizer", { $ifNull: ["$roles", []] }] }
+          ]
+        }
+      }
+    },
+    {
       $group: {
         _id: null,
         totalUsers: { $sum: 1 },
@@ -653,7 +782,7 @@ userSchema.statics.getUserStats = async function() {
         },
         totalOrganizers: {
           $sum: {
-            $cond: [{ $eq: ["$role", "organizer"] }, 1, 0]
+            $cond: ["$hasOrganizerRole", 1, 0]
           }
         },
         verifiedOrganizers: {
@@ -661,8 +790,8 @@ userSchema.statics.getUserStats = async function() {
             $cond: [
               { 
                 $and: [
-                  { $eq: ["$role", "organizer"] },
-                  { $eq: ["$organizerInfo.verified", true] }
+                  "$hasOrganizerRole",
+                  { $eq: ["$organizerVerified", true] }
                 ]
               }, 1, 0
             ]
@@ -767,7 +896,10 @@ userSchema.query.verifiedOnly = function() {
 // Query helper for verified organizers only
 userSchema.query.verifiedOrganizers = function() {
   return this.where({ 
-    role: "organizer", 
+    $or: [
+      { roles: "organizer" },
+      { role: "organizer" }
+    ],
     status: "active",
     "organizerInfo.verified": true 
   });
