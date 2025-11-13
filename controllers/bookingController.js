@@ -64,7 +64,7 @@ const sendBookingNotifications = async (
     // Organizer notification (if different from user)
     if (event.organizer.toString() !== user._id.toString()) {
       await NotificationService.createSystemNotification(event.organizer, {
-        title: " New Ticket Sale",
+        title: "🎉 New Ticket Sale",
         message: `${user.fullName} purchased ${totalQuantity} ticket(s) for "${event.title}"`,
         priority: "medium",
         data: {
@@ -126,6 +126,7 @@ const sendBookingNotifications = async (
     console.error("Notification/email error:", error);
   }
 };
+
 // Free booking controller
 const completeFreeBooking = async (
   event,
@@ -298,30 +299,51 @@ const initializePaidBooking = async (
   try {
     session.startTransaction();
 
-    // Calculate platform fee (3% for paid events)
-    const platformFee = Math.round(totalPrice * 0.03);
+    // **FIX: Generate order number FIRST (was missing)**
+    const orderNumber = `ORD-${Date.now().toString().slice(-8)}-${Math.random()
+      .toString(36)
+      .substring(2, 6)
+      .toUpperCase()}`;
+
+    // Calculate platform fee (2% for paid events)
+    const platformFee = Math.round(totalPrice * 0.02);
     const totalAmount = totalPrice + platformFee;
 
     // Create pending booking first
     const bookingData = {
+      // Order identification
+      orderNumber: orderNumber,
+      shortId: Math.random().toString(36).substring(2, 8).toUpperCase(),
+
+      // Core references
       event: event._id,
       user: user._id,
       organizer: event.organizer,
+
+      // Ticket information
       ticketDetails,
       totalTickets: totalQuantity,
+
+      // Pricing
       subtotalAmount: totalPrice,
       serviceFee: platformFee,
       totalAmount: totalAmount,
       currency: event.currency || "NGN",
+
+      // Status
       status: "pending",
       paymentStatus: "pending",
       paymentMethod: "card",
+
+      // Customer info
       customerInfo: {
         name: user.fullName,
         email: user.email,
         phone: user.phone || "",
         billingAddress: user.organizerInfo?.address || {},
       },
+
+      // Event snapshot
       eventSnapshot: {
         title: event.title,
         startDate: event.startDate,
@@ -339,6 +361,11 @@ const initializePaidBooking = async (
         refundPolicy: event.refundPolicy || "partial",
         category: event.category,
       },
+
+      // **FIX: Add security token (was missing)**
+      securityToken:
+        Math.random().toString(36).substring(2, 15) +
+        Math.random().toString(36).substring(2, 15),
     };
 
     const booking = await Booking.create([bookingData], { session });
@@ -356,6 +383,7 @@ const initializePaidBooking = async (
           reference,
           userId: user._id,
           bookingId: booking[0]._id,
+          orderNumber: booking[0].orderNumber,
           eventId: event._id,
           eventTitle: event.title,
           eventStartDate: event.startDate,
@@ -419,6 +447,7 @@ const initializePaidBooking = async (
     });
   } catch (error) {
     await session.abortTransaction();
+    console.error("Paid booking initialization error:", error);
     next(error);
   } finally {
     session.endSession();
@@ -515,6 +544,7 @@ const bookEventTicket = async (req, res, next) => {
       );
     }
   } catch (error) {
+    console.error("Book event ticket error:", error);
     next(error);
   }
 };
