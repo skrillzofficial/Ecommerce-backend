@@ -419,10 +419,10 @@ const initializePaidBooking = async (
         userId: user._id,
         ticketDetails: ticketDetails,
       },
-      callback_url: `${process.env.FRONTEND_URL}/bookings/${booking[0]._id}/payment/verify`,
+      callback_url: `${process.env.FRONTEND_URL}/payment-verification?reference=${reference}&bookingId=${booking[0]._id}`,
     });
 
-    // ✅ FIXED: Update transaction with Paystack data
+    //  Update transaction with Paystack data
     transaction[0].paymentUrl = paystackResponse.data.authorization_url;
     transaction[0].paymentDetails = {
       ...transaction[0].paymentDetails,
@@ -446,8 +446,8 @@ const initializePaidBooking = async (
         payment: {
           transactionId: transaction[0]._id,
           reference: transaction[0].reference,
-          authorizationUrl: transaction[0].paymentUrl,  // ✅ FIXED
-          amount: transaction[0].amount,                 // ✅ FIXED
+          authorizationUrl: transaction[0].paymentUrl,  
+          amount: transaction[0].amount,                
           currency: transaction[0].currency,
         },
         requiresPayment: true,
@@ -638,7 +638,7 @@ const initializeBookingPayment = async (req, res, next) => {
         eventId: booking.event._id,
         userId: req.user.userId,
       },
-      callback_url: `${process.env.FRONTEND_URL}/bookings/${booking._id}/payment/verify`,
+      callback_url: `${process.env.FRONTEND_URL}/payment-verification?reference=${transaction.reference}&bookingId=${booking._id}`,
     });
 
     // ✅ FIXED: Update transaction with Paystack data
