@@ -282,7 +282,7 @@ const completeFreeBooking = async (
   }
 };
 
-// Helper function for paid bookings (attendee perspective)
+// Helper function for paid bookings (attendee perspective) - FIXED
 const initializePaidBooking = async (
   event,
   user,
@@ -299,7 +299,7 @@ const initializePaidBooking = async (
   try {
     session.startTransaction();
 
-    // **FIX: Generate order number FIRST (was missing)**
+    // Generate order number FIRST
     const orderNumber = `ORD-${Date.now().toString().slice(-8)}-${Math.random()
       .toString(36)
       .substring(2, 6)
@@ -362,7 +362,7 @@ const initializePaidBooking = async (
         category: event.category,
       },
 
-      // **FIX: Add security token (was missing)**
+      // Security token
       securityToken:
         Math.random().toString(36).substring(2, 15) +
         Math.random().toString(36).substring(2, 15),
@@ -376,26 +376,30 @@ const initializePaidBooking = async (
       .substr(2, 9)
       .toUpperCase()}`;
 
-    // Create transaction record
+    // ✅ FIXED: Create transaction record with CORRECT schema fields
     const transaction = await Transaction.create(
       [
         {
           reference,
           userId: user._id,
           bookingId: booking[0]._id,
-          orderNumber: booking[0].orderNumber,
           eventId: event._id,
-          eventTitle: event.title,
-          eventStartDate: event.startDate,
-          eventOrganizer: event.organizer,
-          subtotalAmount: totalPrice,
-          serviceFee: platformFee,
-          totalAmount: totalAmount,
+          type: 'event_booking',        // ✅ REQUIRED - matches enum
+          amount: totalAmount,           // ✅ REQUIRED - total amount
           currency: event.currency || "NGN",
           status: "pending",
-          paymentMethod: "card",
-          ipAddress: req.ip,
-          userAgent: req.headers["user-agent"],
+          paymentMethod: "card",         // ✅ REQUIRED
+          // Store additional data in paymentDetails (Mixed type)
+          paymentDetails: {
+            orderNumber: booking[0].orderNumber,
+            eventTitle: event.title,
+            eventStartDate: event.startDate,
+            eventOrganizer: event.organizer,
+            subtotalAmount: totalPrice,
+            serviceFee: platformFee,
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"],
+          }
         },
       ],
       { session }
@@ -418,9 +422,13 @@ const initializePaidBooking = async (
       callback_url: `${process.env.FRONTEND_URL}/bookings/${booking[0]._id}/payment/verify`,
     });
 
-    // Update transaction with Paystack data
-    transaction[0].authorizationUrl = paystackResponse.data.authorization_url;
-    transaction[0].accessCode = paystackResponse.data.access_code;
+    // ✅ FIXED: Update transaction with Paystack data
+    transaction[0].paymentUrl = paystackResponse.data.authorization_url;
+    transaction[0].paymentDetails = {
+      ...transaction[0].paymentDetails,
+      authorizationUrl: paystackResponse.data.authorization_url,
+      accessCode: paystackResponse.data.access_code,
+    };
     await transaction[0].save();
 
     res.status(200).json({
@@ -438,8 +446,8 @@ const initializePaidBooking = async (
         payment: {
           transactionId: transaction[0]._id,
           reference: transaction[0].reference,
-          authorizationUrl: transaction[0].authorizationUrl,
-          amount: transaction[0].totalAmount,
+          authorizationUrl: transaction[0].paymentUrl,  // ✅ FIXED
+          amount: transaction[0].amount,                 // ✅ FIXED
           currency: transaction[0].currency,
         },
         requiresPayment: true,
@@ -549,7 +557,7 @@ const bookEventTicket = async (req, res, next) => {
   }
 };
 
-// @desc    Initialize payment for existing booking
+// @desc    Initialize payment for existing booking - FIXED
 // @route   POST /api/v1/bookings/:id/pay
 // @access  Private
 const initializeBookingPayment = async (req, res, next) => {
@@ -595,22 +603,27 @@ const initializeBookingPayment = async (req, res, next) => {
         .substr(2, 9)
         .toUpperCase()}`;
 
+      // ✅ FIXED: Create transaction with CORRECT schema fields
       transaction = await Transaction.create({
         reference,
         userId: req.user.userId,
         bookingId: booking._id,
         eventId: booking.event._id,
-        eventTitle: booking.event.title,
-        eventStartDate: booking.event.startDate,
-        eventOrganizer: booking.event.organizer,
-        subtotalAmount: booking.subtotalAmount,
-        serviceFee: booking.serviceFee,
-        totalAmount: booking.totalAmount,
+        type: 'event_booking',           // ✅ REQUIRED
+        amount: booking.totalAmount,     // ✅ REQUIRED
         currency: booking.currency,
         status: "pending",
-        paymentMethod: "card",
-        ipAddress: req.ip,
-        userAgent: req.headers["user-agent"],
+        paymentMethod: "card",           // ✅ REQUIRED
+        paymentDetails: {
+          orderNumber: booking.orderNumber,
+          eventTitle: booking.event.title,
+          eventStartDate: booking.event.startDate,
+          eventOrganizer: booking.event.organizer,
+          subtotalAmount: booking.subtotalAmount,
+          serviceFee: booking.serviceFee,
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"],
+        }
       });
     }
 
@@ -628,9 +641,13 @@ const initializeBookingPayment = async (req, res, next) => {
       callback_url: `${process.env.FRONTEND_URL}/bookings/${booking._id}/payment/verify`,
     });
 
-    // Update transaction with Paystack data
-    transaction.authorizationUrl = paystackResponse.data.authorization_url;
-    transaction.accessCode = paystackResponse.data.access_code;
+    // ✅ FIXED: Update transaction with Paystack data
+    transaction.paymentUrl = paystackResponse.data.authorization_url;
+    transaction.paymentDetails = {
+      ...transaction.paymentDetails,
+      authorizationUrl: paystackResponse.data.authorization_url,
+      accessCode: paystackResponse.data.access_code,
+    };
     await transaction.save();
 
     res.status(200).json({
@@ -639,8 +656,8 @@ const initializeBookingPayment = async (req, res, next) => {
       data: {
         transactionId: transaction._id,
         reference: transaction.reference,
-        authorizationUrl: transaction.authorizationUrl,
-        amount: transaction.totalAmount,
+        authorizationUrl: transaction.paymentUrl,  // ✅ FIXED
+        amount: transaction.amount,                 // ✅ FIXED
         currency: transaction.currency,
       },
     });
