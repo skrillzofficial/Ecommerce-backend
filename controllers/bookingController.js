@@ -127,7 +127,7 @@ const sendBookingNotifications = async (
   }
 };
 
-// Free booking controller
+// Fixed completeFreeBooking - Direct success response (NO payment verification needed)
 const completeFreeBooking = async (
   event,
   user,
@@ -160,7 +160,7 @@ const completeFreeBooking = async (
       event: event._id,
       user: user._id,
       organizer: event.organizer,
-      tickets: [], 
+      tickets: [],
 
       // Ticket information
       ticketDetails,
@@ -174,10 +174,10 @@ const completeFreeBooking = async (
       totalAmount: totalPrice,
       currency: event.currency || "NGN",
 
-      // Status - CORRECT VALUES
+      // Status - FREE booking is immediately confirmed
       status: "confirmed",
-      paymentStatus: "free", 
-      paymentMethod: "free", 
+      paymentStatus: "free",
+      paymentMethod: "free",
 
       // Customer info
       customerInfo: {
@@ -243,22 +243,25 @@ const completeFreeBooking = async (
       totalPrice
     );
 
+    // ✅ COMPLETE FIX - Free booking success response (NO payment verification)
     res.status(200).json({
       success: true,
-      message: "Ticket(s) booked successfully",
+      message: "Free event booking confirmed! 🎉",
       data: {
         booking: {
           id: booking[0]._id,
           orderNumber: booking[0].orderNumber,
           status: booking[0].status,
+          paymentStatus: booking[0].paymentStatus,
           totalTickets: totalQuantity,
           totalAmount: totalPrice,
-          bookingDate: booking[0].bookingDate,
+          bookingDate: booking[0].bookingDate || booking[0].createdAt,
         },
         tickets: tickets.map((ticket) => ({
           id: ticket._id,
           ticketNumber: ticket.ticketNumber,
           qrCode: ticket.qrCode,
+          barcode: ticket.barcode,
           ticketType: ticket.ticketType,
           accessType: ticket.accessType,
           price: ticket.ticketPrice,
@@ -268,9 +271,20 @@ const completeFreeBooking = async (
           id: event._id,
           title: event.title,
           startDate: event.startDate,
+          endDate: event.endDate,
+          time: event.time,
           venue: event.venue,
+          address: event.address,
+          city: event.city,
           eventType: event.eventType,
+          virtualEventLink: event.virtualEventLink,
         },
+        // ✅ KEY FLAGS for frontend
+        requiresPayment: false, // No payment needed
+        isFreeBooking: true, // This is a free booking
+        isConfirmed: true, // Booking is already confirmed
+        // ✅ Frontend should redirect directly to bookings, NOT payment verification
+        redirectTo: "bookings", // Tell frontend where to go
       },
     });
   } catch (error) {
@@ -281,7 +295,6 @@ const completeFreeBooking = async (
     session.endSession();
   }
 };
-
 // Helper function for paid bookings (attendee perspective) - FIXED
 const initializePaidBooking = async (
   event,
@@ -384,11 +397,11 @@ const initializePaidBooking = async (
           userId: user._id,
           bookingId: booking[0]._id,
           eventId: event._id,
-          type: 'event_booking',        // ✅ REQUIRED - matches enum
-          amount: totalAmount,           // ✅ REQUIRED - total amount
+          type: "event_booking", // ✅ REQUIRED - matches enum
+          amount: totalAmount, // ✅ REQUIRED - total amount
           currency: event.currency || "NGN",
           status: "pending",
-          paymentMethod: "card",         // ✅ REQUIRED
+          paymentMethod: "card", // ✅ REQUIRED
           // Store additional data in paymentDetails (Mixed type)
           paymentDetails: {
             orderNumber: booking[0].orderNumber,
@@ -399,7 +412,7 @@ const initializePaidBooking = async (
             serviceFee: platformFee,
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"],
-          }
+          },
         },
       ],
       { session }
@@ -446,8 +459,8 @@ const initializePaidBooking = async (
         payment: {
           transactionId: transaction[0]._id,
           reference: transaction[0].reference,
-          authorizationUrl: transaction[0].paymentUrl,  
-          amount: transaction[0].amount,                
+          authorizationUrl: transaction[0].paymentUrl,
+          amount: transaction[0].amount,
           currency: transaction[0].currency,
         },
         requiresPayment: true,
@@ -484,17 +497,6 @@ const bookEventTicket = async (req, res, next) => {
 
     // Check if event is in the past
     validateEventDate(event);
-
-    // Check if user already has a booking for this event
-    const existingBooking = await Booking.findOne({
-      event: id,
-      user: req.user.userId,
-      status: "confirmed",
-    });
-
-    if (existingBooking) {
-      return next(new ErrorResponse("You have already booked this event", 400));
-    }
 
     // Get user info
     const user = await User.findById(req.user.userId);
@@ -556,7 +558,6 @@ const bookEventTicket = async (req, res, next) => {
     next(error);
   }
 };
-
 // @desc    Initialize payment for existing booking - FIXED
 // @route   POST /api/v1/bookings/:id/pay
 // @access  Private
@@ -609,11 +610,11 @@ const initializeBookingPayment = async (req, res, next) => {
         userId: req.user.userId,
         bookingId: booking._id,
         eventId: booking.event._id,
-        type: 'event_booking',           // ✅ REQUIRED
-        amount: booking.totalAmount,     // ✅ REQUIRED
+        type: "event_booking", // ✅ REQUIRED
+        amount: booking.totalAmount, // ✅ REQUIRED
         currency: booking.currency,
         status: "pending",
-        paymentMethod: "card",           // ✅ REQUIRED
+        paymentMethod: "card", // ✅ REQUIRED
         paymentDetails: {
           orderNumber: booking.orderNumber,
           eventTitle: booking.event.title,
@@ -623,7 +624,7 @@ const initializeBookingPayment = async (req, res, next) => {
           serviceFee: booking.serviceFee,
           ipAddress: req.ip,
           userAgent: req.headers["user-agent"],
-        }
+        },
       });
     }
 
@@ -656,8 +657,8 @@ const initializeBookingPayment = async (req, res, next) => {
       data: {
         transactionId: transaction._id,
         reference: transaction.reference,
-        authorizationUrl: transaction.paymentUrl,  // ✅ FIXED
-        amount: transaction.amount,                 // ✅ FIXED
+        authorizationUrl: transaction.paymentUrl, // ✅ FIXED
+        amount: transaction.amount, // ✅ FIXED
         currency: transaction.currency,
       },
     });
