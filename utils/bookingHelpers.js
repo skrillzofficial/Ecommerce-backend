@@ -195,7 +195,7 @@ const updateEventAvailability = async (event, bookings, options = {}) => {
   }
 };
 
-// Create tickets for booking - FIXED VERSION
+// Create tickets for booking - FIXED VERSION WITH IMAGE FIELD
 const createTickets = async (event, user, bookings, options = {}) => {
   const Ticket = mongoose.model("Ticket");
   const tickets = [];
@@ -238,6 +238,16 @@ const createTickets = async (event, user, bookings, options = {}) => {
 
           // Event reference
           eventId: event._id,
+
+          // ✅ CRITICAL FIX: Event image (REQUIRED by Ticket schema)
+          image: {
+            url:
+              event.image?.url ||
+              event.images?.[0]?.url ||
+              "https://via.placeholder.com/800x400?text=Event+Ticket",
+            publicId:
+              event.image?.publicId || event.images?.[0]?.publicId || "default",
+          },
 
           // Event snapshot data
           eventName: event.title,
