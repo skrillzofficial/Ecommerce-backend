@@ -41,11 +41,16 @@ const sendBookingNotifications = async (
   event,
   user,
   booking,
-  tickets,
+  tickets, // This should be the actual ticket objects
   totalQuantity,
   totalPrice
 ) => {
   try {
+    console.log("📧 Preparing to send booking email...");
+    console.log("🎫 Tickets available for email:", tickets);
+    console.log("🎫 Tickets count:", tickets.length);
+    console.log("👤 User:", user.email);
+
     // User notification
     await NotificationService.createTicketPurchaseNotification(
       user._id,
@@ -75,12 +80,7 @@ const sendBookingNotifications = async (
       });
     }
 
-    // Send booking confirmation email
-    const emailTemplate = generateBookingEmailTemplate(
-      booking.ticketDetails,
-      totalPrice
-    );
-
+    // ✅ FIX: Pass the actual tickets array, not the email template
     await sendBookingEmail({
       fullName: user.fullName,
       email: user.email,
@@ -90,7 +90,7 @@ const sendBookingNotifications = async (
       eventVenue: event.venue,
       eventAddress: event.address,
       bookingId: booking.orderNumber,
-      ticketDetails: emailTemplate,
+      ticketDetails: tickets, // ✅ Pass actual ticket objects for PDF generation
       totalAmount: `₦${totalPrice.toLocaleString()}`,
       clientUrl: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
     });
@@ -126,7 +126,6 @@ const sendBookingNotifications = async (
     console.error("Notification/email error:", error);
   }
 };
-
 // Fixed completeFreeBooking - Direct success response (NO payment verification needed)
 const completeFreeBooking = async (
   event,
