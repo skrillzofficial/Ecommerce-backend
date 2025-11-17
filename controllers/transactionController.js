@@ -9,6 +9,7 @@ const {
 } = require("../service/paystackService");
 const ErrorResponse = require("../utils/errorResponse");
 const { createTickets } = require("../utils/bookingHelpers");
+const { sendBookingEmail } = require("../utils/sendEmail"); // Add this import
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 
@@ -70,6 +71,44 @@ const updateEventTicketAvailability = async (
     }
   } catch (error) {
     console.error("Error updating ticket availability:", error);
+  }
+};
+
+// Helper function to format event date for email
+const formatEventDate = (dateString) => {
+  if (!dateString) return 'TBD';
+  return new Date(dateString).toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+};
+
+// Helper function to send booking confirmation for paid events
+const sendPaidBookingConfirmation = async (booking, event, user, tickets) => {
+  try {
+    console.log("🎫 Sending paid booking confirmation for:", user.email);
+    console.log("📄 Tickets count for PDF:", tickets.length);
+
+    await sendBookingEmail({
+      fullName: user.fullName,
+      email: user.email,
+      eventName: event.title,
+      eventDate: formatEventDate(event.startDate),
+      eventTime: event.time,
+      eventVenue: event.venue,
+      eventAddress: event.address,
+      bookingId: booking.orderNumber,
+      ticketDetails: tickets, // Pass actual ticket objects for PDF generation
+      totalAmount: `₦${booking.totalAmount.toLocaleString()}`,
+      clientUrl: `${process.env.FRONTEND_URL}/bookings/${booking._id}`,
+    });
+
+    console.log("✅ Paid booking confirmation email sent with PDF tickets");
+  } catch (error) {
+    console.error("❌ Error sending paid booking confirmation:", error);
+    // Don't throw error to avoid breaking the payment flow
   }
 };
 
@@ -231,6 +270,9 @@ const verifyTransaction = async (req, res, next) => {
       }
 
       await session.commitTransaction();
+
+      // ✅ SEND BOOKING CONFIRMATION EMAIL WITH PDF TICKETS FOR PAID EVENTS
+      await sendPaidBookingConfirmation(booking, event, user, tickets);
 
       // Send notifications (outside transaction)
       try {
@@ -726,10 +768,28 @@ async function handleSuccessfulCharge(data) {
               "decrement"
             );
           }
-        }
-      }
 
-      await session.commitTransaction();
+          await session.commitTransaction();
+
+          // ✅ SEND BOOKING CONFIRMATION EMAIL FOR WEBHOOK PAYMENTS TOO
+          await sendPaidBookingConfirmation(booking, event, user, tickets);
+
+          // Send notifications
+          try {
+            if (NotificationService && NotificationService.createTicketPurchaseNotification) {
+              await NotificationService.createTicketPurchaseNotification(
+                user._id,
+                booking,
+                event
+              );
+            }
+          } catch (notifError) {
+            console.error("Notification error:", notifError);
+          }
+        }
+      } else {
+        await session.commitTransaction();
+      }
     }
   } catch (error) {
     if (session.inTransaction()) {

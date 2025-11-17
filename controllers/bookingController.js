@@ -126,7 +126,7 @@ const sendBookingNotifications = async (
     console.error("Notification/email error:", error);
   }
 };
-// Fixed completeFreeBooking - Direct success response (NO payment verification needed)
+// Fixed completeFreeBooking
 const completeFreeBooking = async (
   event,
   user,

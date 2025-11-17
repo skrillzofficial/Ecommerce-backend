@@ -105,7 +105,7 @@ const createBookingTemplate = (fullName, eventName, eventDate, eventTime, eventV
         <div
           style="
             background-color: #d4edda;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid #FF6B35;
             padding: 15px;
             margin: 20px 0;
             border-radius: 4px;
@@ -113,7 +113,7 @@ const createBookingTemplate = (fullName, eventName, eventDate, eventTime, eventV
         >
           <p style="margin: 0; font-size: 14px;">
             <strong> Booking Confirmed</strong><br>
-            Your tickets will be emailed to you separately. Please bring a valid ID to the event.
+            See below for your tickets. Please bring along your ticket to the event venue.
           </p>
         </div>
 
