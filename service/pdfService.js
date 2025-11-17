@@ -19,8 +19,8 @@ class PDFService {
           resolve(pdfData);
         });
 
-        // Generate QR Code
-        const qrCodeData = ticket.generateQRData();
+        // Generate QR Code using the actual qrCode field from your ticket
+        const qrCodeData = ticket.qrCode || ticket.ticketNumber;
         const qrCodeImage = await QRCode.toDataURL(qrCodeData, {
           width: 300,
           margin: 0,
@@ -200,7 +200,7 @@ class PDFService {
 
     yPos += 25;
 
-    // Details grid
+    // Details grid - UPDATED to match your ticket fields
     const details = [
       { label: 'TYPE', value: ticket.ticketType },
       { label: 'QUANTITY', value: ticket.quantity.toString() },
@@ -239,7 +239,7 @@ class PDFService {
        .fillColor(priceColor)
        .text(priceText, 70, yPos + 12);
 
-    // Purchase date
+    // Purchase date - UPDATED to use purchaseDate field
     const purchaseDate = new Date(ticket.purchaseDate).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
@@ -298,7 +298,7 @@ class PDFService {
     doc.rect(40, footerY, 515, 1)
        .fill('#1a1a1a');
 
-    // Security code
+    // Security code - UPDATED to use securityCode field
     doc.fontSize(8)
        .font('Helvetica')
        .fillColor('#666666')
@@ -320,7 +320,7 @@ class PDFService {
          { width: 455, align: 'center' }
        );
 
-    // Organizer info - bottom right
+    // Organizer info - bottom right - UPDATED to use organizerName field
     if (ticket.organizerName) {
       doc.fontSize(7)
          .fillColor('#666666')
