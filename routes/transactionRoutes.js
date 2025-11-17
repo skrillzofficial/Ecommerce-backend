@@ -14,58 +14,21 @@ const {
 
 const { protect, authorize } = require("../middleware/auth");
 
-// ============================================
-// PUBLIC ROUTES
-// ============================================
-
-// Paystack webhook
+// Public routes
 router.post("/webhook", paystackWebhook);
 
-// Verify transaction payment
-router.get("/verify/:reference", verifyTransaction);
-
-// ============================================
-// PROTECTED ROUTES
-// ============================================
-
-// User's transaction history
+// Protected routes
 router.get("/my-transactions", protect, getUserTransactions);
-
-// Revenue statistics (Organizer/Admin only)
-router.get(
-  "/stats/revenue", 
-  protect,
-  authorize("organizer", "superadmin"), 
-  getRevenueStats
-);
-
-// Initialize booking payment
+router.get("/stats/revenue", protect, authorize("organizer", "superadmin"), getRevenueStats);
 router.post("/initialize", protect, initializeTransaction);
+router.get("/event/:eventId", protect, authorize("organizer", "superadmin"), getEventTransactions);
 
-// Event transactions (Organizer/Admin only)
-router.get(
-  "/event/:eventId", 
-  protect,
-  authorize("organizer", "superadmin"), 
-  getEventTransactions
-);
+// Verification (must be before /:id)
+router.get("/verify-payment/:reference", protect, verifyTransaction);
 
-// ============================================
-// PARAMETER ROUTES
-// ============================================
-
-// Single transaction details
+// Parameter routes
 router.get("/:id", protect, getTransaction);
-
-// Request refund
 router.post("/:id/refund", protect, requestRefund);
-
-// Process refund (Organizer/Admin only)
-router.put(
-  "/:id/refund/process", 
-  protect,
-  authorize("organizer", "superadmin"), 
-  processRefund
-);
+router.put("/:id/refund/process", protect, authorize("organizer", "superadmin"), processRefund);
 
 module.exports = router;
