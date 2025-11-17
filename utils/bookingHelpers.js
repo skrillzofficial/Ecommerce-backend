@@ -95,7 +95,6 @@ const calculateBookingTotals = (bookings, ticketTypes) => {
     }
 
     if (ticketPrice > 1000000) {
-      // 1 million Naira max
       throw new ErrorResponse(
         `Price for ${ticketType} tickets is too high`,
         400
@@ -111,6 +110,7 @@ const calculateBookingTotals = (bookings, ticketTypes) => {
       ticketTypeId: ticketTypeObj._id,
       quantity: parsedQuantity,
       unitPrice: ticketPrice,
+      price: ticketPrice,
       subtotal,
       benefits: ticketTypeObj.benefits || [],
       accessType: ticketTypeObj.accessType || "both",
@@ -148,7 +148,6 @@ const checkTicketAvailability = (event, bookings) => {
         );
       }
     } else {
-      // Legacy system
       const availableCount = Number(event.availableTickets);
       if (availableCount < parsedQuantity) {
         availabilityIssues.push(
@@ -180,7 +179,6 @@ const updateEventAvailability = async (event, bookings, options = {}) => {
         );
       }
     } else {
-      // Legacy system
       event.availableTickets = Math.max(
         0,
         event.availableTickets - parsedQuantity
@@ -195,25 +193,33 @@ const updateEventAvailability = async (event, bookings, options = {}) => {
   }
 };
 
-// Create tickets for booking - FIXED VERSION WITH IMAGE FIELD
+// Create tickets for booking
 const createTickets = async (event, user, bookings, options = {}) => {
   const Ticket = mongoose.model("Ticket");
   const tickets = [];
   const session = options.session || null;
 
   for (const booking of bookings) {
+    // ✅ CRITICAL FIX: Get price from booking object FIRST, then fallback to event ticket type
+    const explicitPrice = booking.price || booking.unitPrice;
+    
+    // Find ticket type in event
     const ticketType = event.ticketTypes?.find(
       (tt) => tt._id.toString() === booking.ticketTypeId
     ) || {
-      name: "General",
-      price: event.price || 0,
+      name: booking.ticketType || "General",
+      price: explicitPrice || event.price || 0,
       benefits: [],
-      accessType: "both",
+      accessType: booking.accessType || "both",
     };
+
+    // ✅ CRITICAL FIX: Always prioritize price from booking object
+    const finalPrice = explicitPrice !== undefined ? explicitPrice : ticketType.price;
+
+    console.log(`Creating ticket: ${ticketType.name}, Price from booking: ${explicitPrice}, Final price: ${finalPrice}`);
 
     for (let i = 0; i < booking.quantity; i++) {
       try {
-        // Generate unique identifiers FIRST
         const ticketNumber = `TKT-${Date.now()
           .toString()
           .slice(-8)}-${Math.random()
@@ -228,9 +234,8 @@ const createTickets = async (event, user, bookings, options = {}) => {
           .substring(2, 8)
           .toUpperCase();
 
-        // Create ticket data with ALL required fields
         const ticketData = {
-          // Required identification fields
+          // Identification
           ticketNumber,
           qrCode,
           barcode,
@@ -239,7 +244,7 @@ const createTickets = async (event, user, bookings, options = {}) => {
           // Event reference
           eventId: event._id,
 
-          // ✅ CRITICAL FIX: Event image (REQUIRED by Ticket schema)
+          // Event image
           image: {
             url:
               event.image?.url ||
@@ -249,7 +254,7 @@ const createTickets = async (event, user, bookings, options = {}) => {
               event.image?.publicId || event.images?.[0]?.publicId || "default",
           },
 
-          // Event snapshot data
+          // Event snapshot
           eventName: event.title,
           eventStartDate: event.startDate,
           eventEndDate: event.endDate,
@@ -263,9 +268,9 @@ const createTickets = async (event, user, bookings, options = {}) => {
           eventType: event.eventType,
           virtualEventLink: event.virtualEventLink,
 
-          // Ticket type information
+          // Ticket type
           ticketType: ticketType.name,
-          ticketTypeId: ticketType._id,
+          ticketTypeId: ticketType._id || booking.ticketTypeId,
           accessType: ticketType.accessType || "both",
 
           // User information
@@ -274,17 +279,17 @@ const createTickets = async (event, user, bookings, options = {}) => {
           userEmail: user.email,
           userPhone: user.phone || "",
 
-          // Pricing
-          ticketPrice: ticketType.price,
+          // ✅ CRITICAL FIX: Use finalPrice instead of ticketType.price
+          ticketPrice: finalPrice,
           quantity: 1,
-          totalAmount: ticketType.price,
+          totalAmount: finalPrice,
           currency: event.currency || "NGN",
 
           // Status
           status: "confirmed",
 
-          // Approval system handling
-          approvalStatus: ticketType.price === 0 ? "pending" : "not-required",
+          // Approval system
+          approvalStatus: finalPrice === 0 ? "pending" : "not-required",
           approvalQuestions: booking.approvalQuestions
             ? booking.approvalQuestions.map((q) => ({
                 question: q.question,
@@ -293,15 +298,15 @@ const createTickets = async (event, user, bookings, options = {}) => {
               }))
             : [],
 
-          // Purchase information
+          // Purchase info
           purchaseDate: new Date(),
-          paymentMethod: ticketType.price === 0 ? "free" : "card",
+          paymentMethod: finalPrice === 0 ? "free" : "card",
           paymentStatus: "completed",
 
           // Booking reference
           bookingId: options.bookingId,
 
-          // Organizer information
+          // Organizer
           organizerId: event.organizer,
           organizerName: event.organizerInfo?.name || user.fullName,
           organizerEmail: event.organizerInfo?.email || user.email,
@@ -313,12 +318,10 @@ const createTickets = async (event, user, bookings, options = {}) => {
           ),
         };
 
-        // Set approval submitted timestamp if there are questions
         if (ticketData.approvalQuestions.length > 0) {
           ticketData.approvalSubmittedAt = new Date();
         }
 
-        // Create and save ticket
         let ticket;
         if (session) {
           ticket = new Ticket(ticketData);

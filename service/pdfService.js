@@ -8,7 +8,7 @@ class PDFService {
       try {
         const doc = new PDFDocument({
           size: 'A4',
-          margin: 50,
+          margin: 0,
           layout: 'portrait'
         });
 
@@ -21,15 +21,22 @@ class PDFService {
 
         // Generate QR Code
         const qrCodeData = ticket.generateQRData();
-        const qrCodeImage = await QRCode.toDataURL(qrCodeData);
+        const qrCodeImage = await QRCode.toDataURL(qrCodeData, {
+          width: 300,
+          margin: 0,
+          color: {
+            dark: '#000000',
+            light: '#FFFFFF'
+          }
+        });
 
-        // Add styling
-        await this.addHeader(doc, ticket);
-        await this.addShareableBanner(doc, ticket);
-        this.addEventDetails(doc, ticket);
-        this.addTicketDetails(doc, ticket);
-        this.addQRCode(doc, qrCodeImage);
-        this.addFooter(doc, ticket);
+        // Modern 2025 design - Clean, minimal, tech-focused
+        this.addModernBackground(doc);
+        this.addModernHeader(doc, ticket);
+        this.addEventSection(doc, ticket);
+        this.addTicketDetailsSection(doc, ticket);
+        this.addQRSection(doc, qrCodeImage, ticket);
+        this.addSecurityFooter(doc, ticket);
 
         doc.end();
       } catch (error) {
@@ -38,400 +45,325 @@ class PDFService {
     });
   }
 
-  static async addHeader(doc, ticket) {
-    // Title with gradient effect
-    doc.fontSize(24)
-       .font('Helvetica-Bold')
-       .fillColor('#2D3748')
-       .text('EVENT TICKET', 50, 50, { align: 'center' });
+  static addModernBackground(doc) {
+    // Black background
+    doc.rect(0, 0, 595, 842).fill('#000000');
 
-    // Ticket Number
-    doc.fontSize(12)
-       .font('Helvetica')
-       .fillColor('#718096')
-       .text(`Ticket #: ${ticket.ticketNumber}`, 50, 85, { align: 'center' });
+    // Subtle grid pattern (optional - for tech feel)
+    doc.strokeColor('#0a0a0a').lineWidth(0.5);
+    for (let i = 0; i < 842; i += 30) {
+      doc.moveTo(0, i).lineTo(595, i).stroke();
+    }
+    for (let i = 0; i < 595; i += 30) {
+      doc.moveTo(i, 0).lineTo(i, 842).stroke();
+    }
 
-    // Status badge
-    const statusColor = this.getStatusColor(ticket.status);
-    doc.roundedRect(250, 80, 100, 20, 10)
-       .fill(color);
-    doc.fontSize(10)
-       .font('Helvetica-Bold')
-       .fillColor('#FFFFFF')
-       .text(ticket.status.toUpperCase(), 250, 85, { 
-         width: 100, 
-         align: 'center' 
-       });
-
-    doc.moveTo(50, 110)
-       .lineTo(545, 110)
-       .strokeColor('#E2E8F0')
+    // Main content container with border
+    doc.rect(40, 40, 515, 762)
+       .strokeColor('#1a1a1a')
        .lineWidth(1)
        .stroke();
   }
 
-  static async addShareableBanner(doc, ticket) {
-    // Check if shareable banner exists and is generated
-    if (ticket.shareableBanner?.status === 'generated' && 
-        ticket.shareableBanner.generatedBanner?.url) {
-      
-      try {
-        // Download banner image
-        const response = await axios({
-          method: 'GET',
-          url: ticket.shareableBanner.generatedBanner.url,
-          responseType: 'arraybuffer'
-        });
+  static addModernHeader(doc, ticket) {
+    // Status indicator dot
+    const statusColor = this.getModernStatusColor(ticket.status);
+    doc.circle(70, 70, 4).fill(statusColor);
 
-        const bannerBuffer = Buffer.from(response.data);
-        
-        // Add banner section header
-        doc.fontSize(16)
-           .font('Helvetica-Bold')
-           .fillColor('#2D3748')
-           .text('Shareable Banner', 50, 130);
+    // Status text
+    doc.fontSize(9)
+       .font('Helvetica-Bold')
+       .fillColor('#666666')
+       .text(ticket.status.toUpperCase(), 80, 67);
 
-        // Add banner image
-        const bannerWidth = 500;
-        const bannerHeight = 263; // 1200x630 ratio
-        const bannerY = 160;
+    // Ticket number - top right
+    doc.fontSize(9)
+       .font('Helvetica')
+       .fillColor('#333333')
+       .text(ticket.ticketNumber, 70, 67, { align: 'right', width: 445 });
 
-        doc.image(bannerBuffer, 50, bannerY, {
-          width: bannerWidth,
-          height: bannerHeight,
-          align: 'center'
-        });
+    // Main title
+    doc.fontSize(10)
+       .font('Helvetica')
+       .fillColor('#666666')
+       .text('EVENT TICKET', 70, 110);
 
-        // Add share instructions
-        doc.fontSize(10)
-           .font('Helvetica')
-           .fillColor('#718096')
-           .text('Share this banner on social media to promote the event!', 
-                 50, bannerY + bannerHeight + 10, {
-                   align: 'center',
-                   width: bannerWidth
-                 });
+    doc.fontSize(32)
+       .font('Helvetica-Bold')
+       .fillColor('#FFFFFF')
+       .text(ticket.eventName, 70, 125, { width: 455, lineGap: 5 });
 
-        // Add separator after banner
-        doc.moveTo(50, bannerY + bannerHeight + 35)
-           .lineTo(545, bannerY + bannerHeight + 35)
-           .strokeColor('#E2E8F0')
-           .lineWidth(1)
-           .stroke();
-
-        return bannerY + bannerHeight + 50;
-      } catch (error) {
-        console.error('Failed to add shareable banner:', error);
-        // Continue without banner if there's an error
-        return 130;
-      }
-    }
-    
-    return 130;
+    // Accent line under title
+    const titleHeight = doc.heightOfString(ticket.eventName, { width: 455, fontSize: 32 });
+    doc.moveTo(70, 135 + titleHeight)
+       .lineTo(150, 135 + titleHeight)
+       .strokeColor('#ff6b00')
+       .lineWidth(3)
+       .stroke();
   }
 
-  static addEventDetails(doc, ticket) {
-    let yPosition = 130;
+  static addEventSection(doc, ticket) {
+    let yPos = 220;
 
-    // If banner was added, adjust position
-    if (ticket.shareableBanner?.status === 'generated') {
-      yPosition = 480; // Position after banner
-    }
-
-    doc.fontSize(18)
-       .font('Helvetica-Bold')
-       .fillColor('#2D3748')
-       .text(ticket.eventName, 50, yPosition);
-
-    doc.fontSize(12)
+    // Date & Time section
+    doc.fontSize(9)
        .font('Helvetica')
-       .fillColor('#4A5568');
+       .fillColor('#666666')
+       .text('DATE & TIME', 70, yPos);
 
-    let currentY = yPosition + 30;
+    yPos += 15;
 
-    // Event Date
     const eventDate = new Date(ticket.eventStartDate).toLocaleDateString('en-US', {
-      weekday: 'long',
+      weekday: 'short',
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric'
     });
-    doc.text(`📅 Date: ${eventDate}`, 50, currentY);
-    
-    // Event Time
-    const startTime = ticket.eventTime || 'TBA';
-    const endTime = ticket.eventEndTime || '';
-    const timeText = endTime ? `${startTime} - ${endTime}` : startTime;
-    doc.text(`⏰ Time: ${timeText}`, 300, currentY);
-    currentY += 25;
-
-    // Venue
-    if (ticket.eventVenue) {
-      doc.text(`🏛️ Venue: ${ticket.eventVenue}`, 50, currentY);
-      currentY += 25;
-    }
-
-    // Address
-    if (ticket.eventAddress) {
-      const addressLines = this.splitTextToLines(doc, ticket.eventAddress, 400);
-      doc.text(`📍 Address: ${addressLines[0]}`, 50, currentY);
-      
-      if (addressLines.length > 1) {
-        for (let i = 1; i < addressLines.length; i++) {
-          currentY += 15;
-          doc.text(`           ${addressLines[i]}`, 50, currentY);
-        }
-      }
-      currentY += 25;
-    }
-
-    // Event Type badge
-    const eventTypeColor = this.getEventTypeColor(ticket.eventType);
-    doc.roundedRect(50, currentY, 120, 20, 5)
-       .fill(eventTypeColor);
-    doc.fontSize(10)
-       .font('Helvetica-Bold')
-       .fillColor('#FFFFFF')
-       .text(ticket.eventType.toUpperCase(), 50, currentY + 5, { 
-         width: 120, 
-         align: 'center' 
-       });
-
-    currentY += 35;
-
-    doc.moveTo(50, currentY)
-       .lineTo(545, currentY)
-       .strokeColor('#E2E8F0')
-       .lineWidth(1)
-       .stroke();
-
-    return currentY + 20;
-  }
-
-  static addTicketDetails(doc, ticket) {
-    let yPosition = 280;
-
-    // Adjust position based on content
-    if (ticket.shareableBanner?.status === 'generated') {
-      yPosition = 630; // Position after banner and event details
-    } else if (ticket.eventVenue && ticket.eventAddress) {
-      yPosition = 380; // Position with full event details
-    }
 
     doc.fontSize(16)
        .font('Helvetica-Bold')
-       .fillColor('#2D3748')
-       .text('Ticket Details', 50, yPosition);
+       .fillColor('#FFFFFF')
+       .text(eventDate, 70, yPos);
 
-    yPosition += 30;
+    const startTime = ticket.eventTime || 'TBA';
+    const endTime = ticket.eventEndTime || '';
+    const timeText = endTime ? `${startTime} - ${endTime}` : startTime;
 
-    // Create ticket details box
-    doc.roundedRect(50, yPosition, 500, 120, 10)
-       .fill('#F7FAFC')
-       .strokeColor('#E2E8F0')
+    doc.fontSize(14)
+       .font('Helvetica')
+       .fillColor('#999999')
+       .text(timeText, 70, yPos + 22);
+
+    yPos += 60;
+
+    // Location section
+    if (ticket.eventVenue) {
+      doc.fontSize(9)
+         .font('Helvetica')
+         .fillColor('#666666')
+         .text('LOCATION', 70, yPos);
+
+      yPos += 15;
+
+      doc.fontSize(14)
+         .font('Helvetica-Bold')
+         .fillColor('#FFFFFF')
+         .text(ticket.eventVenue, 70, yPos, { width: 300 });
+
+      if (ticket.eventAddress) {
+        yPos += 20;
+        doc.fontSize(12)
+           .font('Helvetica')
+           .fillColor('#999999')
+           .text(ticket.eventAddress, 70, yPos, { width: 300 });
+      }
+
+      if (ticket.eventCity) {
+        yPos += 18;
+        doc.fontSize(12)
+           .fillColor('#999999')
+           .text(ticket.eventCity, 70, yPos);
+      }
+
+      yPos += 40;
+    }
+
+    // Event type badge
+    const eventTypeBg = this.getEventTypeBg(ticket.eventType);
+    doc.roundedRect(70, yPos, 90, 24, 6)
+       .fill(eventTypeBg);
+
+    doc.fontSize(10)
+       .font('Helvetica-Bold')
+       .fillColor('#FFFFFF')
+       .text(ticket.eventType.toUpperCase(), 70, yPos + 7, { 
+         width: 90, 
+         align: 'center' 
+       });
+
+    // Divider line
+    doc.moveTo(70, yPos + 50)
+       .lineTo(525, yPos + 50)
+       .strokeColor('#1a1a1a')
+       .lineWidth(1)
+       .stroke();
+  }
+
+  static addTicketDetailsSection(doc, ticket) {
+    let yPos = 480;
+
+    // Section title
+    doc.fontSize(9)
+       .font('Helvetica')
+       .fillColor('#666666')
+       .text('TICKET DETAILS', 70, yPos);
+
+    yPos += 25;
+
+    // Details grid
+    const details = [
+      { label: 'TYPE', value: ticket.ticketType },
+      { label: 'QUANTITY', value: ticket.quantity.toString() },
+      { label: 'ATTENDEE', value: ticket.userName },
+      { label: 'EMAIL', value: ticket.userEmail },
+    ];
+
+    details.forEach((detail, index) => {
+      const xPos = 70 + (index % 2) * 227.5;
+      const yOffset = Math.floor(index / 2) * 55;
+
+      doc.fontSize(9)
+         .font('Helvetica')
+         .fillColor('#666666')
+         .text(detail.label, xPos, yPos + yOffset);
+
+      doc.fontSize(12)
+         .font('Helvetica-Bold')
+         .fillColor('#FFFFFF')
+         .text(detail.value, xPos, yPos + yOffset + 12, { width: 210 });
+    });
+
+    yPos += 120;
+
+    // Price section
+    doc.fontSize(9)
+       .font('Helvetica')
+       .fillColor('#666666')
+       .text('PRICE', 70, yPos);
+
+    const priceText = ticket.ticketPrice === 0 ? 'FREE' : `₦${ticket.ticketPrice.toLocaleString()}`;
+    const priceColor = ticket.ticketPrice === 0 ? '#00ff88' : '#ff6b00';
+
+    doc.fontSize(24)
+       .font('Helvetica-Bold')
+       .fillColor(priceColor)
+       .text(priceText, 70, yPos + 12);
+
+    // Purchase date
+    const purchaseDate = new Date(ticket.purchaseDate).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+
+    doc.fontSize(10)
+       .font('Helvetica')
+       .fillColor('#666666')
+       .text(`Purchased on ${purchaseDate}`, 70, yPos + 42);
+  }
+
+  static addQRSection(doc, qrCodeImage, ticket) {
+    const qrSize = 140;
+    const qrX = 385;
+    const qrY = 480;
+
+    // QR background container
+    doc.roundedRect(qrX - 15, qrY - 15, qrSize + 30, qrSize + 70, 12)
+       .fill('#0a0a0a');
+
+    // QR border
+    doc.roundedRect(qrX - 5, qrY - 5, qrSize + 10, qrSize + 10, 8)
+       .strokeColor('#1a1a1a')
        .lineWidth(1)
        .stroke();
 
-    doc.fontSize(12)
-       .font('Helvetica')
-       .fillColor('#4A5568');
-
-    const boxPadding = 15;
-    let currentY = yPosition + boxPadding;
-
-    // Ticket Type
-    doc.text(`🎫 Ticket Type:`, 50 + boxPadding, currentY);
-    doc.font('Helvetica-Bold')
-       .text(ticket.ticketType, 150, currentY);
-    doc.font('Helvetica')
-       .text(`Quantity: ${ticket.quantity}`, 350, currentY);
-    currentY += 25;
-
-    // Price
-    const priceText = ticket.ticketPrice === 0 ? 'FREE' : `₦${ticket.ticketPrice.toLocaleString()}`;
-    doc.text(`💰 Price:`, 50 + boxPadding, currentY);
-    doc.font('Helvetica-Bold')
-       .fillColor(ticket.ticketPrice === 0 ? '#38A169' : '#2D3748')
-       .text(priceText, 150, currentY);
-    doc.font('Helvetica')
-       .fillColor('#4A5568');
-    currentY += 25;
-
-    // Attendee
-    doc.text(`👤 Attendee:`, 50 + boxPadding, currentY);
-    doc.font('Helvetica-Bold')
-       .text(ticket.userName, 150, currentY);
-    doc.font('Helvetica')
-       .text(ticket.userEmail, 350, currentY);
-    currentY += 25;
-
-    // Purchase Date
-    const purchaseDate = new Date(ticket.purchaseDate).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-    doc.text(`📅 Purchase Date:`, 50 + boxPadding, currentY);
-    doc.text(purchaseDate, 150, currentY);
-
-    // Approval status if applicable
-    if (ticket.approvalStatus && ticket.approvalStatus !== 'not-required') {
-      currentY += 25;
-      const approvalColor = this.getApprovalColor(ticket.approvalStatus);
-      doc.text(`Approval Status:`, 50 + boxPadding, currentY);
-      doc.font('Helvetica-Bold')
-         .fillColor(approvalColor)
-         .text(ticket.approvalStatus.toUpperCase(), 150, currentY);
-    }
-  }
-
-  static addQRCode(doc, qrCodeImage) {
-    const qrCodeX = 400;
-    const qrCodeY = 430;
-    const qrCodeSize = 120;
-
-    // Adjust position based on content
-    let adjustedY = qrCodeY;
-    if (ticket.shareableBanner?.status === 'generated') {
-      adjustedY = 650; // Position after banner and ticket details
-    }
-
-    // QR Code container
-    doc.roundedRect(qrCodeX - 10, adjustedY - 10, qrCodeSize + 20, qrCodeSize + 40, 10)
-       .fill('#FFFFFF')
-       .strokeColor('#E2E8F0')
-       .lineWidth(2)
-       .stroke();
-
-    doc.image(qrCodeImage, qrCodeX, adjustedY, {
-      width: qrCodeSize,
-      height: qrCodeSize
+    // QR code
+    doc.image(qrCodeImage, qrX, qrY, {
+      width: qrSize,
+      height: qrSize
     });
 
+    // Instructions
     doc.fontSize(10)
        .font('Helvetica-Bold')
-       .fillColor('#2D3748')
-       .text('SCAN AT ENTRANCE', qrCodeX, adjustedY + qrCodeSize + 5, {
-         width: qrCodeSize,
+       .fillColor('#FFFFFF')
+       .text('SCAN TO VERIFY', qrX - 15, qrY + qrSize + 15, {
+         width: qrSize + 30,
          align: 'center'
        });
 
     doc.fontSize(8)
        .font('Helvetica')
-       .fillColor('#718096')
-       .text('Present this QR code for check-in', qrCodeX, adjustedY + qrCodeSize + 20, {
-         width: qrCodeSize,
+       .fillColor('#666666')
+       .text('Present at entrance', qrX - 15, qrY + qrSize + 30, {
+         width: qrSize + 30,
          align: 'center'
        });
   }
 
-  static addFooter(doc, ticket) {
-    const footerY = 700;
+  static addSecurityFooter(doc, ticket) {
+    const footerY = 720;
 
-    doc.fontSize(10)
-       .font('Helvetica-Bold')
-       .fillColor('#2D3748')
-       .text('Terms & Conditions', 50, footerY);
+    // Security bar
+    doc.rect(40, footerY, 515, 1)
+       .fill('#1a1a1a');
 
-    doc.fontSize(9)
-       .font('Helvetica')
-       .fillColor('#718096');
-
-    const terms = [
-      '• This ticket is non-transferable and valid only for the registered attendee',
-      '• Please arrive 30 minutes before the event start time',
-      '• Present this ticket or QR code at the entrance for verification',
-      '• The organizer reserves the right to refuse entry',
-      '• Tickets are non-refundable except as required by law',
-      '• Keep this ticket secure - it contains personal information'
-    ];
-
-    let currentY = footerY + 15;
-    terms.forEach(term => {
-      doc.text(term, 50, currentY, {
-        width: 500,
-        indent: 10
-      });
-      currentY += 15;
-    });
-
-    // Security notice
-    currentY += 10;
+    // Security code
     doc.fontSize(8)
-       .fillColor('#E53E3E')
-       .text(`Security Code: ${ticket.securityCode} - Do not share publicly`, 
-             50, currentY, { align: 'center' });
+       .font('Helvetica')
+       .fillColor('#666666')
+       .text('SECURITY CODE', 70, footerY + 15);
 
-    // Organizer info
-    currentY += 20;
+    doc.fontSize(11)
+       .font('Helvetica-Bold')
+       .fillColor('#ff6b00')
+       .text(ticket.securityCode, 70, footerY + 27);
+
+    // Terms
+    doc.fontSize(7)
+       .font('Helvetica')
+       .fillColor('#333333')
+       .text(
+         'Non-transferable • Valid ID required • Subject to event terms & conditions',
+         70,
+         footerY + 45,
+         { width: 455, align: 'center' }
+       );
+
+    // Organizer info - bottom right
     if (ticket.organizerName) {
-      doc.fontSize(9)
-         .fillColor('#4A5568')
-         .text(`Organized by: ${ticket.organizerName}`, 50, currentY);
-      
-      if (ticket.organizerCompany) {
-        doc.text(ticket.organizerCompany, 50, currentY + 12);
-      }
+      doc.fontSize(7)
+         .fillColor('#666666')
+         .text(
+           `Organized by ${ticket.organizerName}${ticket.organizerCompany ? ' · ' + ticket.organizerCompany : ''}`,
+           70,
+           footerY + 60,
+           { width: 455, align: 'right' }
+         );
     }
 
-    // Generated timestamp
-    doc.fontSize(8)
-       .fillColor('#A0AEC0')
-       .text(`Generated on: ${new Date().toLocaleString()}`, 
-             50, currentY + 30, { align: 'right' });
+    // Watermark - very subtle
+    doc.fontSize(6)
+       .fillColor('#0a0a0a')
+       .text(`Generated ${new Date().toISOString()}`, 70, 790, {
+         width: 455,
+         align: 'center'
+       });
   }
 
   // Helper methods
-  static getStatusColor(status) {
+  static getModernStatusColor(status) {
     const colors = {
-      'confirmed': '#38A169',
-      'checked-in': '#3182CE',
-      'pending-approval': '#D69E2E',
-      'cancelled': '#E53E3E',
-      'expired': '#718096',
-      'rejected': '#E53E3E'
+      'confirmed': '#00ff88',
+      'checked-in': '#00aaff',
+      'pending-approval': '#ffaa00',
+      'cancelled': '#ff3366',
+      'expired': '#666666',
+      'rejected': '#ff3366'
     };
-    return colors[status] || '#718096';
+    return colors[status] || '#666666';
   }
 
-  static getEventTypeColor(eventType) {
+  static getEventTypeBg(eventType) {
     const colors = {
-      'physical': '#3182CE',
-      'virtual': '#805AD5',
-      'hybrid': '#38A169'
+      'physical': '#1a4d80',
+      'virtual': '#6b2d80',
+      'hybrid': '#1a805d'
     };
-    return colors[eventType] || '#718096';
+    return colors[eventType] || '#333333';
   }
 
-  static getApprovalColor(approvalStatus) {
-    const colors = {
-      'approved': '#38A169',
-      'pending': '#D69E2E',
-      'rejected': '#E53E3E'
-    };
-    return colors[approvalStatus] || '#718096';
-  }
-
-  static splitTextToLines(doc, text, maxWidth) {
-    const words = text.split(' ');
-    const lines = [];
-    let currentLine = words[0];
-
-    for (let i = 1; i < words.length; i++) {
-      const word = words[i];
-      const width = doc.widthOfString(currentLine + ' ' + word);
-      if (width < maxWidth) {
-        currentLine += ' ' + word;
-      } else {
-        lines.push(currentLine);
-        currentLine = word;
-      }
-    }
-    lines.push(currentLine);
-    return lines;
-  }
-
-  // NEW: Method to generate banner-only PDF for social media sharing
+  // Banner-only PDF for social sharing
   static async generateBannerPDF(ticket) {
     return new Promise(async (resolve, reject) => {
       try {
@@ -440,7 +372,7 @@ class PDFService {
         }
 
         const doc = new PDFDocument({
-          size: [1200, 630], // Social media banner size
+          size: [1200, 630],
           margin: 0
         });
 
@@ -451,7 +383,6 @@ class PDFService {
           resolve(pdfData);
         });
 
-        // Download and add banner image
         const response = await axios({
           method: 'GET',
           url: ticket.shareableBanner.generatedBanner.url,
@@ -464,16 +395,6 @@ class PDFService {
           width: 1200,
           height: 630
         });
-
-        // Add share text overlay
-        doc.fontSize(24)
-           .font('Helvetica-Bold')
-           .fillColor('#FFFFFF')
-           .text('I\'m attending!', 50, 50);
-
-        doc.fontSize(18)
-           .font('Helvetica')
-           .text(`Scan QR code to get your ticket for ${ticket.eventName}`, 50, 580);
 
         doc.end();
       } catch (error) {
