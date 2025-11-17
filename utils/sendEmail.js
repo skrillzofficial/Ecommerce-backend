@@ -6,7 +6,7 @@ const {
 } = require("./emailTemplate");
 const { createBookingTemplate } = require("./bookingTemplate");
 const { createPaymentTemplate } = require("./paymentTemplate");
-const PDFService = require('../services/PDFService'); // Your PDF service
+const PDFService = require('../service/pdfService'); 
 
 // Initialize SendGrid
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
