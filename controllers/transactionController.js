@@ -2,12 +2,23 @@ const Transaction = require("../models/transaction");
 const Booking = require("../models/booking");
 const Event = require("../models/event");
 const User = require("../models/user");
+const Ticket = require("../models/ticket");
 const {
   initializePayment,
   verifyPayment,
 } = require("../service/paystackService");
 const ErrorResponse = require("../utils/errorResponse");
+const { createTickets } = require("../utils/bookingHelpers");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
+
+// Try to import optional services
+let NotificationService;
+try {
+  NotificationService = require("../service/notificationService");
+} catch (err) {
+  console.log("NotificationService not available");
+}
 
 // Helper function to mark transaction as completed
 const markTransactionAsCompleted = async (transaction, paymentData) => {
@@ -131,9 +142,11 @@ const initializeTransaction = async (req, res, next) => {
 };
 
 // @desc    Verify transaction payment
-// @route   GET /api/v1/transactions/verify/:reference
-// @access  Public
+// @route   GET /api/v1/transactions/verify-payment/:reference
+// @access  Private
 const verifyTransaction = async (req, res, next) => {
+  const session = await mongoose.startSession();
+
   try {
     const { reference } = req.params;
 
@@ -142,31 +155,105 @@ const verifyTransaction = async (req, res, next) => {
       return next(new ErrorResponse("Transaction not found", 404));
     }
 
+    // Check if already processed
+    if (transaction.status === "completed") {
+      const booking = await Booking.findById(transaction.bookingId)
+        .populate("tickets")
+        .populate("event", "title startDate venue");
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment already verified",
+        data: {
+          transaction,
+          booking,
+        },
+      });
+    }
+
     const verification = await verifyPayment(reference);
 
     if (verification.data.status === "success") {
+      session.startTransaction();
+
+      // Mark transaction as completed
       await markTransactionAsCompleted(transaction, verification.data);
 
-      await Booking.findByIdAndUpdate(transaction.bookingId, {
-        paymentStatus: "completed",
-        status: "confirmed",
+      // Get booking with full details
+      const booking = await Booking.findById(transaction.bookingId)
+        .populate("event")
+        .populate("user", "fullName firstName lastName email phone")
+        .session(session);
+
+      if (!booking) {
+        await session.abortTransaction();
+        return next(new ErrorResponse("Booking not found", 404));
+      }
+
+      const event = booking.event;
+      const user = booking.user;
+
+      // Build bookings array for createTickets helper
+      const bookingsForTickets = booking.ticketDetails.map(detail => ({
+        ticketType: detail.ticketType,
+        ticketTypeId: detail.ticketTypeId,
+        quantity: detail.quantity,
+        price: detail.price || detail.unitPrice,
+        accessType: detail.accessType || "both",
+        approvalQuestions: detail.approvalQuestions || [],
+      }));
+
+      // Create tickets using helper function
+      const tickets = await createTickets(event, user, bookingsForTickets, {
+        session,
+        bookingId: booking._id,
       });
 
-      const booking = await Booking.findById(transaction.bookingId);
-      if (booking && booking.event) {
+      // Update booking with ticket references
+      booking.tickets = tickets.map((t) => t._id);
+      booking.status = "confirmed";
+      booking.paymentStatus = "completed";
+      booking.ticketGeneration = {
+        status: "completed",
+        generatedCount: tickets.length,
+        generatedAt: new Date(),
+        failedTickets: [],
+      };
+      await booking.save({ session });
+
+      // Update event statistics
+      if (booking.totalTickets) {
         await updateEventTicketAvailability(
-          booking.event,
+          event._id,
           booking.totalTickets,
           "decrement"
         );
+      }
+
+      await session.commitTransaction();
+
+      // Send notifications (outside transaction)
+      try {
+        if (NotificationService && NotificationService.createTicketPurchaseNotification) {
+          await NotificationService.createTicketPurchaseNotification(
+            user._id,
+            booking,
+            event
+          );
+        }
+      } catch (notifError) {
+        console.error("Notification error:", notifError);
       }
 
       return res.status(200).json({
         success: true,
         message: "Payment verified successfully",
         data: {
-          transaction: transaction,
-          booking: booking,
+          transaction,
+          booking: {
+            ...booking.toObject(),
+            tickets,
+          },
         },
       });
     } else {
@@ -181,12 +268,18 @@ const verifyTransaction = async (req, res, next) => {
         success: false,
         message: "Payment verification failed",
         data: {
-          transaction: transaction,
+          transaction,
         },
       });
     }
   } catch (error) {
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+    console.error("Transaction verification error:", error);
     next(error);
+  } finally {
+    session.endSession();
   }
 };
 
@@ -575,36 +668,76 @@ const paystackWebhook = async (req, res) => {
 };
 
 async function handleSuccessfulCharge(data) {
+  const session = await mongoose.startSession();
+  
   try {
     const transaction = await Transaction.findOne({
       reference: data.reference,
     });
+    
     if (transaction && transaction.status === "pending") {
+      session.startTransaction();
+      
       await markTransactionAsCompleted(transaction, data);
 
-      // Only handle event_booking transactions (no more service_fee)
       if (transaction.type === "event_booking") {
-        await Booking.findOneAndUpdate(
-          { _id: transaction.bookingId },
-          {
-            paymentStatus: "completed",
-            status: "confirmed",
-          }
-        );
+        const booking = await Booking.findById(transaction.bookingId)
+          .populate("event")
+          .populate("user", "fullName firstName lastName email phone")
+          .session(session);
 
-        const booking = await Booking.findById(transaction.bookingId);
-        if (booking && booking.event) {
-          await updateEventTicketAvailability(
-            booking.event,
-            booking.totalTickets,
-            "decrement"
-          );
+        if (booking) {
+          const event = booking.event;
+          const user = booking.user;
+
+          // Build bookings array for createTickets helper
+          const bookingsForTickets = booking.ticketDetails.map(detail => ({
+            ticketType: detail.ticketType,
+            ticketTypeId: detail.ticketTypeId,
+            quantity: detail.quantity,
+            price: detail.price || detail.unitPrice,
+            accessType: detail.accessType || "both",
+            approvalQuestions: detail.approvalQuestions || [],
+          }));
+
+          // Create tickets using helper function
+          const tickets = await createTickets(event, user, bookingsForTickets, {
+            session,
+            bookingId: booking._id,
+          });
+
+          // Update booking
+          booking.tickets = tickets.map((t) => t._id);
+          booking.paymentStatus = "completed";
+          booking.status = "confirmed";
+          booking.ticketGeneration = {
+            status: "completed",
+            generatedCount: tickets.length,
+            generatedAt: new Date(),
+            failedTickets: [],
+          };
+          await booking.save({ session });
+
+          // Update event availability
+          if (booking.totalTickets) {
+            await updateEventTicketAvailability(
+              event._id,
+              booking.totalTickets,
+              "decrement"
+            );
+          }
         }
       }
-      // Service fee handling removed
+
+      await session.commitTransaction();
     }
   } catch (error) {
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     console.error("Handle successful charge error:", error);
+  } finally {
+    session.endSession();
   }
 }
 
