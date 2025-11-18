@@ -21,6 +21,10 @@ class TwilioWhatsAppService {
     return require('../models/ticket');
   }
 
+  get ticketTypeModel() {
+    return require('../models/ticketType');
+  }
+
   async sendMessage(to, body) {
     try {
       const message = await this.client.messages.create({
@@ -45,7 +49,10 @@ class TwilioWhatsAppService {
       
       const normalizedMsg = message.toLowerCase().trim();
 
-      if (normalizedMsg.includes('hi') || normalizedMsg.includes('hello') || normalizedMsg.includes('start')) {
+      // Handle event number selection (e.g., "1", "2", "3")
+      if (/^\d+$/.test(normalizedMsg)) {
+        return await this.handleEventSelection(phoneNumber, normalizedMsg);
+      } else if (normalizedMsg.includes('hi') || normalizedMsg.includes('hello') || normalizedMsg.includes('start')) {
         return await this.sendWelcomeMessage(phoneNumber, user);
       } else if (normalizedMsg.includes('find event') || normalizedMsg.includes('search event')) {
         return await this.handleEventSearch(phoneNumber, message);
@@ -69,6 +76,7 @@ I can help you with:
 • 🎫 Find and book event tickets
 • 🔍 Discover upcoming events  
 • 🎟️ View your tickets & QR codes
+• 📋 Get event details
 
 Try these commands:
 - "Find events" - Discover events
@@ -83,6 +91,7 @@ Try these commands:
   async handleEventSearch(phoneNumber, message) {
     try {
       const Event = this.eventModel;
+      const TicketType = this.ticketTypeModel;
       
       const searchTerm = message.replace(/find|search|events?\s*/gi, '').trim();
       
@@ -96,8 +105,8 @@ Try these commands:
         status: 'published'
       })
       .sort({ startDate: 1 })
-      .limit(5)  // Changed to 5 events
-      .select('title startDate venue price category');
+      .limit(5)
+      .select('title startDate venue category description organizer');
 
       if (events.length === 0) {
         await this.sendMessage(phoneNumber, 
@@ -107,22 +116,154 @@ Try these commands:
         return;
       }
 
+      // Store events in temporary session for number selection
+      this.lastSearchResults = this.lastSearchResults || {};
+      this.lastSearchResults[phoneNumber] = events;
+
+      // Get ticket prices for each event
       let response = `🎭 Found ${events.length} events:\n\n`;
-      events.forEach((event, index) => {
-        response += `${index + 1}. ${event.title}\n`;
+      
+      for (let i = 0; i < events.length; i++) {
+        const event = events[i];
+        const ticketTypes = await TicketType.find({ 
+          event: event._id,
+          status: 'active'
+        }).select('name price available').sort({ price: 1 });
+
+        let priceRange = 'Price not available';
+        if (ticketTypes.length > 0) {
+          const minPrice = Math.min(...ticketTypes.map(t => t.price));
+          const maxPrice = Math.max(...ticketTypes.map(t => t.price));
+          
+          if (ticketTypes.length === 1) {
+            priceRange = `₦${minPrice.toLocaleString()}`;
+          } else {
+            priceRange = `₦${minPrice.toLocaleString()} - ₦${maxPrice.toLocaleString()}`;
+          }
+        }
+
+        response += `${i + 1}. 🎪 ${event.title}\n`;
         response += `   📅 ${event.startDate.toLocaleDateString()}\n`;
         response += `   📍 ${event.venue.name || event.venue}\n`;
-        response += `   💰 ₦${event.price.toLocaleString()}\n\n`;  // Changed to Naira
-      });
+        response += `   💰 ${priceRange}\n`;
+        
+        // Show available ticket types
+        if (ticketTypes.length > 0) {
+          const ticketNames = ticketTypes.map(t => t.name).join(', ');
+          response += `   🎫 ${ticketNames}\n`;
+        }
+        
+        response += `\n`;
+      }
 
-      response += `🔍 See more events: https://www.joineventry.com/discover\n\n` +
-                 `Reply with event number for details or "more events" to see more.`;
+      response += `🔍 *Reply with the event number (1-${events.length}) to view details*\n\n` +
+                 `🌐 See all events: https://www.joineventry.com/discover`;
 
       await this.sendMessage(phoneNumber, response);
     } catch (error) {
       console.error('Event search error:', error);
       await this.sendMessage(phoneNumber, 
         'Sorry, having trouble searching events. Browse all events here:\n\n' +
+        '🌐 https://www.joineventry.com/discover'
+      );
+    }
+  }
+
+  async handleEventSelection(phoneNumber, selectedNumber) {
+    try {
+      const Event = this.eventModel;
+      const TicketType = this.ticketTypeModel;
+
+      // Get stored search results
+      const events = this.lastSearchResults?.[phoneNumber];
+      if (!events || events.length === 0) {
+        await this.sendMessage(phoneNumber, 
+          'Please search for events first using "Find events" command.'
+        );
+        return;
+      }
+
+      const eventIndex = parseInt(selectedNumber) - 1;
+      if (eventIndex < 0 || eventIndex >= events.length) {
+        await this.sendMessage(phoneNumber, 
+          `Please select a valid event number (1-${events.length}).`
+        );
+        return;
+      }
+
+      const event = await Event.findById(events[eventIndex]._id)
+        .populate('organizer', 'name')
+        .select('title startDate endDate venue description category organizer imageUrl');
+
+      if (!event) {
+        await this.sendMessage(phoneNumber, 'Event not found. Please search again.');
+        return;
+      }
+
+      // Get all ticket types with details
+      const ticketTypes = await TicketType.find({ 
+        event: event._id,
+        status: 'active'
+      }).select('name price available description benefits').sort({ price: 1 });
+
+      let response = `🎪 *${event.title}*\n\n`;
+      
+      // Event details
+      response += `📅 *Date:* ${event.startDate.toLocaleDateString()}\n`;
+      if (event.endDate) {
+        response += `⏰ *Ends:* ${event.endDate.toLocaleDateString()}\n`;
+      }
+      response += `📍 *Venue:* ${event.venue.name || event.venue}\n`;
+      response += `🏷️ *Category:* ${event.category}\n`;
+      if (event.organizer) {
+        response += `👤 *Organizer:* ${event.organizer.name}\n`;
+      }
+      
+      // Event description (truncated if too long)
+      if (event.description) {
+        const shortDesc = event.description.length > 200 
+          ? event.description.substring(0, 200) + '...' 
+          : event.description;
+        response += `\n📝 *Description:* ${shortDesc}\n`;
+      }
+
+      // Ticket types with details
+      if (ticketTypes.length > 0) {
+        response += `\n🎫 *Available Tickets:*\n\n`;
+        ticketTypes.forEach((ticket, index) => {
+          response += `${index + 1}. *${ticket.name}* - ₦${ticket.price.toLocaleString()}\n`;
+          response += `   Available: ${ticket.available} tickets\n`;
+          if (ticket.description) {
+            const shortDesc = ticket.description.length > 80 
+              ? ticket.description.substring(0, 80) + '...' 
+              : ticket.description;
+            response += `   ${shortDesc}\n`;
+          }
+          response += `\n`;
+        });
+      } else {
+        response += `\n🎫 *Tickets:* Not available yet\n`;
+      }
+
+      // Web link and call to action
+      response += `🔗 *View Full Details & Book Tickets:*\n`;
+      response += `🌐 https://www.joineventry.com/event/${event._id}\n\n`;
+      
+      response += `💡 *Get the full experience on our website:*\n`;
+      response += `• View event photos & full description\n`;
+      response += `• See seating arrangements\n`;
+      response += `• Book tickets securely\n`;
+      response += `• Get instant QR codes\n\n`;
+      
+      response += `📱 *Quick Links:*\n`;
+      response += `• Discover Events: https://www.joineventry.com/discover\n`;
+      response += `• Sign Up: https://www.joineventry.com/signup`;
+
+      await this.sendMessage(phoneNumber, response);
+    } catch (error) {
+      console.error('Event details error:', error);
+      await this.sendMessage(phoneNumber, 
+        'Sorry, having trouble loading event details. Browse events here:\n\n' +
         '🌐 https://www.joineventry.com/discover'
       );
     }
@@ -143,6 +284,7 @@ Try these commands:
       
       const tickets = await Ticket.find({ user: user._id })
         .populate('event', 'title startDate venue')
+        .populate('ticketType', 'name')
         .limit(5);
 
       if (!tickets || tickets.length === 0) {
@@ -158,11 +300,12 @@ Try these commands:
         response += `${index + 1}. ${ticket.event.title}\n`;
         response += `   📅 ${ticket.event.startDate.toLocaleDateString()}\n`;
         response += `   📍 ${ticket.event.venue.name || ticket.event.venue}\n`;
-        response += `   🎫 ${ticket.ticketType} x${ticket.quantity}\n\n`;
+        response += `   🎫 ${ticket.ticketType.name} - ${ticket.quantity} ticket(s)\n\n`;
       });
 
-      response += `📱 Manage tickets: https://www.joineventry.com/profile/tickets\n\n` +
-                 `Reply with ticket number to get QR code.`;
+      response += `📱 *Manage tickets:* https://www.joineventry.com/profile/tickets\n\n` +
+                 `🔗 *View event details:* Reply with ticket number\n` +
+                 `🌐 *Full experience:* https://www.joineventry.com`;
 
       await this.sendMessage(phoneNumber, response);
     } catch (error) {
@@ -177,16 +320,24 @@ Try these commands:
   async sendHelpMessage(phoneNumber) {
     const helpMsg = `🆘 Eventry WhatsApp Help
 
-• "Find events" - Discover events
+• "Find events" - Discover events with multiple ticket options
+• *Reply with event number* - View detailed event information
 • "My tickets" - View your bookings  
 • "Help" - See all commands
+
+🎫 Available Features:
+• Event search and discovery
+• Detailed event information
+• Multiple ticket types (Regular, VIP, VVIP)
+• Price ranges and availability
+• Direct links to event pages
 
 📱 Full Features Available:
 • Sign Up: https://www.joineventry.com/signup
 • Discover Events: https://www.joineventry.com/discover
 • My Tickets: https://www.joineventry.com/profile/tickets
 
-For booking and full features, please use our website or mobile app.`;
+*Get the complete experience on our website!*`;
 
     await this.sendMessage(phoneNumber, helpMsg);
   }
@@ -195,12 +346,16 @@ For booking and full features, please use our website or mobile app.`;
     const defaultMsg = `I can help you find events and view tickets!
 
 Try:
-• "Find events" - Discover events
+• "Find events" - Discover events with Regular/VIP/VVIP tickets
+• *Reply with number* - View event details after searching
 • "My tickets" - View your bookings
 • "Help" - See all commands
 
 📱 Get the full experience:
-https://www.joineventry.com/signup`;
+https://www.joineventry.com/signup
+
+🎪 Discover amazing events:
+https://www.joineventry.com/discover`;
 
     await this.sendMessage(phoneNumber, defaultMsg);
   }
