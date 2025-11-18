@@ -11,14 +11,16 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const http = require("http");
 const { Server } = require("socket.io");
+
 // Routes
 const authRouter = require("./routes/userRoute");
 const superAdminRoutes = require("./routes/superAdminRoute");
 const eventRoutes = require("./routes/eventRoute");
 const transactionRoutes = require("./routes/transactionRoutes");
-const notificationRoutes = require('./routes/notificationRoute'); 
-const ticketRoutes = require("./routes/ticketRoute"); 
+const notificationRoutes = require("./routes/notificationRoute");
+const ticketRoutes = require("./routes/ticketRoute");
 const bookingRoutes = require("./routes/bookingRoute");
+const whatsappRoutes = require("./routes/whatsappRoute");
 
 // Middleware
 const errorHandler = require("./middleware/errorHandler");
@@ -33,7 +35,7 @@ const {
 // EXPRESS SERVER
 const app = express();
 
-// CREATE HTTP SERVER 
+// CREATE HTTP SERVER
 const server = http.createServer(app);
 
 // ✅ SOCKET.IO SETUP
@@ -45,34 +47,30 @@ const io = new Server(server, {
       "https://eventry-swart.vercel.app",
       "http://localhost:5174",
       "http://localhost:5173",
-      "http://localhost:3000"
+      "http://localhost:3000",
     ],
     methods: ["GET", "POST"],
-    credentials: true
-  }
+    credentials: true,
+  },
 });
 
 // Make io accessible globally for controllers
 global.io = io;
 
 // Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-  
-  // Join user to their personal room
-  socket.on('join-user', (userId) => {
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  socket.on("join-user", (userId) => {
     socket.join(`user-${userId}`);
-    console.log(`User ${userId} joined room: user-${userId}`);
   });
-  
-  // Join organizer to their room
-  socket.on('join-organizer', (organizerId) => {
+
+  socket.on("join-organizer", (organizerId) => {
     socket.join(`organizer-${organizerId}`);
-    console.log(`Organizer ${organizerId} joined room: organizer-${organizerId}`);
   });
-  
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
   });
 });
 
@@ -88,7 +86,7 @@ app.use(
       "https://eventry-swart.vercel.app",
       "http://localhost:5174",
       "http://localhost:5173",
-      "http://localhost:3000"
+      "http://localhost:3000",
     ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -115,11 +113,13 @@ app.use(
     abortOnLimit: true,
     createParentPath: true,
   })
-); 
+);
 
 // BODY PARSER MIDDLEWARE
-// IMPORTANT: For Paystack webhook, use raw body BEFORE json parser
-app.use('/api/v1/transactions/webhook', express.raw({ type: 'application/json' }));
+app.use(
+  "/api/v1/transactions/webhook",
+  express.raw({ type: "application/json" })
+);
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -134,7 +134,7 @@ if (process.env.NODE_ENV === "development") {
 
 // SCHEDULED TASKS
 cron.schedule("0 2 * * *", async () => {
-  console.log(" Running scheduled cleanup of unverified users...");
+  console.log("Running scheduled cleanup of unverified users...");
   try {
     await deleteExpiredUnverifiedUsers();
   } catch (error) {
@@ -142,146 +142,98 @@ cron.schedule("0 2 * * *", async () => {
   }
 });
 
-// Run cleanup once on server startup
 let cleanupOnStartup = true;
 
 // API ROUTES
-// Health check endpoint 
 app.get("/api/v1/health", (req, res) => {
   res.status(200).json({
     success: true,
     message: "Server is healthy",
     timestamp: new Date().toISOString(),
-    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    database:
+      mongoose.connection.readyState === 1 ? "connected" : "disconnected",
     environment: process.env.NODE_ENV || "development",
-    paystack: {
-      configured: !!process.env.PAYSTACK_SECRET_KEY,
-      mode: process.env.PAYSTACK_SECRET_KEY?.startsWith('sk_live') ? 'live' : 'test'
-    },
-    cloudinary: !!process.env.CLOUDINARY_CLOUD_NAME,
-    socket: io.engine.clientsCount // ✅ ADD SOCKET INFO
   });
 });
 
-// Test route
 app.get("/api/v1/test", (req, res) => {
   res.status(200).json({
     success: true,
     message: "API is working!",
-    environment: process.env.NODE_ENV || "development",
   });
 });
 
-// Root route
 app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
     message: "Eventry API Server",
     version: "1.0.0",
-    endpoints: {
-      health: "/api/v1/health",
-      auth: "/api/v1/",
-      events: "/api/v1/events",
-      transactions: "/api/v1/transactions", 
-      tickets: "/api/v1/tickets",
-      bookings: "/api/v1/bookings",
-      admin: "/api/v1/admin",
-      notifications: "/api/v1/notifications",
-    },
   });
 });
 
 // Main API routes
 app.use("/api/v1", authRouter);
 app.use("/api/v1/events", eventRoutes);
-app.use("/api/v1/transactions", transactionRoutes); 
+app.use("/api/v1/transactions", transactionRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
 app.use("/api/v1/tickets", ticketRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/admin", superAdminRoutes);
+app.use("/api/v1/whatsapp", whatsappRoutes);
 
 // ERROR HANDLING
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,
-    timestamp: new Date().toISOString(),
   });
 });
 
-// Cleanup temp files on error
 app.use(cleanupTempFiles);
-
-// Global error handler
 app.use(errorHandler);
 
 // DATABASE CONNECTION & SERVER START
 const startServer = async () => {
   try {
-    // Validate required environment variables
     const requiredEnvVars = [
-      'MONGODB_URL',
-      'JWT_SECRET',
-      'PAYSTACK_SECRET_KEY',
-      'PAYSTACK_PUBLIC_KEY'
+      "MONGODB_URL",
+      "JWT_SECRET",
+      "PAYSTACK_SECRET_KEY",
+      "PAYSTACK_PUBLIC_KEY",
     ];
 
-    const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
-    
+    const missingEnvVars = requiredEnvVars.filter(
+      (varName) => !process.env[varName]
+    );
+
     if (missingEnvVars.length > 0) {
-      console.warn(`  Warning: Missing environment variables: ${missingEnvVars.join(', ')}`);
-      if (missingEnvVars.includes('PAYSTACK_SECRET_KEY')) {
-        console.warn('  Payment functionality will not work without Paystack credentials');
-      }
+      console.warn(
+        `Warning: Missing environment variables: ${missingEnvVars.join(", ")}`
+      );
     }
 
-    // Check optional environment variables
-    const optionalEnvVars = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
-    const missingOptionalVars = optionalEnvVars.filter(varName => !process.env[varName]);
-    if (missingOptionalVars.length > 0) {
-      console.warn(`  Warning: Missing optional environment variables: ${missingOptionalVars.join(', ')}`);
-      console.warn('  Image upload functionality may not work properly');
-    }
-
-    // Connect to MongoDB
     await mongoose.connect(process.env.MONGODB_URL, {
       dbName: process.env.DB_NAME || "EventDB",
     });
-    console.log(" MongoDB connected successfully");
-    console.log(` Database: ${process.env.DB_NAME || "EventDB"}`);
+    console.log("MongoDB connected successfully");
 
-    // Run cleanup once on startup after DB is connected
     if (cleanupOnStartup) {
-      console.log(" Running initial cleanup on server startup...");
       await deleteExpiredUnverifiedUsers();
       cleanupOnStartup = false;
     }
 
-    // Start the HTTP server 
     server.listen(PORT, () => {
-      console.log(" Eventry API Server Started Successfully");
-      console.log(`Server URL: http://localhost:${PORT}`);
-      console.log(` API Base: http://localhost:${PORT}/api/v1`);
-      console.log(`Environment: ${process.env.NODE_ENV || "production"}`);
-      console.log(`Frontend URL: ${process.env.FRONTEND_URL || "Not set"}`);
-      console.log(` Paystack Mode: ${process.env.PAYSTACK_SECRET_KEY?.startsWith('sk_live') ? '🔴 LIVE' : '🟢 TEST'}`);
-      console.log(` Socket.IO: ✅ Enabled`);
-      console.log(`Cleanup scheduled: Daily at 2:00 AM`);
-      console.log(" Server ready to accept connections");
-      
-      // Log all available routes
-      console.log("\n Available Routes:");
-      console.log(" - Auth: /api/v1");
-      console.log(" - Events: /api/v1/events");
-      console.log(" - Transactions: /api/v1/transactions");
-      console.log(" - Tickets: /api/v1/tickets");
-      console.log(" - Bookings: /api/v1/bookings");
-      console.log(" - Notifications: /api/v1/notifications");
-      console.log(" - Admin: /api/v1/admin");
+      console.log(`
+ Eventry API Server Started
+ Port: ${PORT}
+ Environment: ${process.env.NODE_ENV || "production"}
+ Database: ${process.env.DB_NAME || "EventDB"}
+ Socket.IO: Enabled
+ WhatsApp: ${process.env.TWILIO_ACCOUNT_SID ? "Enabled" : "Not configured"}
+      `);
     });
   } catch (error) {
-    console.error("Error connecting to the database:", error);
+    console.error("Error starting server:", error);
     process.exit(1);
   }
 };
@@ -290,68 +242,47 @@ const startServer = async () => {
 process.on("SIGINT", async () => {
   console.log("Shutting down gracefully...");
   try {
-    // Close Socket.IO first
     if (global.io) {
       global.io.close();
-      console.log(" Socket.IO server closed");
     }
-
-    // Close server to stop accepting new connections
     server.close(() => {
-      console.log(" HTTP server closed");
+      mongoose.connection.close();
+      console.log("Server shut down successfully");
+      process.exit(0);
     });
-
-    // Close database connection
-    await mongoose.connection.close();
-    console.log(" Database connection closed");
-    console.log(" Server shut down successfully\n");
-    process.exit(0);
   } catch (error) {
-    console.error(" Error during shutdown:", error);
+    console.error("Error during shutdown:", error);
     process.exit(1);
   }
 });
 
-// Handle SIGTERM (server termination)
 process.on("SIGTERM", async () => {
-  console.log(" Server termination signal received...");
+  console.log("Server termination signal received...");
   try {
-    // Close Socket.IO
     if (global.io) {
       global.io.close();
-      console.log(" Socket.IO server closed");
     }
-
     server.close(() => {
-      console.log(" HTTP server closed");
+      mongoose.connection.close();
+      console.log("Server terminated successfully");
+      process.exit(0);
     });
-
-    await mongoose.connection.close();
-    console.log(" Database connection closed");
-    console.log(" Server terminated successfully\n");
-    process.exit(0);
   } catch (error) {
-    console.error(" Error during shutdown:", error);
+    console.error("Error during shutdown:", error);
     process.exit(1);
   }
 });
 
-// Handle uncaught exceptions
 process.on("uncaughtException", (error) => {
   console.error("UNCAUGHT EXCEPTION! Shutting down...");
-  console.error("Error Name:", error.name);
-  console.error("Error Message:", error.message);
-  console.error("Stack Trace:", error.stack);
+  console.error(error.name, error.message);
   process.exit(1);
 });
 
-// Handle unhandled promise rejections
 process.on("unhandledRejection", (error) => {
-  console.error(" UNHANDLED REJECTION! Shutting down...");
-  console.error("Error:", error);
-  
+  console.error("UNHANDLED REJECTION! Shutting down...");
+  console.error(error);
   mongoose.connection.close().then(() => {
-    console.log(" Database connection closed");
     process.exit(1);
   });
 });
