@@ -21,10 +21,6 @@ class TwilioWhatsAppService {
     return require('../models/ticket');
   }
 
-  get ticketTypeModel() {
-    return require('../models/ticketType');
-  }
-
   async sendMessage(to, body) {
     try {
       const message = await this.client.messages.create({
@@ -91,7 +87,6 @@ Try these commands:
   async handleEventSearch(phoneNumber, message) {
     try {
       const Event = this.eventModel;
-      const TicketType = this.ticketTypeModel;
       
       const searchTerm = message.replace(/find|search|events?\s*/gi, '').trim();
       
@@ -99,14 +94,15 @@ Try these commands:
         $or: [
           { title: { $regex: searchTerm, $options: 'i' } },
           { category: { $regex: searchTerm, $options: 'i' } },
-          { 'venue.name': { $regex: searchTerm, $options: 'i' } }
+          { venue: { $regex: searchTerm, $options: 'i' } },
+          { city: { $regex: searchTerm, $options: 'i' } }
         ],
         startDate: { $gte: new Date() },
         status: 'published'
       })
       .sort({ startDate: 1 })
       .limit(5)
-      .select('title startDate venue category description organizer');
+      .select('title startDate venue city address ticketTypes price');
 
       if (events.length === 0) {
         await this.sendMessage(phoneNumber, 
@@ -120,40 +116,40 @@ Try these commands:
       this.lastSearchResults = this.lastSearchResults || {};
       this.lastSearchResults[phoneNumber] = events;
 
-      // Get ticket prices for each event
       let response = `🎭 Found ${events.length} events:\n\n`;
       
       for (let i = 0; i < events.length; i++) {
         const event = events[i];
-        const ticketTypes = await TicketType.find({ 
-          event: event._id,
-          status: 'active'
-        }).select('name price available').sort({ price: 1 });
 
-        let priceRange = 'Price not available';
-        if (ticketTypes.length > 0) {
-          const minPrice = Math.min(...ticketTypes.map(t => t.price));
-          const maxPrice = Math.max(...ticketTypes.map(t => t.price));
-          
-          if (ticketTypes.length === 1) {
-            priceRange = `₦${minPrice.toLocaleString()}`;
-          } else {
-            priceRange = `₦${minPrice.toLocaleString()} - ₦${maxPrice.toLocaleString()}`;
+        let priceRange = 'Free';
+        let ticketNames = 'No tickets';
+
+        // Handle ticket types from embedded array
+        if (event.ticketTypes && event.ticketTypes.length > 0) {
+          const prices = event.ticketTypes.map(t => t.price || 0).filter(p => p > 0);
+          if (prices.length > 0) {
+            const minPrice = Math.min(...prices);
+            const maxPrice = Math.max(...prices);
+            
+            if (prices.length === 1) {
+              priceRange = `₦${minPrice.toLocaleString()}`;
+            } else {
+              priceRange = `₦${minPrice.toLocaleString()} - ₦${maxPrice.toLocaleString()}`;
+            }
           }
+          
+          ticketNames = event.ticketTypes.map(t => t.name || 'Standard').join(', ');
+        } else if (event.price > 0) {
+          // Fallback to event price if no ticket types
+          priceRange = `₦${event.price.toLocaleString()}`;
+          ticketNames = 'Standard';
         }
 
         response += `${i + 1}. 🎪 ${event.title}\n`;
         response += `   📅 ${event.startDate.toLocaleDateString()}\n`;
-        response += `   📍 ${event.venue.name || event.venue}\n`;
+        response += `   📍 ${event.venue}${event.city ? `, ${event.city}` : ''}\n`;
         response += `   💰 ${priceRange}\n`;
-        
-        // Show available ticket types
-        if (ticketTypes.length > 0) {
-          const ticketNames = ticketTypes.map(t => t.name).join(', ');
-          response += `   🎫 ${ticketNames}\n`;
-        }
-        
-        response += `\n`;
+        response += `   🎫 ${ticketNames}\n\n`;
       }
 
       response += `🔍 *Reply with the event number (1-${events.length}) to view details*\n\n` +
@@ -172,7 +168,6 @@ Try these commands:
   async handleEventSelection(phoneNumber, selectedNumber) {
     try {
       const Event = this.eventModel;
-      const TicketType = this.ticketTypeModel;
 
       // Get stored search results
       const events = this.lastSearchResults?.[phoneNumber];
@@ -193,18 +188,12 @@ Try these commands:
 
       const event = await Event.findById(events[eventIndex]._id)
         .populate('organizer', 'name')
-        .select('title startDate endDate venue description category organizer imageUrl');
+        .select('title startDate endDate venue address city state description category organizer ticketTypes price');
 
       if (!event) {
         await this.sendMessage(phoneNumber, 'Event not found. Please search again.');
         return;
       }
-
-      // Get all ticket types with details
-      const ticketTypes = await TicketType.find({ 
-        event: event._id,
-        status: 'active'
-      }).select('name price available description benefits').sort({ price: 1 });
 
       let response = `🎪 *${event.title}*\n\n`;
       
@@ -213,7 +202,13 @@ Try these commands:
       if (event.endDate) {
         response += `⏰ *Ends:* ${event.endDate.toLocaleDateString()}\n`;
       }
-      response += `📍 *Venue:* ${event.venue.name || event.venue}\n`;
+      response += `📍 *Venue:* ${event.venue}\n`;
+      if (event.address) {
+        response += `🏠 *Address:* ${event.address}\n`;
+      }
+      if (event.city || event.state) {
+        response += `🌍 *Location:* ${event.city}${event.state ? `, ${event.state}` : ''}\n`;
+      }
       response += `🏷️ *Category:* ${event.category}\n`;
       if (event.organizer) {
         response += `👤 *Organizer:* ${event.organizer.name}\n`;
@@ -228,11 +223,14 @@ Try these commands:
       }
 
       // Ticket types with details
-      if (ticketTypes.length > 0) {
+      if (event.ticketTypes && event.ticketTypes.length > 0) {
         response += `\n🎫 *Available Tickets:*\n\n`;
-        ticketTypes.forEach((ticket, index) => {
-          response += `${index + 1}. *${ticket.name}* - ₦${ticket.price.toLocaleString()}\n`;
-          response += `   Available: ${ticket.available} tickets\n`;
+        event.ticketTypes.forEach((ticket, index) => {
+          const ticketPrice = ticket.price > 0 ? `₦${ticket.price.toLocaleString()}` : 'Free';
+          const capacity = ticket.capacity || 'Unlimited';
+          
+          response += `${index + 1}. *${ticket.name || 'Standard'}* - ${ticketPrice}\n`;
+          response += `   Available: ${capacity} tickets\n`;
           if (ticket.description) {
             const shortDesc = ticket.description.length > 80 
               ? ticket.description.substring(0, 80) + '...' 
@@ -242,7 +240,8 @@ Try these commands:
           response += `\n`;
         });
       } else {
-        response += `\n🎫 *Tickets:* Not available yet\n`;
+        const eventPrice = event.price > 0 ? `₦${event.price.toLocaleString()}` : 'Free';
+        response += `\n🎫 *Ticket:* ${eventPrice}\n`;
       }
 
       // Web link and call to action
@@ -299,8 +298,8 @@ Try these commands:
       tickets.forEach((ticket, index) => {
         response += `${index + 1}. ${ticket.event.title}\n`;
         response += `   📅 ${ticket.event.startDate.toLocaleDateString()}\n`;
-        response += `   📍 ${ticket.event.venue.name || ticket.event.venue}\n`;
-        response += `   🎫 ${ticket.ticketType.name} - ${ticket.quantity} ticket(s)\n\n`;
+        response += `   📍 ${ticket.event.venue}\n`;
+        response += `   🎫 ${ticket.ticketType?.name || 'Standard'} - ${ticket.quantity} ticket(s)\n\n`;
       });
 
       response += `📱 *Manage tickets:* https://www.joineventry.com/profile/tickets\n\n` +
