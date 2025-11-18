@@ -73,7 +73,9 @@ I can help you with:
 Try these commands:
 - "Find events" - Discover events
 - "My tickets" - View your bookings
-- "Help" - See all commands`;
+- "Help" - See all commands
+
+📱 Get started: https://www.joineventry.com/signup`;
 
     await this.sendMessage(phoneNumber, welcomeMsg);
   }
@@ -94,11 +96,14 @@ Try these commands:
         status: 'published'
       })
       .sort({ startDate: 1 })
-      .limit(3)
+      .limit(5)  // Changed to 5 events
       .select('title startDate venue price category');
 
       if (events.length === 0) {
-        await this.sendMessage(phoneNumber, `No events found for "${searchTerm}". Try different keywords?`);
+        await this.sendMessage(phoneNumber, 
+          `No events found for "${searchTerm}". Try different keywords or browse all events:\n\n` +
+          `🌐 https://www.joineventry.com/discover`
+        );
         return;
       }
 
@@ -107,22 +112,30 @@ Try these commands:
         response += `${index + 1}. ${event.title}\n`;
         response += `   📅 ${event.startDate.toLocaleDateString()}\n`;
         response += `   📍 ${event.venue.name || event.venue}\n`;
-        response += `   💰 $${event.price}\n\n`;
+        response += `   💰 ₦${event.price.toLocaleString()}\n\n`;  // Changed to Naira
       });
 
-      response += "More features coming soon! Visit our app for booking.";
+      response += `🔍 See more events: https://www.joineventry.com/discover\n\n` +
+                 `Reply with event number for details or "more events" to see more.`;
 
       await this.sendMessage(phoneNumber, response);
     } catch (error) {
       console.error('Event search error:', error);
-      await this.sendMessage(phoneNumber, 'Sorry, having trouble searching events.');
+      await this.sendMessage(phoneNumber, 
+        'Sorry, having trouble searching events. Browse all events here:\n\n' +
+        '🌐 https://www.joineventry.com/discover'
+      );
     }
   }
 
   async handleUserTickets(phoneNumber, user) {
     try {
       if (!user) {
-        await this.sendMessage(phoneNumber, "Please use our website or app to create an account first, then link your phone number.");
+        await this.sendMessage(phoneNumber, 
+          `Please create an account first to view your tickets:\n\n` +
+          `📱 https://www.joineventry.com/signup\n\n` +
+          `After signing up, you can link your phone number in your account settings.`
+        );
         return;
       }
 
@@ -133,7 +146,10 @@ Try these commands:
         .limit(5);
 
       if (!tickets || tickets.length === 0) {
-        await this.sendMessage(phoneNumber, "You don't have any tickets yet. Search for events to book your first ticket!");
+        await this.sendMessage(phoneNumber, 
+          `You don't have any tickets yet. Discover amazing events to book:\n\n` +
+          `🎪 https://www.joineventry.com/discover`
+        );
         return;
       }
 
@@ -145,12 +161,16 @@ Try these commands:
         response += `   🎫 ${ticket.ticketType} x${ticket.quantity}\n\n`;
       });
 
-      response += "Visit our app to view QR codes and manage tickets.";
+      response += `📱 Manage tickets: https://www.joineventry.com/profile/tickets\n\n` +
+                 `Reply with ticket number to get QR code.`;
 
       await this.sendMessage(phoneNumber, response);
     } catch (error) {
       console.error('Ticket lookup error:', error);
-      await this.sendMessage(phoneNumber, 'Sorry, having trouble fetching your tickets.');
+      await this.sendMessage(phoneNumber, 
+        'Sorry, having trouble fetching your tickets. Visit:\n\n' +
+        '📱 https://www.joineventry.com/profile/tickets'
+      );
     }
   }
 
@@ -161,7 +181,12 @@ Try these commands:
 • "My tickets" - View your bookings  
 • "Help" - See all commands
 
-For full features and booking, please use our website or mobile app.`;
+📱 Full Features Available:
+• Sign Up: https://www.joineventry.com/signup
+• Discover Events: https://www.joineventry.com/discover
+• My Tickets: https://www.joineventry.com/profile/tickets
+
+For booking and full features, please use our website or mobile app.`;
 
     await this.sendMessage(phoneNumber, helpMsg);
   }
@@ -170,11 +195,12 @@ For full features and booking, please use our website or mobile app.`;
     const defaultMsg = `I can help you find events and view tickets!
 
 Try:
-• "Find events"
-• "My tickets" 
-• "Help"
+• "Find events" - Discover events
+• "My tickets" - View your bookings
+• "Help" - See all commands
 
-For booking and full features, use our app.`;
+📱 Get the full experience:
+https://www.joineventry.com/signup`;
 
     await this.sendMessage(phoneNumber, defaultMsg);
   }
